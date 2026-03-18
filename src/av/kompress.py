@@ -15,6 +15,8 @@ from os import listdir, path
 
 import ffmpeg
 
+from celery_app import app
+
 logging.basicConfig(level='DEBUG')
 logFormatter = logging.Formatter(fmt='%(filename)s :: %(asctime)s,'
                                      ':: %(name)s :: %(levelname)-8s '
@@ -159,6 +161,7 @@ class Kompressor:
         return sorted(dates)
 
 
+@app.task
 def compress_full_sized_downloads():
     args = parse_args()
     k = Kompressor(args)

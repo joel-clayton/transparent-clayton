@@ -7,7 +7,8 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 import time
 
-from scrapers.cc_meetings.constants import SOURCE_URL, DOWNLOADED_PATH, \
+from celery_app import app
+from constants import SOURCE_URL, DOWNLOADED_PATH, \
     VIDEO_FILE_NAME_REGEX, VIDEO_DATE_REGEX, DATE_INPUT_FORMAT, CLIP_ARG_REGEX, \
     CLIP_ID_REGEX
 
@@ -186,6 +187,7 @@ def parse_meetings_from_url(latest_date):
     return cc_meetings
 
 
+@app.task
 def get_cc_meeting_details_for_download() -> dict:
     latest_date = get_latest_downloaded_date()
     parsed_meetings = parse_meetings_from_url(latest_date)
