@@ -8,7 +8,7 @@ from selenium.webdriver.common.by import By
 import time
 
 from celery_app import app
-from constants import SOURCE_URL, DOWNLOADED_PATH, \
+from src.scrapers.cc_meetings.constants import SOURCE_URL, DOWNLOADED_PATH, \
     VIDEO_FILE_NAME_REGEX, VIDEO_DATE_REGEX, DATE_INPUT_FORMAT, CLIP_ARG_REGEX, \
     CLIP_ID_REGEX
 

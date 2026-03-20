@@ -4,9 +4,8 @@ This script compresses mp4 video takes a diff of videos based on a date in
  not present in the destination folder.
 
 Usage:
-$ pipenv run python kompress.py -d /Volumes/Gautam/Clayton/CC\ Meetings/Downloaded/ -t "-c:v libx265 -vtag hvc1" -o /Volumes/Gautam/Clayton/CC\ Meetings/Compressed/ -p "City of Clayton"
+$ pipenv run python kompress.py -d /Volumes/Gautam/Clayton/CC Meetings/Downloaded/ -t "-c:v libx265 -vtag hvc1" -o /Volumes/Gautam/Clayton/CC Meetings/Compressed/ -p "City of Clayton"
 """
-import argparse
 import logging
 import os
 import re
@@ -14,8 +13,6 @@ import subprocess
 from os import listdir, path
 
 import ffmpeg
-
-from celery_app import app
 
 logging.basicConfig(level='DEBUG')
 logFormatter = logging.Formatter(fmt='%(filename)s :: %(asctime)s,'
@@ -28,36 +25,6 @@ logger.addHandler(consoleHandler)
 SRC_FILE_NAME_TEMPLATE = 'City Council Meeting {} - City of Clayton.mp4'
 DST_FILE_NAME_TEMPLATE = 'Clayton CA City Council Meeting {} - %03d.mp4'
 
-def validate_args(parsed) -> bool:
-    if bool(parsed.file) == bool(parsed.dir):
-        raise Exception('Please specify either --file or --dir as inputs.')
-
-    if parsed.out_dir is None:
-        logger.warning('No output file was chosen. Out file will have '
-                       'the same name as the --file.')
-    return True
-
-
-def parse_args():
-    """
-    Use argparse to parse arguments to this command
-    :return:
-    """
-    parser = argparse.ArgumentParser(
-        prog='compress',
-        description='Compresses mp4 video by file or directory with some options',
-        epilog='Good luck.'
-    )
-
-    parser.add_argument('-f', '--file')
-    parser.add_argument('-d', '--dir')
-    parser.add_argument('-o', '--out_dir')
-    parser.add_argument('-t', '--options')
-    parser.add_argument('-p', '--pattern')
-    parsed = parser.parse_args()
-    validate_args(parsed)
-
-    return parsed
 
 class Kompressor:
     file = None
@@ -67,17 +34,23 @@ class Kompressor:
     options = None
     missing = []
 
-    def __init__(self, parsed_args) -> None:
+    def __init__(self, output_dir, options, pattern, input_dir=None, input_file=None) -> None:
         """
         Set class attributes based on argparse of command line input
         :param parsed_args:
         """
-        self.file = parsed_args.file
-        self.directory = parsed_args.dir
-        self.out_dir = parsed_args.out_dir
-        self.options = parsed_args.options if parsed_args.pattern else ("-c:v "
-                                                                  "libx265 -vtag hvc1")
-        self.pattern = parsed_args.pattern
+        if bool(input_file) == bool(input_dir):
+            raise Exception('Please specify either --file or --dir as inputs.')
+
+        if output_dir is None:
+            logger.warning('No output file was chosen. Out file will have '
+                           'the same name as the --file.')
+
+        self.file = input_file
+        self.directory = input_dir
+        self.out_dir = output_dir
+        self.options = options
+        self.pattern = pattern
 
     def orchestrate(self) -> None:
         """
@@ -159,10 +132,3 @@ class Kompressor:
             if date:
                 dates.append(date.group())
         return sorted(dates)
-
-
-@app.task
-def compress_full_sized_downloads():
-    args = parse_args()
-    k = Kompressor(args)
-    k.orchestrate()

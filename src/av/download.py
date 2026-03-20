@@ -5,9 +5,6 @@ import subprocess
 
 import requests
 
-from scrapers.cc_meetings.cc_meetings import get_cc_meeting_details_for_download
-from celery_app import app
-
 PLAYER_URL = "https://claytonca.granicus.com/player/clip/{clip_id}?view_id=1&redirect=true"
 OUTFILE_NAME = "City Council Meeting {} - City of Clayton.mp4"
 DATE_FORMAT = "%Y-%m-%d"
@@ -42,19 +39,3 @@ def get_media_stream(stream_url, output_file):
     subprocess.run(ffmpeg_command)
 
 
-@app.task
-def download_unprocessed_videos():
-    meetings_to_download = get_cc_meeting_details_for_download()
-    for date, clip_id in meetings_to_download.items():
-        outfile = os.path.join(OUTFILE_LOCATION, OUTFILE_NAME.format(date))
-        print(f"outfile: {outfile}")
-        if os.path.exists(outfile):
-            logger.info(f"Found outfile, skipping download...",
-                        extra={
-                            date: date,
-                            outfile: outfile
-                        })
-            continue
-        print("No media found, downloading...")
-        media_url = get_m3u_url(clip_id)
-        get_media_stream(media_url, outfile)
