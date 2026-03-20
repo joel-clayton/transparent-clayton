@@ -8,6 +8,8 @@ ffmpeg-python = "*"
 google-api-python-client = "*"
 requests = "*"
 selenium = "*"
+mypy="*"
+pre-commit="*"
 
 [dev-packages]
 
