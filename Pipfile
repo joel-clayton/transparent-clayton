@@ -10,6 +10,7 @@ requests = "*"
 selenium = "*"
 mypy="*"
 pre-commit="*"
+redis="*"
 
 [dev-packages]
 
