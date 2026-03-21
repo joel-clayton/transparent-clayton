@@ -36,7 +36,7 @@ class VideoOptions(TypedDict):  # todo use this
     privacy_status: str
 
 
-def get_iso_8601_from_date_str(date_str):
+def get_iso_8601_from_date_str(date_str) -> str:
     return date_str
 
 
@@ -79,7 +79,7 @@ def initialize_upload(youtube, options):
 
 # This method implements an exponential backoff strategy to resume a
 # failed upload.
-def resumable_upload(request):
+def resumable_upload(request) -> str:
     response = None
     error = None
     retry = 0
@@ -125,7 +125,7 @@ def upload_to_youtube(
     keywords: str,
     category_id: int,
     privacy_status: str = "public",
-):
+) -> None:
     options = {
         "file": filepath,
         "title": title,
