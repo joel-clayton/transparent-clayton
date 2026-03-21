@@ -11,6 +11,7 @@ selenium = "*"
 mypy="*"
 pre-commit="*"
 redis="*"
+ffmpeg="*"
 
 [dev-packages]
 

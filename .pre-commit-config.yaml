@@ -1,8 +1,18 @@
 repos:
 -   repo: https://github.com/pre-commit/mirrors-mypy
-    rev: ''  # Use the sha / tag you want to point at
+    rev: v1.0.0  # Use the sha / tag you want to point at
     hooks:
     -   id: mypy
+        args: [--python-version=3.10]
+        additional_dependencies:
+          [
+            "types-cachetools",
+            "types-requests",
+            "types-redis",
+            "types-python-dateutil",
+            "types-paramiko",
+            "types-pyyaml",
+          ]
 -   repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.7
     hooks:

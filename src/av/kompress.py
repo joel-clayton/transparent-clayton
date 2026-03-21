@@ -3,6 +3,8 @@ This script compresses mp4 video takes a diff of videos based on a date in
  the filename and compresses videos from the src folder if they're
  not present in the destination folder.
 
+todo update redis with compressed filepaths
+
 Usage:
 $ pipenv run python kompress.py -d /Volumes/Gautam/Clayton/CC Meetings/Downloaded/ -t "-c:v libx265 -vtag hvc1" -o /Volumes/Gautam/Clayton/CC Meetings/Compressed/ -p "City of Clayton"
 """
