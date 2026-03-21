@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import TypedDict
 
 from selenium import webdriver
+from selenium.webdriver.chrome.webdriver import WebDriver
 from selenium.webdriver.common.by import By
 
 from celery_app import app
@@ -15,7 +16,7 @@ from src.scrapers.cc_meetings.constants import (CLIP_ARG_REGEX, CLIP_ID_REGEX,
                                                 VIDEO_FILE_NAME_REGEX)
 
 
-def browser():
+def browser() -> WebDriver:
     driver = webdriver.Chrome()
     driver.get(SOURCE_URL)
     return driver
@@ -68,11 +69,14 @@ ordered_header_fields = [
 ]
 
 
-def parse_date_input(date_str):
+def parse_date_input(date_str: str) -> datetime:
     return datetime.strptime(date_str, DATE_INPUT_FORMAT)
 
 
-def parse_url_from_html(html_str, start="//", end='">'):
+def parse_url_from_html(
+        html_str: str,
+        start: str = "//",
+        end: str = '">') -> str:
     # if multiple matches, name the matches
     html_str = html_str.replace("&amp;", "&")
     matches = re.search(rf"{start}(.*?){end}", html_str)
@@ -81,7 +85,10 @@ def parse_url_from_html(html_str, start="//", end='">'):
     return ""
 
 
-def parse_multiple_urls_from_html(html_str, start=None, end=None):
+def parse_multiple_urls_from_html(
+        html_str: str,
+        start: str | None = None,
+        end: str | None = None) -> dict:
     matches = re.findall(rf"{start}.*?{end}", html_str)
     named_urls = {}
     for match in matches:
@@ -91,18 +98,19 @@ def parse_multiple_urls_from_html(html_str, start=None, end=None):
     return named_urls
 
 
-def get_inner_text_from_html(html_str):
+def get_inner_text_from_html(html_str: str) -> str:
     matches = re.findall(r">(.*?)</", html_str)
     if matches:
         return matches[0]
     return ""
 
 
-def get_clip_id_from_url(url):
+def get_clip_id_from_url(url: str) -> str | None:
     matches = re.search(CLIP_ARG_REGEX, url)
     if matches:
         return re.search(CLIP_ID_REGEX, matches.group(0)).group(0)
-
+    else:
+        return None
 
 element_parser = {
     "Date": (parse_date_input, {}),
@@ -125,7 +133,7 @@ element_parser = {
 }
 
 
-def get_latest_downloaded_date():
+def get_latest_downloaded_date() -> list[str]:
     filenames = os.listdir(DOWNLOADED_PATH)
     time_sorted_filenames = sorted(
         [filename for filename in filenames if filename.endswith(".mp4")], reverse=True
@@ -144,7 +152,7 @@ def get_latest_downloaded_date():
     return date_sorted_filenames[0]
 
 
-def parse_meetings_from_url(latest_date):
+def parse_meetings_from_url(latest_date: str) -> dict:
     driver = browser()
 
     # Give the iframe time to load content
@@ -184,9 +192,13 @@ def parse_meetings_from_url(latest_date):
                 if extra_parser:
                     body_cell_value = extra_parser(body_cell_value, **kwargs)
                 structured_raw_data.update({header_cell_name: body_cell_value})
-            structured_raw_data["ClipId"] = get_clip_id_from_url(
+            clip_id = get_clip_id_from_url(
                 structured_raw_data.get("Video", "")
             )
+            if clip_id:
+                structured_raw_data["ClipId"] = clip_id
+            else:
+                raise AttributeError(f"No clip_id found for cc_meeting: {structured_raw_data}")
             cc_meetings[structured_raw_data["Date"].strftime("%Y-%m-%d")] = (
                 CityCouncilMeeting(**structured_raw_data)
             )

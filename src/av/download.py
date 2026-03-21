@@ -20,7 +20,7 @@ logFormatter = logging.Formatter(
 logger = logging.getLogger(__name__)
 
 
-def get_m3u_url(clip_id):
+def get_m3u_url(clip_id: str) -> str:
     response = requests.get(PLAYER_URL.format(clip_id=clip_id))
     # if response.status_code == 200:
     #     print(response.text)
@@ -31,6 +31,6 @@ def get_m3u_url(clip_id):
     return url
 
 
-def get_media_stream(stream_url, output_file):
+def get_media_stream(stream_url: str, output_file: str) -> None:
     ffmpeg_command = ["ffmpeg", "-i", stream_url, "-codec", "copy", output_file]
     subprocess.run(ffmpeg_command)

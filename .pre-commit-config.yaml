@@ -12,6 +12,7 @@ repos:
             "types-python-dateutil",
             "types-paramiko",
             "types-pyyaml",
+            "types-selenium"
           ]
 -   repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.7

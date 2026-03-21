@@ -30,19 +30,23 @@ DST_FILE_NAME_TEMPLATE = "Clayton CA City Council Meeting {} - %03d.mp4"
 
 
 class Kompressor:
-    file = None
-    directory = None
-    out_dir = None
-    pattern = None
-    options = None
-    missing = []
+    file: str | None = None
+    directory: str | None = None
+    out_dir: str | None = None
+    pattern: str | None = None
+    options: str | None = None
+    missing: list | None = []
 
     def __init__(
-        self, output_dir, options, pattern, input_dir=None, input_file=None
+        self,
+        output_dir: str,
+        options: str,
+        pattern: str,
+        input_dir: str | None = None,
+        input_file: str | None = None
     ) -> None:
         """
         Set class attributes based on argparse of command line input
-        :param parsed_args:
         """
         if bool(input_file) == bool(input_dir):
             raise Exception("Please specify either --file or --dir as inputs.")
@@ -65,7 +69,6 @@ class Kompressor:
         not in destination directory
         - Construct the input and output file paths
         - Compress each video one by one
-        :return:
         """
         dates = self.get_most_recent_missing_dates()
         if not dates:
@@ -73,12 +76,12 @@ class Kompressor:
             return
         compressed = []
         for date in dates:
-            in_file = os.path.join(
+            in_file = str(os.path.join(
                 self.directory, SRC_FILE_NAME_TEMPLATE.format(date)
-            )  # .replace(" ", "\ ")
-            out_file = os.path.join(
+            ))  # .replace(" ", "\ ")
+            out_file = str(os.path.join(
                 self.out_dir, DST_FILE_NAME_TEMPLATE.format(date)
-            )  # .replace(" ", "\ ")
+            ))  # .replace(" ", "\ ")
             logger.debug("IN: {}\nOUT: {}".format(in_file, out_file))
             self.kompress(in_file, out_file)
             compressed.append(out_file)

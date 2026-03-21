@@ -22,7 +22,7 @@ API_VERSION = "v3"
 
 
 # Authorize the request and store authorization credentials.
-def get_authenticated_service():
+def get_authenticated_service() -> dict:
     flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRETS_FILE, SCOPES)
     credentials = flow.run_local_server(port=8080)
     return build(API_SERVICE_NAME, API_VERSION, credentials=credentials)

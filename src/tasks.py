@@ -13,10 +13,10 @@ from src.scrapers.cc_meetings.constants import (COMPRESSED_DIR,
 
 
 @app.task
-def download_unprocessed_videos():
+def download_unprocessed_videos() -> None:
     meetings_to_download = get_cc_meeting_details_for_download()
     for date, clip_id in meetings_to_download.items():
-        outfile = os.path.join(OUTFILE_LOCATION, OUTFILE_NAME.format(date))
+        outfile = str(os.path.join(OUTFILE_LOCATION, OUTFILE_NAME.format(date)))
         print(f"outfile: {outfile}")
         if os.path.exists(outfile):
             logger.info(
@@ -30,7 +30,7 @@ def download_unprocessed_videos():
 
 
 @app.task
-def compress_downloaded_cc_meeting_videos():
+def compress_downloaded_cc_meeting_videos() -> None:
     input_dir = DOWNLOADED_DIR
     output_dir = COMPRESSED_DIR
     options = COMPRESSION_OPTIONS
