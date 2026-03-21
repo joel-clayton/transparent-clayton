@@ -12,17 +12,17 @@ from googleapiclient.discovery import build
 # For more information about the client_secrets.json file format, see:
 #   https://developers.google.com/api-client-library/python/guide/aaa_client_secrets
 
-CLIENT_SECRETS_FILE = '/Users/gautam/dev/client_secret.json'
+CLIENT_SECRETS_FILE = "/Users/gautam/dev/client_secret.json"
 
 # This OAuth 2.0 access scope allows an application to upload files to the
 # authenticated user's YouTube channel, but doesn't allow other types of access.\
-SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
-API_SERVICE_NAME = 'youtube'
-API_VERSION = 'v3'
+SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+API_SERVICE_NAME = "youtube"
+API_VERSION = "v3"
 
 
 # Authorize the request and store authorization credentials.
 def get_authenticated_service():
-  flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRETS_FILE, SCOPES)
-  credentials = flow.run_local_server(port=8080)
-  return build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
+    flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRETS_FILE, SCOPES)
+    credentials = flow.run_local_server(port=8080)
+    return build(API_SERVICE_NAME, API_VERSION, credentials=credentials)

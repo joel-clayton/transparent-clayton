@@ -6,6 +6,7 @@ This script compresses mp4 video takes a diff of videos based on a date in
 Usage:
 $ pipenv run python kompress.py -d /Volumes/Gautam/Clayton/CC Meetings/Downloaded/ -t "-c:v libx265 -vtag hvc1" -o /Volumes/Gautam/Clayton/CC Meetings/Compressed/ -p "City of Clayton"
 """
+
 import logging
 import os
 import re
@@ -14,16 +15,16 @@ from os import listdir, path
 
 import ffmpeg
 
-logging.basicConfig(level='DEBUG')
-logFormatter = logging.Formatter(fmt='%(filename)s :: %(asctime)s,'
-                                     ':: %(name)s :: %(levelname)-8s '
-                                     ':: %(message)s')
+logging.basicConfig(level="DEBUG")
+logFormatter = logging.Formatter(
+    fmt="%(filename)s :: %(asctime)s,:: %(name)s :: %(levelname)-8s :: %(message)s"
+)
 logger = logging.getLogger(__name__)
 consoleHandler = logging.StreamHandler()
 consoleHandler.setFormatter(logFormatter)
 logger.addHandler(consoleHandler)
-SRC_FILE_NAME_TEMPLATE = 'City Council Meeting {} - City of Clayton.mp4'
-DST_FILE_NAME_TEMPLATE = 'Clayton CA City Council Meeting {} - %03d.mp4'
+SRC_FILE_NAME_TEMPLATE = "City Council Meeting {} - City of Clayton.mp4"
+DST_FILE_NAME_TEMPLATE = "Clayton CA City Council Meeting {} - %03d.mp4"
 
 
 class Kompressor:
@@ -34,17 +35,21 @@ class Kompressor:
     options = None
     missing = []
 
-    def __init__(self, output_dir, options, pattern, input_dir=None, input_file=None) -> None:
+    def __init__(
+        self, output_dir, options, pattern, input_dir=None, input_file=None
+    ) -> None:
         """
         Set class attributes based on argparse of command line input
         :param parsed_args:
         """
         if bool(input_file) == bool(input_dir):
-            raise Exception('Please specify either --file or --dir as inputs.')
+            raise Exception("Please specify either --file or --dir as inputs.")
 
         if output_dir is None:
-            logger.warning('No output file was chosen. Out file will have '
-                           'the same name as the --file.')
+            logger.warning(
+                "No output file was chosen. Out file will have "
+                "the same name as the --file."
+            )
 
         self.file = input_file
         self.directory = input_dir
@@ -62,21 +67,20 @@ class Kompressor:
         """
         dates = self.get_most_recent_missing_dates()
         if not dates:
-            logger.info('No files to be compressed, good day')
+            logger.info("No files to be compressed, good day")
             return
         compressed = []
         for date in dates:
             in_file = os.path.join(
-                self.directory,
-                SRC_FILE_NAME_TEMPLATE.format(date))#.replace(" ", "\ ")
+                self.directory, SRC_FILE_NAME_TEMPLATE.format(date)
+            )  # .replace(" ", "\ ")
             out_file = os.path.join(
-                self.out_dir,
-                DST_FILE_NAME_TEMPLATE.format(date))#.replace(" ", "\ ")
-            logger.debug("IN: {}\n"
-                         "OUT: {}".format(in_file, out_file))
+                self.out_dir, DST_FILE_NAME_TEMPLATE.format(date)
+            )  # .replace(" ", "\ ")
+            logger.debug("IN: {}\nOUT: {}".format(in_file, out_file))
             self.kompress(in_file, out_file)
             compressed.append(out_file)
-        logger.info('compressed: {}'.format(compressed))
+        logger.info("compressed: {}".format(compressed))
 
     def kompress(self, in_path: str, out_file: str) -> None:
         """
@@ -85,9 +89,16 @@ class Kompressor:
         :return: None
         """
         input_stream = ffmpeg.input(in_path)
-        output_stream = ffmpeg.output(input_stream, out_file, vcodec='libx265', f='segment', segment_time=3600, reset_timestamps=1)
+        output_stream = ffmpeg.output(
+            input_stream,
+            out_file,
+            vcodec="libx265",
+            f="segment",
+            segment_time=3600,
+            reset_timestamps=1,
+        )
         cmd = ffmpeg.compile(output_stream)
-        cmd = cmd[:-1] + ['-vtag', 'hvc1'] + cmd[-1:]
+        cmd = cmd[:-1] + ["-vtag", "hvc1"] + cmd[-1:]
         result = subprocess.run(cmd)
         logger.debug("the commandline is {}".format(result.args))
         logger.debug(result.stdout)  # Output of the command
@@ -112,7 +123,7 @@ class Kompressor:
             return self.missing
         return self.missing[-num:]
 
-    def gather_dates(self, dir_path: str, use_pattern: bool=True) -> list:
+    def gather_dates(self, dir_path: str, use_pattern: bool = True) -> list:
         """
         Get all dates from file names in a specified directory, optionally
          using a pattern to filter file names down to a particular set
@@ -124,11 +135,15 @@ class Kompressor:
         pattern = ""
         if use_pattern:
             pattern = self.pattern
-        files = [f for f in listdir(dir_path) if path.isfile(os.path.join(
-            dir_path, f)) if pattern in f]
+        files = [
+            f
+            for f in listdir(dir_path)
+            if path.isfile(os.path.join(dir_path, f))
+            if pattern in f
+        ]
         dates = []
         for f in files:
-            date = re.search(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', f)
+            date = re.search(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", f)
             if date:
                 dates.append(date.group())
         return sorted(dates)

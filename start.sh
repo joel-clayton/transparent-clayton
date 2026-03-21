@@ -14,4 +14,3 @@ fi
 
 # Start Flower to monitor Celery
 nohup celery -A celery_app flower --port=5555 &
-
