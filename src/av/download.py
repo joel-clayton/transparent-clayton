@@ -26,10 +26,11 @@ def get_m3u_url(clip_id: str) -> str:
     #     print(response.text)
     pattern = r"(https://archive-stream.*?playlist\.m3u8)"
     matches = re.findall(pattern, response.text)
-    base = os.path.dirname(matches[0])
-    url = base + "/chunklist.m3u8"
-    return url
-
+    if matches:
+        base = os.path.dirname(matches[0])
+        url = base + "/chunklist.m3u8"
+        return url
+    return ''
 
 def get_media_stream(stream_url: str, output_file: str) -> None:
     ffmpeg_command = ["ffmpeg", "-i", stream_url, "-codec", "copy", output_file]

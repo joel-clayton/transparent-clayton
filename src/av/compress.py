@@ -3,12 +3,10 @@ This script compresses mp4 video takes a diff of videos based on a date in
  the filename and compresses videos from the src folder if they're
  not present in the destination folder.
 
-todo update redis with compressed filepaths
-
 Usage:
-$ pipenv run python kompress.py -d /Volumes/Gautam/Clayton/CC Meetings/Downloaded/ -t "-c:v libx265 -vtag hvc1" -o /Volumes/Gautam/Clayton/CC Meetings/Compressed/ -p "City of Clayton"
+$ pipenv run python compress.py -d /Volumes/Gautam/Clayton/CC Meetings/Downloaded/ -t "-c:v libx265 -vtag hvc1" -o /Volumes/Gautam/Clayton/CC Meetings/Compressed/ -p "City of Clayton"
 """
-
+import json
 import logging
 import os
 import re
@@ -16,6 +14,11 @@ import subprocess
 from os import listdir, path
 
 import ffmpeg
+
+from celery_app import r
+from src.constants import DOWNLOADED_CC_MTG_KEY, COMPRESSED_CC_MTG_KEY, \
+    SCRAPED_CC_MTG_KEY, FILE_LIST_MISMATCH
+from src.util import get_detail_from_redis
 
 logging.basicConfig(level="DEBUG")
 logFormatter = logging.Formatter(
@@ -29,7 +32,7 @@ SRC_FILE_NAME_TEMPLATE = "City Council Meeting {} - City of Clayton.mp4"
 DST_FILE_NAME_TEMPLATE = "Clayton CA City Council Meeting {} - %03d.mp4"
 
 
-class Kompressor:
+class Compressor:
     file: str | None = None
     directory: str | None = None
     out_dir: str | None = None
@@ -71,9 +74,13 @@ class Kompressor:
         - Compress each video one by one
         """
         dates = self.get_most_recent_missing_dates()
+        dates_to_process = get_detail_from_redis(SCRAPED_CC_MTG_KEY)
         if not dates:
             logger.info("No files to be compressed, good day")
             return
+        if dates != dates_to_process:
+            logger.error(FILE_LIST_MISMATCH)
+            raise FILE_LIST_MISMATCH
         compressed = []
         for date in dates:
             in_file = str(os.path.join(
@@ -83,11 +90,14 @@ class Kompressor:
                 self.out_dir, DST_FILE_NAME_TEMPLATE.format(date)
             ))  # .replace(" ", "\ ")
             logger.debug("IN: {}\nOUT: {}".format(in_file, out_file))
-            self.kompress(in_file, out_file)
+            self.compress(in_file, out_file)
             compressed.append(out_file)
+            r.hset(COMPRESSED_CC_MTG_KEY, date, 1)
+            r.hdel(DOWNLOADED_CC_MTG_KEY, date)
+
         logger.info("compressed: {}".format(compressed))
 
-    def kompress(self, in_path: str, out_file: str) -> None:
+    def compress(self, in_path: str, out_file: str) -> None:
         """
         Submits the ffmpeg compression command for an absolute path input file
          and specifies an absolute path for output

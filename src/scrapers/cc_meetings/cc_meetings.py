@@ -1,19 +1,24 @@
+import json
 import os
 import re
 import time
 from datetime import datetime
-from typing import TypedDict
+from typing import TypedDict, Any
 
 from selenium import webdriver
 from selenium.webdriver.chrome.webdriver import WebDriver
 from selenium.webdriver.common.by import By
 
-from celery_app import app
+from celery_app import r
+from src.constants import DETAIL_CC_MTG_KEY
 from src.scrapers.cc_meetings.constants import (CLIP_ARG_REGEX, CLIP_ID_REGEX,
-                                                DATE_INPUT_FORMAT,
+                                                DATETIME_INPUT_FORMAT,
                                                 DOWNLOADED_PATH, SOURCE_URL,
                                                 VIDEO_DATE_REGEX,
-                                                VIDEO_FILE_NAME_REGEX)
+                                                VIDEO_FILE_NAME_REGEX,
+                                                DEFAULT_ONE_WEEK_SECONDS_EXPIRATION,
+                                                DATETIME_OUTPUT_FORMAT,
+                                                DATE_OUTPUT_FORMAT)
 
 
 def browser() -> WebDriver:
@@ -50,7 +55,7 @@ class UrlObject(TypedDict):
 
 class CityCouncilMeeting(TypedDict):
     Name: str
-    Date: datetime
+    Date: str
     Duration: str
     Agenda: str
     MinutesAndSupplementalMaterials: dict
@@ -70,7 +75,7 @@ ordered_header_fields = [
 
 
 def parse_date_input(date_str: str) -> datetime:
-    return datetime.strptime(date_str, DATE_INPUT_FORMAT)
+    return datetime.strptime(date_str, DATETIME_INPUT_FORMAT)
 
 
 def parse_url_from_html(
@@ -133,7 +138,7 @@ element_parser = {
 }
 
 
-def get_latest_downloaded_date() -> list[str]:
+def get_latest_downloaded_date() -> str:
     filenames = os.listdir(DOWNLOADED_PATH)
     time_sorted_filenames = sorted(
         [filename for filename in filenames if filename.endswith(".mp4")], reverse=True
@@ -195,29 +200,17 @@ def parse_meetings_from_url(latest_date: str) -> dict:
             clip_id = get_clip_id_from_url(
                 structured_raw_data.get("Video", "")
             )
+
             if clip_id:
                 structured_raw_data["ClipId"] = clip_id
             else:
                 raise AttributeError(f"No clip_id found for cc_meeting: {structured_raw_data}")
-            cc_meetings[structured_raw_data["Date"].strftime("%Y-%m-%d")] = (
+
+            meeting_date = structured_raw_data["Date"].strftime(DATE_OUTPUT_FORMAT)
+            structured_raw_data['Date'] = structured_raw_data['Date'].strftime(DATETIME_OUTPUT_FORMAT)
+            cc_meetings[meeting_date] = (
                 CityCouncilMeeting(**structured_raw_data)
             )
+            r.hset(DETAIL_CC_MTG_KEY, mapping={meeting_date: json.dumps(structured_raw_data)})
+            r.expire(DETAIL_CC_MTG_KEY, DEFAULT_ONE_WEEK_SECONDS_EXPIRATION)
     return cc_meetings
-
-
-@app.task
-def get_cc_meeting_details_for_download() -> dict:
-    latest_date = get_latest_downloaded_date()
-    parsed_meetings = parse_meetings_from_url(latest_date)
-    meetings_to_process = sorted(
-        [key for key in parsed_meetings.keys() if key > latest_date]
-    )
-    return dict(
-        [
-            (
-                parsed_meetings[meeting_date]["Date"].strftime("%Y-%m-%d"),
-                parsed_meetings[meeting_date]["ClipId"],
-            )
-            for meeting_date in meetings_to_process
-        ]
-    )

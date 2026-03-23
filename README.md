@@ -1,9 +1,10 @@
 # Transparent Clayton
 ## Daily CC Video processing pipeline
-1. Scrape city council page for recent meetings to download - download.py
-2. Compress downloaded video for - kompressor.py
-3. Rip the audio for transcription
-4. Upload compressed video to YouTube
+1. Scrape city council page for recent meetings to download
+2. Download city council meeting video
+3. Compress downloaded video
+4. Rip the audio for transcription
+5. Upload compressed video to YouTube
 
 Manual steps
 - upload ripped audio to turboscribe.ai
