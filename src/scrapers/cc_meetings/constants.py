@@ -14,10 +14,3 @@ DATETIME_OUTPUT_FORMAT = "%Y-%m-%d %H:%M"
 DATE_OUTPUT_FORMAT = "%Y-%m-%d"
 CLIP_ARG_REGEX = "clip_id=[0-9]*"
 CLIP_ID_REGEX = "[0-9]+"
-
-DOWNLOADED_DIR = "/Volumes/Gautam/Clayton/CC Meetings/Downloaded/"
-COMPRESSED_DIR = "/Volumes/Gautam/Clayton/CC Meetings/Compressed/"
-COMPRESSION_OPTIONS = "-c:v libx265 -vtag hvc1"
-COMPRESSION_PATTERN = "City of Clayton"
-
-DEFAULT_ONE_WEEK_SECONDS_EXPIRATION = 60 * 60 * 24 * 7

@@ -10,13 +10,12 @@ from selenium.webdriver.chrome.webdriver import WebDriver
 from selenium.webdriver.common.by import By
 
 from celery_app import r
-from src.constants import DETAIL_CC_MTG_KEY
+from src.constants import DETAIL_CC_MTG_KEY, DEFAULT_ONE_WEEK_SECONDS_EXPIRATION
 from src.scrapers.cc_meetings.constants import (CLIP_ARG_REGEX, CLIP_ID_REGEX,
                                                 DATETIME_INPUT_FORMAT,
                                                 DOWNLOADED_PATH, SOURCE_URL,
                                                 VIDEO_DATE_REGEX,
                                                 VIDEO_FILE_NAME_REGEX,
-                                                DEFAULT_ONE_WEEK_SECONDS_EXPIRATION,
                                                 DATETIME_OUTPUT_FORMAT,
                                                 DATE_OUTPUT_FORMAT)
 

@@ -15,7 +15,7 @@ from os import listdir, path
 import ffmpeg
 
 from celery_app import r
-from src.constants import DOWNLOADED_CC_MTG_KEY, COMPRESSED_CC_MTG_KEY, \
+from src.constants import DOWNLOADED_CC_MTG_KEY, RIPPED_CC_MTG_KEY, \
     SCRAPED_CC_MTG_KEY, FILE_LIST_MISMATCH
 from src.util import get_detail_from_redis
 
@@ -28,10 +28,10 @@ consoleHandler = logging.StreamHandler()
 consoleHandler.setFormatter(logFormatter)
 logger.addHandler(consoleHandler)
 SRC_FILE_NAME_TEMPLATE = "City Council Meeting {} - City of Clayton.mp4"
-DST_FILE_NAME_TEMPLATE = "Clayton CA City Council Meeting {} - %03d.mp4"
+DST_FILE_NAME_TEMPLATE = "City Council Meeting {} - City of Clayton.m4a"
 
 
-class Compressor:
+class Ripper:
     file: str | None = None
     directory: str | None = None
     out_dir: str | None = None
@@ -42,8 +42,6 @@ class Compressor:
     def __init__(
         self,
         output_dir: str,
-        options: str,
-        pattern: str,
         input_dir: str | None = None,
         input_file: str | None = None
     ) -> None:
@@ -62,25 +60,22 @@ class Compressor:
         self.file = input_file
         self.directory = input_dir
         self.out_dir = output_dir
-        self.options = options
-        self.pattern = pattern
 
     def orchestrate(self) -> None:
         """
         - Loop through dates from file names present in src directory and
         not in destination directory
         - Construct the input and output file paths
-        - Compress each video one by one
+        - Rip audio for each video one by one
         """
         dates = self.get_most_recent_missing_dates()
         dates_to_process = get_detail_from_redis(SCRAPED_CC_MTG_KEY)
         if not dates:
-            logger.info("No files to be compressed, good day")
+            logger.info("No files to be ripped, good day")
             return
-        if dates != dates_to_process:
+        if not dates_to_process and dates != dates_to_process:
             logger.error(FILE_LIST_MISMATCH)
-            raise FILE_LIST_MISMATCH
-        compressed = []
+        ripped = []
         for date in dates:
             in_file = str(os.path.join(
                 self.directory, SRC_FILE_NAME_TEMPLATE.format(date)
@@ -89,16 +84,16 @@ class Compressor:
                 self.out_dir, DST_FILE_NAME_TEMPLATE.format(date)
             ))
             logger.debug("IN: {}\nOUT: {}".format(in_file, out_file))
-            self.compress(in_file, out_file)
-            compressed.append(out_file)
-            r.hset(COMPRESSED_CC_MTG_KEY, date, 1)
+            self.rip(in_file, out_file)
+            ripped.append(out_file)
+            r.hset(RIPPED_CC_MTG_KEY, date, 1)
             r.hdel(DOWNLOADED_CC_MTG_KEY, date)
 
-        logger.info("compressed: {}".format(compressed))
+        logger.info("ripped: {}".format(ripped))
 
-    def compress(self, in_path: str, out_file: str) -> None:
+    def rip(self, in_path: str, out_file: str) -> None:
         """
-        Submits the ffmpeg compression command for an absolute path input file
+        Submits the ffmpeg rip command for an absolute path input file
          and specifies an absolute path for output
         :return: None
         """
@@ -106,13 +101,10 @@ class Compressor:
         output_stream = ffmpeg.output(
             input_stream,
             out_file,
-            vcodec="libx265",
-            f="segment",
-            segment_time=3600,
-            reset_timestamps=1,
+            vn='null',
+            acodec='copy',
         )
         cmd = ffmpeg.compile(output_stream)
-        cmd = cmd[:-1] + ["-vtag", "hvc1"] + cmd[-1:]
         result = subprocess.run(cmd)
         logger.debug("the commandline is {}".format(result.args))
         logger.debug(result.stdout)  # Output of the command
@@ -129,7 +121,7 @@ class Compressor:
         :return: list of dates, possibly empty
         """
         src_dates = sorted(self.gather_dates(self.directory))
-        dst_dates = sorted(self.gather_dates(self.out_dir, use_pattern=False))
+        dst_dates = sorted(self.gather_dates(self.out_dir))
 
         self.missing = sorted(list(set(src_dates) - set(dst_dates)))
 
@@ -137,7 +129,7 @@ class Compressor:
             return self.missing
         return self.missing[-num:]
 
-    def gather_dates(self, dir_path: str, use_pattern: bool = True) -> list:
+    def gather_dates(self, dir_path: str) -> list:
         """
         Get all dates from file names in a specified directory, optionally
          using a pattern to filter file names down to a particular set
@@ -146,14 +138,10 @@ class Compressor:
         match file names
         :return: list of dates, possibly empty
         """
-        pattern = ""
-        if use_pattern:
-            pattern = self.pattern
         files = [
             f
             for f in listdir(dir_path)
             if path.isfile(os.path.join(dir_path, f))
-            if pattern in f
         ]
         dates = []
         for f in files:

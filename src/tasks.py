@@ -4,16 +4,16 @@ import os
 from celery.schedules import crontab
 
 from celery_app import app, r
-from src.constants import SCRAPED_CC_MTG_KEY, DOWNLOADED_CC_MTG_KEY, DETAIL_CC_MTG_KEY
+from src.av.rip_audio import Ripper
+from src.constants import SCRAPED_CC_MTG_KEY, DOWNLOADED_CC_MTG_KEY, DETAIL_CC_MTG_KEY, \
+    DEFAULT_ONE_WEEK_SECONDS_EXPIRATION, DOWNLOADED_DIR, COMPRESSED_DIR, AUDIO_DIR, COMPRESSION_OPTIONS, \
+    COMPRESSION_PATTERN
 from src.av.download import (OUTFILE_LOCATION, OUTFILE_NAME, get_m3u_url,
                              get_media_stream, logger)
 from src.av.compress import Compressor
 from src.scrapers.cc_meetings.cc_meetings import get_latest_downloaded_date, \
     parse_meetings_from_url
-from src.scrapers.cc_meetings.constants import (COMPRESSED_DIR,
-                                                COMPRESSION_OPTIONS,
-                                                COMPRESSION_PATTERN,
-                                                DOWNLOADED_DIR)
+
 
 @app.task
 def get_cc_meeting_details_for_download() -> None:
@@ -22,7 +22,9 @@ def get_cc_meeting_details_for_download() -> None:
     meeting_dates = sorted(
         [key for key in meetings_to_process.keys() if key > latest_date]
     )
-    r.set(SCRAPED_CC_MTG_KEY, json.dumps(meeting_dates))
+    if meeting_dates:
+        r.set(SCRAPED_CC_MTG_KEY, json.dumps(meeting_dates))
+        r.expire(SCRAPED_CC_MTG_KEY, DEFAULT_ONE_WEEK_SECONDS_EXPIRATION)
 
 @app.task
 def download_unprocessed_videos() -> None:
@@ -55,6 +57,13 @@ def compress_downloaded_cc_meeting_videos() -> None:
     options = COMPRESSION_OPTIONS
     pattern = COMPRESSION_PATTERN
     k = Compressor(output_dir, options, pattern, input_dir=input_dir)
+    k.orchestrate()
+
+
+def rip_audio_from_downloaded_cc_meeting_videos() -> None:
+    input_dir = DOWNLOADED_DIR
+    output_dir = AUDIO_DIR
+    k = Ripper(output_dir, input_dir=input_dir)
     k.orchestrate()
 
 
