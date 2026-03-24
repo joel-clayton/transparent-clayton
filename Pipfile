@@ -4,16 +4,16 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-ffmpeg-python = "*"
 google-api-python-client = "*"
 requests = "*"
 selenium = "*"
 mypy="*"
 pre-commit="*"
 redis="*"
-ffmpeg="*"
+celery = {extras = ["redis"], version = "*"}
+ffmpeg-python = "*"
 
 [dev-packages]
 
 [requires]
-python_version = "3.13"
+python_version = "3.10"
