@@ -12,3 +12,7 @@ CONTENT_DETAILS = dict(
     licensedContent=False,
     caption="False",
 )
+
+VIDEO_DATE_KEY = 'Date'
+PUBLIC_VIDEO_STATUS = "public"
+VIDEO_CATEGORY_ID = 25

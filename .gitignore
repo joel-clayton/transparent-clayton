@@ -6,3 +6,4 @@ nohup.out
 .venv
 celerybeat-schedule*
 set_keys.sh
+.DS_Store

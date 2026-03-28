@@ -12,6 +12,7 @@ pre-commit="*"
 redis="*"
 celery = {extras = ["redis"], version = "*"}
 ffmpeg-python = "*"
+google_auth_oauthlib = "*"
 
 [dev-packages]
 

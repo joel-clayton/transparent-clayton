@@ -1,19 +1,20 @@
 import json
-import os
 
 from celery.schedules import crontab
 
 from celery_app import app, r
-from src.constants import SCRAPED_CC_MTG_KEY, DOWNLOADED_CC_MTG_KEY, DETAIL_CC_MTG_KEY
-from src.av.download import (OUTFILE_LOCATION, OUTFILE_NAME, get_m3u_url,
-                             get_media_stream, logger)
-from src.av.compress import Compressor
-from src.scrapers.cc_meetings.cc_meetings import get_latest_downloaded_date, \
+from src.processors.transcriber import Transcriber
+from src.uploaders.transcript_uploader import TranscriptUploader
+from src.uploaders.video_uploader import VideoUploader
+from src.constants import SCRAPED_CC_MTG_KEY, DOWNLOADED_CC_MTG_KEY, TRANSCRIPT_UPLOADED_CC_MTG_KEY, \
+    COMPRESSED_CC_MTG_KEY
+from src.processors.download import (Downloader)
+from src.processors.compress import Compressor
+from src.scrapers.cc_meetings import get_latest_downloaded_date, \
     parse_meetings_from_url
-from src.scrapers.cc_meetings.constants import (COMPRESSED_DIR,
-                                                COMPRESSION_OPTIONS,
-                                                COMPRESSION_PATTERN,
-                                                DOWNLOADED_DIR)
+from src.settings import DOWNLOADED_DIR, COMPRESSED_DIR, EXTRACTED_AUDIO_DIR, TRANSCRIBED_DIR
+from src.types import JobType, SourceType
+
 
 @app.task
 def get_cc_meeting_details_for_download() -> None:
@@ -25,37 +26,54 @@ def get_cc_meeting_details_for_download() -> None:
     r.set(SCRAPED_CC_MTG_KEY, json.dumps(meeting_dates))
 
 @app.task
-def download_unprocessed_videos() -> None:
-    meetings_to_download = r.get(SCRAPED_CC_MTG_KEY)
-    if meetings_to_download:
-        meetings_to_download = json.loads(meetings_to_download)
-    for date in meetings_to_download:
-        details = r.hget(DETAIL_CC_MTG_KEY, date)
-        if details:
-            details = json.loads(details.decode('utf-8'))
-        clip_id = details.get('ClipId')
-        outfile = str(os.path.join(OUTFILE_LOCATION, OUTFILE_NAME.format(date)))
-        print(f"outfile: {outfile}")
-        if os.path.exists(outfile):
-            logger.info(
-                "Found outfile, skipping download...",
-                extra={date: date, outfile: outfile},
-            )
-            continue
-        print("No media found, downloading...")
-        media_url = get_m3u_url(clip_id)
-        if media_url:
-            get_media_stream(media_url, outfile)
-            r.hset(DOWNLOADED_CC_MTG_KEY, date, 1)
+def download_cc_meeting_video() -> None:
+    downloader = Downloader(
+        input_dir=None,
+        output_dir=DOWNLOADED_DIR,
+        job_type=JobType.DOWNLOAD,
+        source_type=SourceType.CITY_COUNCIL_MEETING,
+        redis_key=DOWNLOADED_CC_MTG_KEY,
+    )
+    downloader.process()
 
 @app.task
-def compress_downloaded_cc_meeting_videos() -> None:
-    input_dir = DOWNLOADED_DIR
-    output_dir = COMPRESSED_DIR
-    options = COMPRESSION_OPTIONS
-    pattern = COMPRESSION_PATTERN
-    k = Compressor(output_dir, options, pattern, input_dir=input_dir)
-    k.orchestrate()
+def compress_cc_meeting_video() -> None:
+    compressor = Compressor(
+        input_dir=DOWNLOADED_DIR,
+        output_dir=COMPRESSED_DIR,
+        job_type=JobType.COMPRESS,
+        source_type=SourceType.CITY_COUNCIL_MEETING,
+        redis_key=COMPRESSED_CC_MTG_KEY,
+    )
+    compressor.process()
+
+
+@app.task
+def upload_cc_meeting_video() -> None:
+    video_uploader = VideoUploader(source_dir=COMPRESSED_DIR)
+    video_uploader.upload()
+
+
+@app.task
+def extract_cc_meeting_audio() -> None:
+    pass
+
+@app.task
+def transcribe_cc_meeting_audio() -> None:
+    transcriber = Transcriber(
+        input_dir=EXTRACTED_AUDIO_DIR,
+        output_dir=TRANSCRIBED_DIR,
+        job_type=JobType.TRANSCRIBE_AUDIO,
+        source_type=SourceType.CITY_COUNCIL_MEETING,
+        redis_key=TRANSCRIPT_UPLOADED_CC_MTG_KEY
+    )
+    transcriber.process()
+
+
+@app.task
+def upload_cc_meeting_transcript() -> None:
+    transcript_uploader = TranscriptUploader(source_dir=EXTRACTED_AUDIO_DIR)
+    transcript_uploader.upload()
 
 
 app.conf.beat_schedule = {
@@ -64,11 +82,27 @@ app.conf.beat_schedule = {
         'schedule': crontab(hour=23, minute=30),
     },
     'download-cc-meeting-video': {
-        'task': 'src.tasks.download_unprocessed_videos',
+        'task': 'src.tasks.download_unprocessed_video',
         'schedule': crontab(hour=23, minute=45),
     },
     'compress-cc-meeting-video': {
-        'task': 'src.tasks.compress_downloaded_cc_meeting_videos',
+        'task': 'src.tasks.compress_cc_meeting_video',
+        'schedule': crontab(hour=1, minute=30),
+    },
+    'upload-cc-meeting-video': {
+        'task': 'src.tasks.upload_cc_meeting_video',
+        'schedule': crontab(hour=1, minute=30),
+    },
+    'extract-cc-meeting-audio': {
+        'task': 'src.tasks.extract_cc_meeting_audio',
+        'schedule': None,
+    },
+    'transcribe-cc-meeting-audio': {
+        'task': 'src.tasks.transcribe_cc_meeting_audio',
+        'schedule': crontab(hour=1, minute=30),
+    },
+    'upload-cc-meeting-transcript': {
+        'task': 'src.tasks.upload_cc_meeting_transcript',
         'schedule': crontab(hour=1, minute=30),
     },
 }
