@@ -2,7 +2,7 @@ DETAIL_KEY = "detail"
 SCRAPED_KEY = "scraped"
 DOWNLOADED_KEY = "downloaded"
 COMPRESSED_KEY = "compressed"
-AUDIO_EXTRACTED_KEY = "audio_extracted"
+EXTRACTED_KEY = "extracted"
 AUDIO_TRANSCRIBED_KEY = "audio_transcribed"
 VIDEO_UPLOADED_KEY = "video_uploaded"
 TRANSCRIPT_UPLOADED_KEY = "transcript_uploaded"
@@ -13,7 +13,7 @@ DETAIL_CC_MTG_KEY = f"{DETAIL_KEY}.{CC_MTG_KEY}"
 SCRAPED_CC_MTG_KEY = f"{SCRAPED_KEY}.{CC_MTG_KEY}"
 DOWNLOADED_CC_MTG_KEY = f"{DOWNLOADED_KEY}.{CC_MTG_KEY}"
 COMPRESSED_CC_MTG_KEY = f"{COMPRESSED_KEY}.{CC_MTG_KEY}"
-AUDIO_EXTRACTED_CC_MTG_KEY = f"{AUDIO_EXTRACTED_KEY}.{CC_MTG_KEY}"
+EXTRACTED_CC_MTG_KEY = f"{EXTRACTED_KEY}.{CC_MTG_KEY}"
 AUDIO_TRANSCRIBED_CC_MTG_KEY = f"{AUDIO_TRANSCRIBED_KEY}.{CC_MTG_KEY}"
 VIDEO_UPLOADED_CC_MTG_KEY = f"{VIDEO_UPLOADED_KEY}.{CC_MTG_KEY}"
 TRANSCRIPT_UPLOADED_CC_MTG_KEY = f"{TRANSCRIPT_UPLOADED_KEY}.{CC_MTG_KEY}"
@@ -41,10 +41,10 @@ PROCESSING
 writes:
 - compressed.cc_mtg: {<date>: 1}
 
-[] av.rip_audio task reads:
+[] av.extract_audio task reads:
 - determines dates by file structure
 writes:
-- ripped.cc_mtg: {<date>: 1}
+- extracted.cc_mtg: {<date>: 1}
 
 [] av.transcriber task reads:
 - determines dates by file structure

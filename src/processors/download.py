@@ -9,7 +9,7 @@ import requests
 
 from celery_app import r
 from src.constants import SCRAPED_CC_MTG_KEY, DETAIL_CC_MTG_KEY
-from src.processors.processor import Processor
+from src.processors.process import Processor
 
 PLAYER_URL = (
     "https://claytonca.granicus.com/player/clip/{clip_id}?view_id=1&redirect=true"

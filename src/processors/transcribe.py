@@ -6,7 +6,7 @@ import time
 from celery_app import r
 from secrets import assembly_ai_auth_key
 from src.constants import AUDIO_TRANSCRIBED_CC_MTG_KEY
-from src.processors.processor import Processor
+from src.processors.process import Processor
 from src.util import get_most_recent_missing_dates
 
 base_url = "https://api.assemblyai.com"

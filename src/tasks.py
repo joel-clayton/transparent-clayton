@@ -3,7 +3,8 @@ import json
 from celery.schedules import crontab
 
 from celery_app import app, r
-from src.processors.transcriber import Transcriber
+from src.processors.extract import Extractor
+from src.processors.transcribe import Transcriber
 from src.uploaders.transcript_uploader import TranscriptUploader
 from src.uploaders.video_uploader import VideoUploader
 from src.constants import SCRAPED_CC_MTG_KEY, DOWNLOADED_CC_MTG_KEY, TRANSCRIPT_UPLOADED_CC_MTG_KEY, \
@@ -56,7 +57,15 @@ def upload_cc_meeting_video() -> None:
 
 @app.task
 def extract_cc_meeting_audio() -> None:
-    pass
+    extractor = Extractor(
+        input_dir=EXTRACTED_AUDIO_DIR,
+        output_dir=TRANSCRIBED_DIR,
+        job_type=JobType.TRANSCRIBE_AUDIO,
+        source_type=SourceType.CITY_COUNCIL_MEETING,
+        redis_key=TRANSCRIPT_UPLOADED_CC_MTG_KEY
+    )
+    extractor.process()
+
 
 @app.task
 def transcribe_cc_meeting_audio() -> None:

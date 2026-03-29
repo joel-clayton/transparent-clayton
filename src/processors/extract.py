@@ -8,15 +8,17 @@ $ pipenv run python compress.py -d /Volumes/Gautam/Clayton/CC Meetings/Downloade
 """
 import logging
 import os
+import re
 import subprocess
+from os import listdir, path
 
 import ffmpeg
 
 from celery_app import r
-from src.constants import COMPRESSED_CC_MTG_KEY, \
+from src.constants import DOWNLOADED_CC_MTG_KEY, EXTRACTED_CC_MTG_KEY, \
     SCRAPED_CC_MTG_KEY, FILE_LIST_MISMATCH
 from src.processors.process import Processor
-from src.util import get_detail_from_redis, get_most_recent_missing_dates
+from src.util import get_detail_from_redis
 
 logging.basicConfig(level="DEBUG")
 logFormatter = logging.Formatter(
@@ -27,28 +29,25 @@ consoleHandler = logging.StreamHandler()
 consoleHandler.setFormatter(logFormatter)
 logger.addHandler(consoleHandler)
 SRC_FILE_NAME_TEMPLATE = "City Council Meeting {} - City of Clayton.mp4"
-DST_FILE_NAME_TEMPLATE = "Clayton CA City Council Meeting {} - %03d.mp4"
+DST_FILE_NAME_TEMPLATE = "City Council Meeting {} - City of Clayton.m4a"
 
 
-class Compressor(Processor):
+class Extractor(Processor):
 
-    def process_for_date(self, input_filepath: str, outout_filepath: str) -> None:
+    def process_for_date(self, in_path: str, out_file: str) -> None:
         """
-        Submits the ffmpeg compression command for an absolute path input file
+        Submits the ffmpeg extract command for an absolute path input file
          and specifies an absolute path for output
         :return: None
         """
-        input_stream = ffmpeg.input(input_filepath)
+        input_stream = ffmpeg.input(in_path)
         output_stream = ffmpeg.output(
             input_stream,
-            outout_filepath,
-            vcodec="libx265",
-            f="segment",
-            segment_time=3600,
-            reset_timestamps=1,
+            out_file,
+            vn='null',
+            acodec='copy',
         )
         cmd = ffmpeg.compile(output_stream)
-        cmd = cmd[:-1] + ["-vtag", "hvc1"] + cmd[-1:]
         result = subprocess.run(cmd)
         logger.debug("the commandline is {}".format(result.args))
         logger.debug(result.stdout)  # Output of the command
