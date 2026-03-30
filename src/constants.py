@@ -67,4 +67,6 @@ deletes:
 - scraped.cc_mtg
 """
 
-FILE_LIST_MISMATCH = "Mismatch between Redis and file paths for downloaded videos to be compressed"
+FILE_LIST_MISMATCH = (
+    "Mismatch between Redis and file paths for downloaded videos to be compressed"
+)

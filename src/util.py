@@ -2,28 +2,30 @@ import json
 import os
 import re
 from os import listdir, path
-from typing import Any
+from typing import Any, List
 
 from celery_app import r
 from src.constants import SCRAPED_CC_MTG_KEY
 from src.types import SourceType, type_stubs
 
 
-def get_detail_from_redis(key) -> Any:
+def get_detail_from_redis(key: str) -> Any:
     serialized = r.get(key)
     if serialized:
         return json.loads(serialized)
     return None
 
 
-def get_dates_to_process() -> [str]:
+def get_dates_to_process() -> List[str]:
     dates_to_upload = r.get(SCRAPED_CC_MTG_KEY)
     if dates_to_upload:
         return json.loads(dates_to_upload)
-    return ['']
+    return [""]
 
 
-def get_most_recent_missing_dates(input_dir: str, output_dir: str, source_type: SourceType) -> list:
+def get_most_recent_missing_dates(
+    input_dir: str, output_dir: str, source_type: SourceType
+) -> list:
     """
     Compare two sets of dates from file names and find the list of src
      directory dates not represented in the destination directory
@@ -39,7 +41,7 @@ def gather_dates(dir_path: str, source_type: SourceType) -> list:
     Get all dates from file names in a specified directory, optionally
      using a pattern to filter file names down to a particular set
     """
-    file_name_stub = type_stubs.get(source_type)
+    file_name_stub = type_stubs.get(source_type, "")
     files = [
         f
         for f in listdir(dir_path)

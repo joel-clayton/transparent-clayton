@@ -2,15 +2,23 @@ import json
 import random
 import time
 from datetime import datetime
+from typing import Any
+from urllib.request import Request
 
 import httplib2
+from googleapiclient.discovery import Resource
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
 
 from celery_app import r
-from src.constants import SCRAPED_CC_MTG_KEY, DETAIL_CC_MTG_KEY, VIDEO_UPLOADED_CC_MTG_KEY
+from src.constants import DETAIL_CC_MTG_KEY, VIDEO_UPLOADED_CC_MTG_KEY
+from src.scrapers.cc_meetings import CityCouncilMeeting
 from src.types import JobType, SourceType
-from src.uploaders.constants import PUBLIC_VIDEO_STATUS, VIDEO_CATEGORY_ID, VIDEO_DATE_KEY
+from src.uploaders.constants import (
+    PUBLIC_VIDEO_STATUS,
+    VIDEO_CATEGORY_ID,
+    VIDEO_DATE_KEY,
+)
 from src.uploaders.youtube_auth import get_authenticated_service
 from src.util import get_detail_from_redis
 
@@ -46,13 +54,13 @@ class VideoUploader:
     def __init__(
         self,
         source_dir: str,
-    ):
+    ) -> None:
         self.source_dir = source_dir
         self.job_type = JobType.UPLOAD_VIDEO
         self.source_type = SourceType.CITY_COUNCIL_MEETING
         self.redis_key = VIDEO_UPLOADED_CC_MTG_KEY
 
-    def initialize_upload(self, youtube, options):
+    def initialize_upload(self, youtube: Resource, options: dict[str, Any]) -> str:
         tags = None
         if options["keywords"]:
             tags = options["keywords"].split(",")
@@ -88,24 +96,24 @@ class VideoUploader:
 
         return self.resumable_upload(insert_request)
 
-
-    # This method implements an exponential backoff strategy to resume a
-    # failed upload.
-    def resumable_upload(self, request) -> str:
+    def resumable_upload(self, request: Request) -> str:
         response = None
         error = None
         retry = 0
-        video_id = None
+        video_id = ""
         while response is None:
             try:
                 print("Uploading file...")
-                status, response = request.next_chunk()
+                status, response = request.next_chunk()  # type: ignore
                 if response is not None:
                     if "id" in response:
                         video_id = response["id"]
                         print('Video id "%s" was successfully uploaded.' % video_id)
                     else:
-                        exit("The upload failed with an unexpected response: %s" % response)
+                        exit(
+                            "The upload failed with an unexpected response: %s"
+                            % response
+                        )
             except HttpError as e:
                 if e.resp.status in RETRIABLE_STATUS_CODES:
                     error = "A retriable HTTP error %d occurred:\n%s" % (
@@ -127,14 +135,14 @@ class VideoUploader:
                 sleep_seconds = random.random() * max_sleep
                 print("Sleeping %f seconds and then retrying..." % sleep_seconds)
                 time.sleep(sleep_seconds)
-            return video_id
+        return video_id
 
     def upload_for_date(
         self,
         date: str,
         publish_date: str,
-    ) -> None:
-        dt = datetime.strptime(date, '%Y-%m-%d')
+    ) -> str | None:
+        dt = datetime.strptime(date, "%Y-%m-%d")
 
         options = {
             "file": dt.strftime(FILEPATH_FORMAT),
@@ -150,19 +158,24 @@ class VideoUploader:
 
         try:
             video_id = self.initialize_upload(youtube, options)
+            if not video_id:
+                raise Exception("No Video ID returned")
             return video_id
         except HttpError as e:
             print("An HTTP error %d occurred:\n%s" % (e.resp.status, e.content))
+        return None
 
-    def upload(self):
+    def upload(self) -> None:
         dates_to_upload = get_detail_from_redis(self.redis_key)
         if not dates_to_upload:
             return
         for date in dates_to_upload:
-            cc_meeting_detail = r.hget(DETAIL_CC_MTG_KEY, date)
-            if not cc_meeting_detail:
-                raise "Date set for video upload is missing details in Redis"
-            cc_meeting_detail = json.loads(cc_meeting_detail)
+            cc_meeting_detail_str = r.hget(DETAIL_CC_MTG_KEY, date)
+            if not cc_meeting_detail_str:
+                raise Exception("Date set for video upload is missing details in Redis")
+            cc_meeting_detail: CityCouncilMeeting = json.loads(cc_meeting_detail_str)
+            if not cc_meeting_detail or isinstance(cc_meeting_detail, dict):
+                raise Exception("Malformed City Council Meeting details in Redis")
             publish_ds = cc_meeting_detail.get(VIDEO_DATE_KEY)
             self.upload_for_date(date, publish_ds)
             r.hset(self.redis_key, date, 1)

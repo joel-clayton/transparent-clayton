@@ -1,9 +1,22 @@
 from enum import Enum
 
-from src.constants import CC_MTG_FILE_STUB, CC_MTG_FILE_TEMPLATE, DOWNLOADED_CC_MTG_KEY, EXTRACTED_CC_MTG_KEY, \
-    COMPRESSED_CC_MTG_KEY, SCRAPED_CC_MTG_KEY, AUDIO_TRANSCRIBED_CC_MTG_KEY, TRANSCRIPT_UPLOADED_CC_MTG_KEY, \
-    VIDEO_UPLOADED_CC_MTG_KEY
-from src.settings import DOWNLOADED_DIR, COMPRESSED_DIR, EXTRACTED_AUDIO_DIR, TRANSCRIBED_DIR
+from src.constants import (
+    AUDIO_TRANSCRIBED_CC_MTG_KEY,
+    CC_MTG_FILE_STUB,
+    CC_MTG_FILE_TEMPLATE,
+    COMPRESSED_CC_MTG_KEY,
+    DOWNLOADED_CC_MTG_KEY,
+    EXTRACTED_CC_MTG_KEY,
+    SCRAPED_CC_MTG_KEY,
+    TRANSCRIPT_UPLOADED_CC_MTG_KEY,
+    VIDEO_UPLOADED_CC_MTG_KEY,
+)
+from src.settings import (
+    COMPRESSED_DIR,
+    DOWNLOADED_DIR,
+    EXTRACTED_AUDIO_DIR,
+    TRANSCRIBED_DIR,
+)
 
 
 class SourceType(Enum):
@@ -11,9 +24,7 @@ class SourceType(Enum):
     BUDGET_AND_AUDIT_MEETING = 2
 
 
-type_stubs = {
-    SourceType.CITY_COUNCIL_MEETING: CC_MTG_FILE_STUB
-}
+type_stubs = {SourceType.CITY_COUNCIL_MEETING: CC_MTG_FILE_STUB}
 
 
 class JobType(Enum):
@@ -39,10 +50,10 @@ source_file_templates = {
 }
 
 job_file_formats = {
-    JobType.DOWNLOAD: '.mp4',
-    JobType.COMPRESS: '.mp4',
-    JobType.EXTRACT_AUDIO: '.m4a',
-    JobType.TRANSCRIBE_AUDIO: '.txt',
+    JobType.DOWNLOAD: ".mp4",
+    JobType.COMPRESS: ".mp4",
+    JobType.EXTRACT_AUDIO: ".m4a",
+    JobType.TRANSCRIBE_AUDIO: ".txt",
 }
 
 job_redis_keys = {

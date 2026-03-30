@@ -3,7 +3,7 @@ import os
 import re
 import time
 from datetime import datetime
-from typing import TypedDict
+from typing import TypedDict, Any
 
 from selenium import webdriver
 from selenium.webdriver.chrome.webdriver import WebDriver
@@ -11,14 +11,17 @@ from selenium.webdriver.common.by import By
 
 from celery_app import r
 from src.constants import DETAIL_CC_MTG_KEY
-from src.scrapers.constants import (CLIP_ARG_REGEX, CLIP_ID_REGEX,
-                                    DATETIME_INPUT_FORMAT,
-                                    DOWNLOADED_PATH, SOURCE_URL,
-                                    VIDEO_DATE_REGEX,
-                                    VIDEO_FILE_NAME_REGEX,
-                                    DEFAULT_ONE_WEEK_SECONDS_EXPIRATION,
-                                    DATETIME_OUTPUT_FORMAT,
-                                    DATE_OUTPUT_FORMAT)
+from src.scrapers.constants import (
+    CLIP_ARG_REGEX,
+    DATE_OUTPUT_FORMAT,
+    DATETIME_INPUT_FORMAT,
+    DATETIME_OUTPUT_FORMAT,
+    DEFAULT_ONE_WEEK_SECONDS_EXPIRATION,
+    DOWNLOADED_PATH,
+    SOURCE_URL,
+    VIDEO_DATE_REGEX,
+    VIDEO_FILE_NAME_REGEX,
+)
 
 
 def browser() -> WebDriver:
@@ -61,6 +64,7 @@ class CityCouncilMeeting(TypedDict):
     MinutesAndSupplementalMaterials: dict
     Video: str
     AgendaPacket: str
+    ClipId: str
 
 
 ordered_header_fields = [
@@ -78,10 +82,7 @@ def parse_date_input(date_str: str) -> datetime:
     return datetime.strptime(date_str, DATETIME_INPUT_FORMAT)
 
 
-def parse_url_from_html(
-        html_str: str,
-        start: str = "//",
-        end: str = '">') -> str:
+def parse_url_from_html(html_str: str, start: str = "//", end: str = '">') -> str:
     # if multiple matches, name the matches
     html_str = html_str.replace("&amp;", "&")
     matches = re.search(rf"{start}(.*?){end}", html_str)
@@ -91,9 +92,8 @@ def parse_url_from_html(
 
 
 def parse_multiple_urls_from_html(
-        html_str: str,
-        start: str | None = None,
-        end: str | None = None) -> dict:
+    html_str: str, start: str | None = None, end: str | None = None
+) -> dict:
     matches = re.findall(rf"{start}.*?{end}", html_str)
     named_urls = {}
     for match in matches:
@@ -113,9 +113,10 @@ def get_inner_text_from_html(html_str: str) -> str:
 def get_clip_id_from_url(url: str) -> str | None:
     matches = re.search(CLIP_ARG_REGEX, url)
     if matches:
-        return re.search(CLIP_ID_REGEX, matches.group(0)).group(0)
+        return matches.group(0).split("=")[1]
     else:
         return None
+
 
 element_parser = {
     "Date": (parse_date_input, {}),
@@ -144,20 +145,21 @@ def get_latest_downloaded_date() -> str:
         [filename for filename in filenames if filename.endswith(".mp4")], reverse=True
     )
     if not time_sorted_filenames:
-        return None
+        return ""
     date_keyed_filenames = {}
     for filename in time_sorted_filenames:
-        match = re.search(VIDEO_FILE_NAME_REGEX, filename)
-        if match:
+        file_match = re.search(VIDEO_FILE_NAME_REGEX, filename)
+        if file_match:
             date_match = re.search(VIDEO_DATE_REGEX, filename)
-            date_keyed_filenames[date_match.group()] = filename
+            if date_match:
+                date_keyed_filenames[date_match.group(0)] = filename
     date_sorted_filenames = sorted(date_keyed_filenames.keys(), reverse=True)
     if not date_sorted_filenames:
-        return None
+        return ""
     return date_sorted_filenames[0]
 
 
-def parse_meetings_from_url(latest_date: str) -> dict:
+def parse_meetings_from_url(latest_date: str) -> dict[str, dict[str, Any]]:
     driver = browser()
 
     # Give the iframe time to load content
@@ -175,7 +177,7 @@ def parse_meetings_from_url(latest_date: str) -> dict:
             break
 
     # Inspect and parse table body fields
-    cc_meetings = {}
+    cc_meetings: dict[str, dict[str, Any]] = {}
     table_bodies = cc_panel_elem.find_elements(By.TAG_NAME, "tbody")
     for index, table_body in enumerate(table_bodies):
         body_rows = table_body.find_elements(By.XPATH, ".//tr")
@@ -195,22 +197,25 @@ def parse_meetings_from_url(latest_date: str) -> dict:
                     header_cell_name, (None, None)
                 )
                 if extra_parser:
-                    body_cell_value = extra_parser(body_cell_value, **kwargs)
-                structured_raw_data.update({header_cell_name: body_cell_value})
-            clip_id = get_clip_id_from_url(
-                structured_raw_data.get("Video", "")
-            )
+                    body_cell_value = extra_parser(body_cell_value, **kwargs)  # type: ignore
+                structured_raw_data[header_cell_name] = body_cell_value
+            clip_id = get_clip_id_from_url(structured_raw_data.get("Video", ""))
 
             if clip_id:
                 structured_raw_data["ClipId"] = clip_id
             else:
-                raise AttributeError(f"No clip_id found for cc_meeting: {structured_raw_data}")
+                raise AttributeError(
+                    f"No clip_id found for cc_meeting: {structured_raw_data}"
+                )
 
             meeting_date = structured_raw_data["Date"].strftime(DATE_OUTPUT_FORMAT)
-            structured_raw_data['Date'] = structured_raw_data['Date'].strftime(DATETIME_OUTPUT_FORMAT)
-            cc_meetings[meeting_date] = (
-                CityCouncilMeeting(**structured_raw_data)
+            structured_raw_data["Date"] = structured_raw_data["Date"].strftime(
+                DATETIME_OUTPUT_FORMAT
             )
-            r.hset(DETAIL_CC_MTG_KEY, mapping={meeting_date: json.dumps(structured_raw_data)})
+            cc_meetings[meeting_date] = structured_raw_data
+            r.hset(
+                DETAIL_CC_MTG_KEY,
+                mapping={meeting_date: json.dumps(structured_raw_data)},
+            )
             r.expire(DETAIL_CC_MTG_KEY, DEFAULT_ONE_WEEK_SECONDS_EXPIRATION)
     return cc_meetings

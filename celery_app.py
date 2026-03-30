@@ -18,7 +18,7 @@ app.conf.update(
     enable_utc=True,
 )
 
-r = redis.Redis(host='localhost', port=6379, db=0)
+r = redis.Redis(host="localhost", port=6379, db=0)
 
 if __name__ == "__main__":
     app.start()

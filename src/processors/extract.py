@@ -6,19 +6,13 @@ This script compresses mp4 video takes a diff of videos based on a date in
 Usage:
 $ pipenv run python compress.py -d /Volumes/Gautam/Clayton/CC Meetings/Downloaded/ -t "-c:v libx265 -vtag hvc1" -o /Volumes/Gautam/Clayton/CC Meetings/Compressed/ -p "City of Clayton"
 """
+
 import logging
-import os
-import re
 import subprocess
-from os import listdir, path
 
 import ffmpeg
 
-from celery_app import r
-from src.constants import DOWNLOADED_CC_MTG_KEY, EXTRACTED_CC_MTG_KEY, \
-    SCRAPED_CC_MTG_KEY, FILE_LIST_MISMATCH
 from src.processors.process import Processor
-from src.util import get_detail_from_redis
 
 logging.basicConfig(level="DEBUG")
 logFormatter = logging.Formatter(
@@ -33,7 +27,6 @@ DST_FILE_NAME_TEMPLATE = "City Council Meeting {} - City of Clayton.m4a"
 
 
 class Extractor(Processor):
-
     def process_for_date(self, in_path: str, out_file: str) -> None:
         """
         Submits the ffmpeg extract command for an absolute path input file
@@ -44,8 +37,8 @@ class Extractor(Processor):
         output_stream = ffmpeg.output(
             input_stream,
             out_file,
-            vn='null',
-            acodec='copy',
+            vn="null",
+            acodec="copy",
         )
         cmd = ffmpeg.compile(output_stream)
         result = subprocess.run(cmd)
