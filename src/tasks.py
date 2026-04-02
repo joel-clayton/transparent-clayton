@@ -5,25 +5,15 @@ from celery.schedules import crontab
 
 from celery_app import app, r
 from src.constants import (
-    COMPRESSED_CC_MTG_KEY,
-    DOWNLOADED_CC_MTG_KEY,
     SCRAPED_CC_MTG_KEY,
-    TRANSCRIPT_UPLOADED_CC_MTG_KEY,
 )
 from src.processors.compress import Compressor
 from src.processors.download import Downloader
 from src.processors.extract import Extractor
 from src.processors.transcribe import Transcriber
 from src.scrapers.cc_meetings import get_latest_downloaded_date, parse_meetings_from_url
-from src.settings import (
-    COMPRESSED_DIR,
-    DOWNLOADED_DIR,
-    EXTRACTED_AUDIO_DIR,
-    TRANSCRIBED_DIR,
-)
-from src.types import JobType, SourceType
-from src.uploaders.transcript_uploader import TranscriptUploader
-from src.uploaders.video_uploader import VideoUploader
+from src.processors.upload_transcript import TranscriptUploader
+from src.processors.upload_video import VideoUploader
 
 logger = logging.getLogger(__name__)
 
@@ -43,91 +33,67 @@ def get_cc_meeting_details_for_download() -> None:
 
 @app.task
 def download_cc_meeting_video() -> None:
-    downloader = Downloader(
-        input_dir="",
-        output_dir=DOWNLOADED_DIR,
-        job_type=JobType.DOWNLOAD,
-        source_type=SourceType.CITY_COUNCIL_MEETING,
-        redis_key=DOWNLOADED_CC_MTG_KEY,
-    )
+    downloader = Downloader()
     downloader.process()
 
 
 @app.task
 def compress_cc_meeting_video() -> None:
-    compressor = Compressor(
-        input_dir=DOWNLOADED_DIR,
-        output_dir=COMPRESSED_DIR,
-        job_type=JobType.COMPRESS,
-        source_type=SourceType.CITY_COUNCIL_MEETING,
-        redis_key=COMPRESSED_CC_MTG_KEY,
-    )
+    compressor = Compressor()
     compressor.process()
 
 
 @app.task
 def upload_cc_meeting_video() -> None:
-    video_uploader = VideoUploader(source_dir=COMPRESSED_DIR)
-    video_uploader.upload()
+    video_uploader = VideoUploader()
+    video_uploader.process()
 
 
 @app.task
 def extract_cc_meeting_audio() -> None:
-    extractor = Extractor(
-        input_dir=EXTRACTED_AUDIO_DIR,
-        output_dir=TRANSCRIBED_DIR,
-        job_type=JobType.TRANSCRIBE_AUDIO,
-        source_type=SourceType.CITY_COUNCIL_MEETING,
-        redis_key=TRANSCRIPT_UPLOADED_CC_MTG_KEY,
-    )
+    extractor = Extractor()
     extractor.process()
 
 
 @app.task
 def transcribe_cc_meeting_audio() -> None:
-    transcriber = Transcriber(
-        input_dir=EXTRACTED_AUDIO_DIR,
-        output_dir=TRANSCRIBED_DIR,
-        job_type=JobType.TRANSCRIBE_AUDIO,
-        source_type=SourceType.CITY_COUNCIL_MEETING,
-        redis_key=TRANSCRIPT_UPLOADED_CC_MTG_KEY,
-    )
+    transcriber = Transcriber()
     transcriber.process()
 
 
 @app.task
 def upload_cc_meeting_transcript() -> None:
-    transcript_uploader = TranscriptUploader(source_dir=EXTRACTED_AUDIO_DIR)
-    transcript_uploader.upload()
+    transcript_uploader = TranscriptUploader()
+    transcript_uploader.process()
 
 
 app.conf.beat_schedule = {
     "get-cc-meeting-details-to-process": {
         "task": "src.tasks.get_cc_meeting_details_for_download",
-        "schedule": crontab(hour=23, minute=30),
+        "schedule": crontab(hour=18, minute=0),
     },
     "download-cc-meeting-video": {
         "task": "src.tasks.download_unprocessed_video",
-        "schedule": crontab(hour=23, minute=45),
+        "schedule": crontab(hour=19, minute=0),
     },
     "compress-cc-meeting-video": {
         "task": "src.tasks.compress_cc_meeting_video",
-        "schedule": crontab(hour=1, minute=30),
+        "schedule": crontab(hour=20, minute=0),
     },
     "upload-cc-meeting-video": {
         "task": "src.tasks.upload_cc_meeting_video",
-        "schedule": crontab(hour=1, minute=30),
+        "schedule": crontab(hour=22, minute=0),
     },
     "extract-cc-meeting-audio": {
         "task": "src.tasks.extract_cc_meeting_audio",
-        "schedule": None,
+        "schedule": crontab(hour=23, minute=0),
     },
     "transcribe-cc-meeting-audio": {
         "task": "src.tasks.transcribe_cc_meeting_audio",
-        "schedule": crontab(hour=1, minute=30),
+        "schedule": crontab(hour=0, minute=0),
     },
     "upload-cc-meeting-transcript": {
         "task": "src.tasks.upload_cc_meeting_transcript",
-        "schedule": crontab(hour=1, minute=30),
+        "schedule": crontab(hour=1, minute=0),
     },
 }

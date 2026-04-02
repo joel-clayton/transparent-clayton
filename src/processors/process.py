@@ -1,4 +1,7 @@
 import os
+import re
+from os import listdir, path
+from typing import List
 
 from celery_app import r
 from src.types import (
@@ -7,30 +10,14 @@ from src.types import (
     job_file_formats,
     job_paths,
     source_file_templates,
+    type_stubs,
 )
-from src.util import get_most_recent_missing_dates
 
 
 class Processor:
-    input_dir: str
-    output_dir: str
     job_type: JobType
     source_type: SourceType
     redis_key: str
-
-    def __init__(
-        self,
-        input_dir: str,
-        output_dir: str,
-        job_type: JobType,
-        source_type: SourceType,
-        redis_key: str,
-    ):
-        self.input_dir = input_dir
-        self.output_dir = output_dir
-        self.job_type = job_type
-        self.source_type = source_type
-        self.redis_key = redis_key
 
     def construct_filename_for_date(self, date: str) -> str:
         file_name_template = source_file_templates[self.source_type]
@@ -42,17 +29,43 @@ class Processor:
         dir_path = job_paths[self.job_type]
         return str(os.path.join(dir_path, file_name))
 
-    def process_for_date(self, input_filepath: str, output_filepath: str) -> None:
+    def gather_dates(self, dir_path: str) -> list:
+        """
+        Get all dates from file names in a specified directory, optionally
+         using a pattern to filter file names down to a particular set
+        """
+        file_name_stub = type_stubs.get(self.source_type, "")
+        files = [
+            f
+            for f in listdir(dir_path)
+            if path.isfile(os.path.join(dir_path, f))
+            if file_name_stub in f
+        ]
+        dates = []
+        for f in files:
+            date_match = re.search(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", f)
+            if date_match:
+                date_str = date_match.group(0)
+                dates.append(date_str)
+        return sorted(dates)
+
+    def gather_input_dates(self) -> List:
+        raise NotImplementedError
+
+    def gather_output_dates(self) -> List:
+        raise NotImplementedError
+
+    def get_most_recent_missing_dates(self) -> List[str]:
+        input_dates = sorted(self.gather_input_dates())
+        output_dates = sorted(self.gather_output_dates())
+        return sorted(list(set(input_dates) - set(output_dates)))
+
+    def process_for_date(self, date: str) -> None:
         raise NotImplementedError
 
     def process(self) -> None:
-        missing_transcription_dates = get_most_recent_missing_dates(
-            self.input_dir, self.output_dir, self.source_type
-        )
+        missing_transcription_dates = self.get_most_recent_missing_dates()
 
         for missing_date in missing_transcription_dates:
-            input_file_path = self.construct_filepath_for_date(missing_date)
-            output_file_path = self.construct_filepath_for_date(missing_date)
-
-            self.process_for_date(input_file_path, output_file_path)
+            self.process_for_date(missing_date)
             r.hset(self.redis_key, missing_date, 1)

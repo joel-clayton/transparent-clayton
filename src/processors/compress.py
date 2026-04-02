@@ -12,7 +12,9 @@ import subprocess
 
 import ffmpeg
 
+from src.constants import COMPRESSED_CC_MTG_KEY
 from src.processors.process import Processor
+from src.types import JobType, SourceType
 
 logging.basicConfig(level="DEBUG")
 logFormatter = logging.Formatter(
@@ -27,16 +29,24 @@ DST_FILE_NAME_TEMPLATE = "Clayton CA City Council Meeting {} - %03d.mp4"
 
 
 class Compressor(Processor):
-    def process_for_date(self, input_filepath: str, outout_filepath: str) -> None:
+    def __init__(self) -> None:
+        self.job_type = JobType.COMPRESS
+        self.source_type = SourceType.CITY_COUNCIL_MEETING
+        self.redis_key = COMPRESSED_CC_MTG_KEY
+
+    def process_for_date(self, date: str) -> None:
         """
         Submits the ffmpeg compression command for an absolute path input file
          and specifies an absolute path for output
         :return: None
         """
+        input_filepath = self.construct_filepath_for_date(date)
+        output_filepath = self.construct_filepath_for_date(date)
+
         input_stream = ffmpeg.input(input_filepath)
         output_stream = ffmpeg.output(
             input_stream,
-            outout_filepath,
+            output_filepath,
             vcodec="libx265",
             f="segment",
             segment_time=3600,

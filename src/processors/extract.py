@@ -12,7 +12,9 @@ import subprocess
 
 import ffmpeg
 
+from src.constants import TRANSCRIPT_UPLOADED_CC_MTG_KEY
 from src.processors.process import Processor
+from src.types import SourceType, JobType
 
 logging.basicConfig(level="DEBUG")
 logFormatter = logging.Formatter(
@@ -27,16 +29,24 @@ DST_FILE_NAME_TEMPLATE = "City Council Meeting {} - City of Clayton.m4a"
 
 
 class Extractor(Processor):
-    def process_for_date(self, in_path: str, out_file: str) -> None:
+    def __init__(self) -> None:
+        self.job_type = JobType.TRANSCRIBE_AUDIO
+        self.source_type = SourceType.CITY_COUNCIL_MEETING
+        self.redis_key = TRANSCRIPT_UPLOADED_CC_MTG_KEY
+
+    def process_for_date(self, date: str) -> None:
         """
         Submits the ffmpeg extract command for an absolute path input file
          and specifies an absolute path for output
         :return: None
         """
-        input_stream = ffmpeg.input(in_path)
+        input_filepath = self.construct_filepath_for_date(date)
+        output_filepath = self.construct_filepath_for_date(date)
+
+        input_stream = ffmpeg.input(input_filepath)
         output_stream = ffmpeg.output(
             input_stream,
-            out_file,
+            output_filepath,
             vn="null",
             acodec="copy",
         )

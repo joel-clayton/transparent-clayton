@@ -1,18 +1,26 @@
-# Install the requests package by executing the command "pip install requests"
-
 import time
 from secrets import assembly_ai_auth_key
 
 import requests
 
+from src.constants import TRANSCRIPT_UPLOADED_CC_MTG_KEY
 from src.processors.process import Processor
+from src.types import SourceType, JobType
 
 base_url = "https://api.assemblyai.com"
 headers = {"authorization": assembly_ai_auth_key}
 
 
 class Transcriber(Processor):
-    def process_for_date(self, input_filepath: str, output_filepath: str) -> None:
+    def __init__(self) -> None:
+        self.job_type = JobType.TRANSCRIBE_AUDIO
+        self.source_type = SourceType.CITY_COUNCIL_MEETING
+        self.redis_key = TRANSCRIPT_UPLOADED_CC_MTG_KEY
+
+    def process_for_date(self, date: str) -> None:
+        input_filepath = self.construct_filepath_for_date(date)
+        output_filepath = self.construct_filepath_for_date(date)
+
         with open(input_filepath, "rb") as f:
             response = requests.post(base_url + "/v2/upload", headers=headers, data=f)
 

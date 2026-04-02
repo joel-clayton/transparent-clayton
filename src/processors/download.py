@@ -8,8 +8,10 @@ from typing import List
 import requests
 
 from celery_app import r
-from src.constants import DETAIL_CC_MTG_KEY, SCRAPED_CC_MTG_KEY
+from src.constants import DETAIL_CC_MTG_KEY, SCRAPED_CC_MTG_KEY, DOWNLOADED_CC_MTG_KEY
 from src.processors.process import Processor
+from src.settings import DOWNLOADED_DIR
+from src.types import JobType, SourceType
 
 PLAYER_URL = (
     "https://claytonca.granicus.com/player/clip/{clip_id}?view_id=1&redirect=true"
@@ -18,14 +20,22 @@ logger = logging.getLogger(__name__)
 
 
 class Downloader(Processor):
-    def get_dates_to_process(self) -> List[str] | None:
+    def __init__(self) -> None:
+        self.job_type = JobType.DOWNLOAD
+        self.source_type = SourceType.CITY_COUNCIL_MEETING
+        self.redis_key = DOWNLOADED_CC_MTG_KEY
+
+    def gather_input_dates(self) -> List:
         dates_to_upload = r.get(SCRAPED_CC_MTG_KEY)
         if dates_to_upload:
             return json.loads(dates_to_upload)
-        return None
+        return []
+
+    def gather_output_dates(self) -> List:
+        return self.gather_dates(DOWNLOADED_DIR)
 
     def process(self) -> None:
-        meetings_to_download = self.get_dates_to_process()
+        meetings_to_download = self.get_most_recent_missing_dates()
         if not meetings_to_download:
             return None
 
