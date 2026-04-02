@@ -7,7 +7,8 @@ import googleapiclient.discovery
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.http import MediaFileUpload
 
-from src.constants import TRANSCRIPT_UPLOADED_CC_MTG_KEY, CC_MTG_FILE_TEMPLATE
+from src.constants import TRANSCRIPT_UPLOADED_CC_MTG_KEY
+from src.processors.constants import CC_MTG_FILE_TEMPLATE
 from src.processors.process import Processor
 from src.settings import TRANSCRIBED_DIR
 from src.types import JobType, SourceType

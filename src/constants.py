@@ -19,7 +19,6 @@ VIDEO_UPLOADED_CC_MTG_KEY = f"{VIDEO_UPLOADED_KEY}.{CC_MTG_KEY}"
 TRANSCRIPT_UPLOADED_CC_MTG_KEY = f"{TRANSCRIPT_UPLOADED_KEY}.{CC_MTG_KEY}"
 
 CC_MTG_FILE_FORMAT = "City Council Meeting %Y-%m-%d - City of Clayton{}"
-CC_MTG_FILE_TEMPLATE = "City Council Meeting {} - City of Clayton{}"
 CC_MTG_FILE_STUB = "City Council Meeting"
 
 """

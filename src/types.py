@@ -3,7 +3,6 @@ from enum import Enum
 from src.constants import (
     AUDIO_TRANSCRIBED_CC_MTG_KEY,
     CC_MTG_FILE_STUB,
-    CC_MTG_FILE_TEMPLATE,
     COMPRESSED_CC_MTG_KEY,
     DOWNLOADED_CC_MTG_KEY,
     EXTRACTED_CC_MTG_KEY,
@@ -11,6 +10,7 @@ from src.constants import (
     TRANSCRIPT_UPLOADED_CC_MTG_KEY,
     VIDEO_UPLOADED_CC_MTG_KEY,
 )
+from src.processors.constants import CC_MTG_FILE_TEMPLATE
 from src.settings import (
     COMPRESSED_DIR,
     DOWNLOADED_DIR,
