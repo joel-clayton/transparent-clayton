@@ -1,11 +1,11 @@
 import time
-from secrets import assembly_ai_auth_key
 
 import requests
 
 from src.constants import TRANSCRIPT_UPLOADED_CC_MTG_KEY
 from src.processors.process import Processor
 from src.types import SourceType, JobType
+from src.secrets import assembly_ai_auth_key
 
 base_url = "https://api.assemblyai.com"
 headers = {"authorization": assembly_ai_auth_key}
