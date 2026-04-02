@@ -5,14 +5,13 @@ from typing import TYPE_CHECKING
 import googleapiclient.discovery
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.http import MediaFileUpload
+# from googleapiclient._apis.drive.v3 import DriveResource
 
 from celery_app import r
 from src.constants import TRANSCRIPT_UPLOADED_CC_MTG_KEY
 from src.types import JobType, SourceType
 from src.util import get_detail_from_redis
 
-if TYPE_CHECKING:
-    from googleapiclient._apis.drive.v3 import DriveResource
 
 # If modifying these scopes, delete the file token.json.
 SCOPES = [
@@ -41,7 +40,7 @@ class TranscriptUploader:
         self.redis_key = TRANSCRIPT_UPLOADED_CC_MTG_KEY
 
     def share_file(
-        self, authed_service: "DriveResource", file_id: str, email: str
+        self, authed_service, file_id: str, email: str  # type: ignore
     ) -> dict:
         # Define the permission properties
         permission_body = {
@@ -62,7 +61,7 @@ class TranscriptUploader:
             .execute()
         )
 
-    def find_folder_id(self, service: DriveResource, folder_name: str) -> str | None:
+    def find_folder_id(self, service, folder_name: str) -> str | None:  # type: ignore
         """Search for a folder by name and return its ID."""
         # Define the search query
         query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
@@ -88,7 +87,7 @@ class TranscriptUploader:
         # Return the ID of the first match
         return folders[0]["id"]
 
-    def create_file(self, service: DriveResource, parent_id: str) -> str:
+    def create_file(self, service, parent_id: str) -> str:  # type: ignore
         file_metadata = {"name": "MyNewFile3.txt", "parents": [parent_id]}
         media = MediaFileUpload(
             "/Users/gautam/Downloads/transcript.txt",
@@ -108,12 +107,16 @@ class TranscriptUploader:
         )
         return file["id"]
 
-    def authenticate(self) -> DriveResource:
+    def authenticate(self):  # type: ignore
         flow = InstalledAppFlow.from_client_secrets_file(
             DESKTOP_APP_CLIENT_SECRET, SCOPES
         )
         credentials = flow.run_local_server(port=0)
-        return googleapiclient.discovery.build("drive", "v3", credentials=credentials)
+        return googleapiclient.discovery.build(
+            "drive",
+            "v3",
+            credentials=credentials
+        )
 
     def get_year_from_date(self, date: str) -> str:
         dt = datetime.strptime(date, "%Y-%m-%d")

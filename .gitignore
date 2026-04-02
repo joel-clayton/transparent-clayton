@@ -7,3 +7,4 @@ nohup.out
 celerybeat-schedule*
 set_keys.sh
 .DS_Store
+logs/
