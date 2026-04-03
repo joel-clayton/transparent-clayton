@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 from datetime import datetime
 from typing import List
 
@@ -8,8 +9,9 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.http import MediaFileUpload
 
 from src.constants import TRANSCRIPT_UPLOADED_CC_MTG_KEY
-from src.processors.constants import CC_MTG_FILE_TEMPLATE
+from src.processors.constants import CC_MTG_FILE_TEMPLATE, EARLIEST
 from src.processors.process import Processor
+from src.processors.upload_video import DATE_PATTERN
 from src.settings import TRANSCRIBED_DIR
 from src.types import JobType, SourceType
 
@@ -22,7 +24,6 @@ SCOPES = [
 DESKTOP_APP_CLIENT_SECRET = "/Users/gautam/dev/client_secret_721413148557-p0c4gqeha85bo7astbjc9c29hp3a30b6.apps.googleusercontent.com.json"
 TRANSCRIPTS_PARENT_ID = "1MR8u-c-eFDXSPef1tHFFknivWjJ5tp79"
 TRANSCRIPT_FILE_TEMPLATE = "City Council Meeting {}"
-RESULT_COUNT = 10
 SHARE_LIST = ["grahamjordan2596@gmail.com"]
 logger = logging.getLogger(__name__)
 
@@ -135,7 +136,13 @@ class TranscriptUploader(Processor):
             if not page_token:
                 break
 
-        return files
+        names = [d.get("name") for d in files]
+        dates = []
+        for name in names:
+            date_match = re.search(DATE_PATTERN, name)
+            if date_match:
+                dates.append(date_match.group(0))
+        return dates
 
     def create_folder(self, name: str) -> str:
         folder_metadata = {
@@ -160,7 +167,7 @@ class TranscriptUploader(Processor):
         return dt.strftime("%Y")
 
     def gather_input_dates(self) -> List:
-        return sorted(self.gather_dates(TRANSCRIBED_DIR), reverse=True)[:RESULT_COUNT]
+        return sorted(self.gather_dates(TRANSCRIBED_DIR), reverse=True)
 
     def gather_output_dates(self) -> List:
         """
@@ -178,7 +185,11 @@ class TranscriptUploader(Processor):
         return sorted(output_dates, reverse=True)
 
     def process_for_date(self, date: str) -> None:
-        year_folder_name = datetime.strptime(date, "%Y-%m-%d").strftime("%Y")
+        dt = datetime.strptime(date, "%Y-%m-%d")
+        if dt <= EARLIEST:
+            logger.info(f"Skipping {date} because it falls before {EARLIEST}")
+            return None
+        year_folder_name = dt.strftime("%Y")
         parent_id = self.find_folder_id(year_folder_name)
         if not parent_id:
             parent_id = self.create_folder(year_folder_name)

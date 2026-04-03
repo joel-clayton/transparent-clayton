@@ -1,3 +1,5 @@
+from datetime import datetime
+
 SNIPPET = dict(
     defaultAudioLanguage="English",
 )
@@ -17,3 +19,4 @@ VIDEO_DATE_KEY: str = "Date"
 PUBLIC_VIDEO_STATUS = "public"
 VIDEO_CATEGORY_ID = 25
 CC_MTG_FILE_TEMPLATE = "City Council Meeting {} - City of Clayton{}"
+EARLIEST = datetime(2025, 9, 16)

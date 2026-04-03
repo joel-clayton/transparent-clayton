@@ -9,11 +9,13 @@ $ pipenv run python compress.py -d /Volumes/Gautam/Clayton/CC Meetings/Downloade
 
 import logging
 import subprocess
+from typing import List
 
 import ffmpeg
 
-from src.constants import TRANSCRIPT_UPLOADED_CC_MTG_KEY
+from src.constants import EXTRACTED_CC_MTG_KEY
 from src.processors.process import Processor
+from src.settings import EXTRACTED_AUDIO_DIR, DOWNLOADED_DIR
 from src.types import SourceType, JobType
 
 logging.basicConfig(level="DEBUG")
@@ -30,9 +32,16 @@ DST_FILE_NAME_TEMPLATE = "City Council Meeting {} - City of Clayton.m4a"
 
 class Extractor(Processor):
     def __init__(self) -> None:
-        self.job_type = JobType.TRANSCRIBE_AUDIO
+        self.input_job_type = JobType.DOWNLOAD
+        self.job_type = JobType.EXTRACT_AUDIO
         self.source_type = SourceType.CITY_COUNCIL_MEETING
-        self.redis_key = TRANSCRIPT_UPLOADED_CC_MTG_KEY
+        self.redis_key = EXTRACTED_CC_MTG_KEY
+
+    def gather_input_dates(self) -> List:
+        return self.gather_dates(DOWNLOADED_DIR)
+
+    def gather_output_dates(self) -> List:
+        return self.gather_dates(EXTRACTED_AUDIO_DIR)
 
     def process_for_date(self, date: str) -> None:
         """
@@ -40,14 +49,15 @@ class Extractor(Processor):
          and specifies an absolute path for output
         :return: None
         """
-        input_filepath = self.construct_filepath_for_date(date)
+        input_filepath = self.construct_filepath_for_date(
+            date, job_type=self.input_job_type
+        )
         output_filepath = self.construct_filepath_for_date(date)
 
         input_stream = ffmpeg.input(input_filepath)
         output_stream = ffmpeg.output(
             input_stream,
             output_filepath,
-            vn="null",
             acodec="copy",
         )
         cmd = ffmpeg.compile(output_stream)

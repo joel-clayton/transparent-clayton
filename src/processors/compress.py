@@ -9,11 +9,13 @@ $ pipenv run python compress.py -d /Volumes/Gautam/Clayton/CC Meetings/Downloade
 
 import logging
 import subprocess
+from typing import List
 
 import ffmpeg
 
 from src.constants import COMPRESSED_CC_MTG_KEY
 from src.processors.process import Processor
+from src.settings import DOWNLOADED_DIR, COMPRESSED_DIR
 from src.types import JobType, SourceType
 
 logging.basicConfig(level="DEBUG")
@@ -30,9 +32,16 @@ DST_FILE_NAME_TEMPLATE = "Clayton CA City Council Meeting {} - %03d.mp4"
 
 class Compressor(Processor):
     def __init__(self) -> None:
+        self.input_job_type = JobType.DOWNLOAD
         self.job_type = JobType.COMPRESS
         self.source_type = SourceType.CITY_COUNCIL_MEETING
         self.redis_key = COMPRESSED_CC_MTG_KEY
+
+    def gather_input_dates(self) -> List:
+        return self.gather_dates(DOWNLOADED_DIR)
+
+    def gather_output_dates(self) -> List:
+        return self.gather_dates(COMPRESSED_DIR)
 
     def process_for_date(self, date: str) -> None:
         """
@@ -40,7 +49,9 @@ class Compressor(Processor):
          and specifies an absolute path for output
         :return: None
         """
-        input_filepath = self.construct_filepath_for_date(date)
+        input_filepath = self.construct_filepath_for_date(
+            date, job_type=self.input_job_type
+        )
         output_filepath = self.construct_filepath_for_date(date)
 
         input_stream = ffmpeg.input(input_filepath)

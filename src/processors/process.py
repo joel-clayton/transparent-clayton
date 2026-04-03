@@ -19,14 +19,22 @@ class Processor:
     source_type: SourceType
     redis_key: str
 
-    def construct_filename_for_date(self, date: str) -> str:
+    def construct_filename_for_date(
+        self, date: str, job_type: JobType | None = None
+    ) -> str:
         file_name_template = source_file_templates[self.source_type]
-        file_format = job_file_formats[self.job_type]
+        if not job_type:
+            job_type = self.job_type
+        file_format = job_file_formats[job_type]
         return file_name_template.format(date, file_format)
 
-    def construct_filepath_for_date(self, date: str) -> str:
-        file_name = self.construct_filename_for_date(date)
-        dir_path = job_paths[self.job_type]
+    def construct_filepath_for_date(
+        self, date: str, job_type: JobType | None = None
+    ) -> str:
+        if not job_type:
+            job_type = self.job_type
+        file_name = self.construct_filename_for_date(date, job_type)
+        dir_path = job_paths[job_type]
         return str(os.path.join(dir_path, file_name))
 
     def gather_dates(self, dir_path: str) -> list:

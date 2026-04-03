@@ -1,24 +1,42 @@
+import logging
 import time
+from datetime import datetime
+from typing import List
 
 import requests
 
 from src.constants import TRANSCRIPT_UPLOADED_CC_MTG_KEY
+from src.processors.constants import EARLIEST
 from src.processors.process import Processor
+from src.settings import EXTRACTED_AUDIO_DIR, TRANSCRIBED_DIR
 from src.types import SourceType, JobType
 from src.secrets import assembly_ai_auth_key
 
 base_url = "https://api.assemblyai.com"
 headers = {"authorization": assembly_ai_auth_key}
 
+logger = logging.getLogger(__name__)
+
 
 class Transcriber(Processor):
     def __init__(self) -> None:
+        self.input_job_type = JobType.EXTRACT_AUDIO
         self.job_type = JobType.TRANSCRIBE_AUDIO
         self.source_type = SourceType.CITY_COUNCIL_MEETING
         self.redis_key = TRANSCRIPT_UPLOADED_CC_MTG_KEY
 
+    def gather_input_dates(self) -> List:
+        return self.gather_dates(EXTRACTED_AUDIO_DIR)
+
+    def gather_output_dates(self) -> List:
+        return self.gather_dates(TRANSCRIBED_DIR)
+
     def process_for_date(self, date: str) -> None:
-        input_filepath = self.construct_filepath_for_date(date)
+        dt = datetime.strptime(date, "%Y-%m-%d")
+        if dt <= EARLIEST:
+            logger.info(f"Skipping {date} because it falls before {EARLIEST}")
+            return None
+        input_filepath = self.construct_filepath_for_date(date, self.input_job_type)
         output_filepath = self.construct_filepath_for_date(date)
 
         with open(input_filepath, "rb") as f:
