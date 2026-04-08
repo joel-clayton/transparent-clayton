@@ -24,6 +24,7 @@ class Transcriber(Processor):
         self.job_type = JobType.TRANSCRIBE_AUDIO
         self.source_type = SourceType.CITY_COUNCIL_MEETING
         self.redis_key = TRANSCRIPT_UPLOADED_CC_MTG_KEY
+        super().__init__()
 
     def gather_input_dates(self) -> List:
         return self.gather_dates(EXTRACTED_AUDIO_DIR)
@@ -34,7 +35,6 @@ class Transcriber(Processor):
     def process_for_date(self, date: str) -> None:
         dt = datetime.strptime(date, "%Y-%m-%d")
         if dt <= EARLIEST:
-            logger.info(f"Skipping {date} because it falls before {EARLIEST}")
             return None
         input_filepath = self.construct_filepath_for_date(date, self.input_job_type)
         output_filepath = self.construct_filepath_for_date(date)

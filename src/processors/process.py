@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 from os import listdir, path
@@ -18,6 +19,9 @@ class Processor:
     job_type: JobType
     source_type: SourceType
     redis_key: str
+
+    def __init__(self) -> None:
+        self.logger = logging.getLogger(f"{__name__}::{self.job_type.name}")
 
     def construct_filename_for_date(
         self, date: str, job_type: JobType | None = None
@@ -68,12 +72,19 @@ class Processor:
         output_dates = sorted(self.gather_output_dates())
         return sorted(list(set(input_dates) - set(output_dates)))
 
+    def clean_up(self) -> None:
+        self.logger.info("No clean up needed")
+
     def process_for_date(self, date: str) -> None:
         raise NotImplementedError
 
     def process(self) -> None:
-        missing_transcription_dates = self.get_most_recent_missing_dates()
+        missing_dates = self.get_most_recent_missing_dates()
+        if not missing_dates:
+            self.logger.info(f"Skipping {self.job_type.name}, no dates to process")
 
-        for missing_date in missing_transcription_dates:
+        for missing_date in missing_dates:
             self.process_for_date(missing_date)
             r.hset(self.redis_key, missing_date, 1)
+
+        self.clean_up()

@@ -18,8 +18,12 @@ AUDIO_TRANSCRIBED_CC_MTG_KEY = f"{AUDIO_TRANSCRIBED_KEY}.{CC_MTG_KEY}"
 VIDEO_UPLOADED_CC_MTG_KEY = f"{VIDEO_UPLOADED_KEY}.{CC_MTG_KEY}"
 TRANSCRIPT_UPLOADED_CC_MTG_KEY = f"{TRANSCRIPT_UPLOADED_KEY}.{CC_MTG_KEY}"
 
+VIDEO_PLAYLIST_CC_MTG_KEY_TEMPLATE = "video_playlist.cc_mtg.{}"
+VIDEO_PLAYLIST_NAME_TEMPLATE = "{} City Council Meetings"
 CC_MTG_FILE_FORMAT = "City Council Meeting %Y-%m-%d - City of Clayton{}"
 CC_MTG_FILE_STUB = "City Council Meeting"
+
+CC_MTG_PARENT_FOLDER_ID = "1MR8u-c-eFDXSPef1tHFFknivWjJ5tp79"
 
 """
 Redis key schema
@@ -69,3 +73,5 @@ deletes:
 FILE_LIST_MISMATCH = (
     "Mismatch between Redis and file paths for downloaded videos to be compressed"
 )
+DATE_PATTERN = r"[0-9]{4}-[0-9]{2}-[0-9]{2}"
+YEAR_PATTERN = r"\b\d{4}\b"

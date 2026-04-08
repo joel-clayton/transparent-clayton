@@ -1,6 +1,7 @@
 import json
 import logging
 
+from celery import chain
 from celery.schedules import crontab
 
 from celery_app import app, r
@@ -67,33 +68,24 @@ def upload_cc_meeting_transcript() -> None:
     transcript_uploader.process()
 
 
+@app.task
+def cc_meeting_workflow() -> None:
+    workflow.apply_async()
+
+
+workflow = chain(
+    get_cc_meeting_details_for_download.si(),
+    download_cc_meeting_video.si(),
+    compress_cc_meeting_video.si(),
+    upload_cc_meeting_video.si(),
+    extract_cc_meeting_audio.si(),
+    transcribe_cc_meeting_audio.si(),
+    upload_cc_meeting_transcript.si(),
+)
+
 app.conf.beat_schedule = {
-    "get-cc-meeting-details-to-process": {
-        "task": "src.tasks.get_cc_meeting_details_for_download",
-        "schedule": crontab(hour=18, minute=0),
-    },
-    "download-cc-meeting-video": {
-        "task": "src.tasks.download_unprocessed_video",
-        "schedule": crontab(hour=19, minute=0),
-    },
-    "compress-cc-meeting-video": {
-        "task": "src.tasks.compress_cc_meeting_video",
-        "schedule": crontab(hour=20, minute=0),
-    },
-    "upload-cc-meeting-video": {
-        "task": "src.tasks.upload_cc_meeting_video",
-        "schedule": crontab(hour=22, minute=0),
-    },
-    "extract-cc-meeting-audio": {
-        "task": "src.tasks.extract_cc_meeting_audio",
-        "schedule": crontab(hour=23, minute=0),
-    },
-    "transcribe-cc-meeting-audio": {
-        "task": "src.tasks.transcribe_cc_meeting_audio",
-        "schedule": crontab(hour=0, minute=0),
-    },
-    "upload-cc-meeting-transcript": {
-        "task": "src.tasks.upload_cc_meeting_transcript",
-        "schedule": crontab(hour=1, minute=0),
+    "cc-meeting-workflow": {
+        "task": "src.tasks.cc_meeting_workflow",
+        "schedule": crontab(hour=21, minute=0),
     },
 }

@@ -8,12 +8,12 @@ import googleapiclient.discovery
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.http import MediaFileUpload
 
-from src.constants import TRANSCRIPT_UPLOADED_CC_MTG_KEY
+from src.constants import TRANSCRIPT_UPLOADED_CC_MTG_KEY, DATE_PATTERN
 from src.processors.constants import CC_MTG_FILE_TEMPLATE, EARLIEST
 from src.processors.process import Processor
-from src.processors.upload_video import DATE_PATTERN
 from src.settings import TRANSCRIBED_DIR
-from src.types import JobType, SourceType
+from src.types import JobType, SourceType, job_drive_parent_id
+from src.util import get_year_string_from_string
 
 # If modifying these scopes, delete the file token.json.
 SCOPES = [
@@ -34,6 +34,7 @@ class TranscriptUploader(Processor):
         self.source_type = SourceType.CITY_COUNCIL_MEETING
         self.redis_key = TRANSCRIPT_UPLOADED_CC_MTG_KEY
         self.service = self.authenticate()
+        super().__init__()
 
     def share_file(self, file_id: str, email: str) -> dict:
         # Define the permission properties
@@ -57,8 +58,9 @@ class TranscriptUploader(Processor):
 
     def find_folder_id(self, folder_name: str) -> str | None:
         """Search for a folder by name and return its ID."""
+        parent_id = job_drive_parent_id.get(self.job_type)
         # Define the search query
-        query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        query = f"name = '{folder_name}' and '{parent_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
 
         # Execute the list request
         results = (
@@ -73,7 +75,6 @@ class TranscriptUploader(Processor):
         )
 
         folders = results.get("files", [])
-
         if not folders:
             print(f"No folder found with name: {folder_name}")
             return None
@@ -106,6 +107,21 @@ class TranscriptUploader(Processor):
             )
             .execute()
         )
+        file_id = file["id"]
+
+        for email in SHARE_LIST:
+            user_permission = {"type": "user", "role": "reader", "emailAddress": email}
+
+            permission = (
+                self.service.permissions()
+                .create(
+                    fileId=file_id,
+                    body=user_permission,
+                    fields="id",
+                )
+                .execute()
+            )
+            logger.info(f"{destination_filename} updated with perms {permission}")
         return file["id"]
 
     def list_files_in_folder(self, folder_id: str) -> List:
@@ -167,30 +183,38 @@ class TranscriptUploader(Processor):
         return dt.strftime("%Y")
 
     def gather_input_dates(self) -> List:
-        return sorted(self.gather_dates(TRANSCRIBED_DIR), reverse=True)
+        return sorted(self.gather_dates(TRANSCRIBED_DIR))
 
     def gather_output_dates(self) -> List:
         """
         Gather current previous year's worth of output dates
         """
-        current_year = datetime.now().strftime("%Y")
-        previous_year = str(int(current_year) - 1)
-        output_dates = []
-        for year in (current_year, previous_year):
-            folder_id = self.find_folder_id(year)
+        input_dates = self.gather_input_dates()
+        input_years = sorted(
+            [get_year_string_from_string(input_date) for input_date in input_dates]
+        )
+        folders = {}
+        for year in input_years:
+            folders[year] = self.find_folder_id(year)
+        files_list = []
+        for folder_name, folder_id in folders.items():
             if not folder_id:
-                self.create_folder(year)
+                self.logger.warning(f"No folder ID found for {folder_name}")
                 continue
-            output_dates.extend(self.list_files_in_folder(folder_id))
-        return sorted(output_dates, reverse=True)
+            files_list += self.list_files_in_folder(folder_id)
+
+        return sorted(files_list)
 
     def process_for_date(self, date: str) -> None:
         dt = datetime.strptime(date, "%Y-%m-%d")
         if dt <= EARLIEST:
-            logger.info(f"Skipping {date} because it falls before {EARLIEST}")
             return None
         year_folder_name = dt.strftime("%Y")
         parent_id = self.find_folder_id(year_folder_name)
+        if year_folder_name == "2025":
+            print(
+                f"expected parent_id: 1D6vooYl9SZDrQ2YgPWM3HDcZMez5ni5n, received {parent_id}"
+            )
         if not parent_id:
             parent_id = self.create_folder(year_folder_name)
         file_id = self.create_file(parent_id, date)

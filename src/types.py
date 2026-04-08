@@ -9,6 +9,7 @@ from src.constants import (
     SCRAPED_CC_MTG_KEY,
     TRANSCRIPT_UPLOADED_CC_MTG_KEY,
     VIDEO_UPLOADED_CC_MTG_KEY,
+    CC_MTG_PARENT_FOLDER_ID,
 )
 from src.processors.constants import CC_MTG_FILE_TEMPLATE
 from src.settings import (
@@ -65,3 +66,5 @@ job_redis_keys = {
     JobType.UPLOAD_TRANSCRIPT: TRANSCRIPT_UPLOADED_CC_MTG_KEY,
     JobType.UPLOAD_VIDEO: VIDEO_UPLOADED_CC_MTG_KEY,
 }
+
+job_drive_parent_id = {JobType.UPLOAD_TRANSCRIPT: CC_MTG_PARENT_FOLDER_ID}

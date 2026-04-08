@@ -36,6 +36,7 @@ class Compressor(Processor):
         self.job_type = JobType.COMPRESS
         self.source_type = SourceType.CITY_COUNCIL_MEETING
         self.redis_key = COMPRESSED_CC_MTG_KEY
+        super().__init__()
 
     def gather_input_dates(self) -> List:
         return self.gather_dates(DOWNLOADED_DIR)

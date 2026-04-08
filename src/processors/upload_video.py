@@ -1,9 +1,12 @@
 import json
+import logging
+import os
 import random
 import re
 import time
 from datetime import datetime
-from typing import Any, List
+from os import listdir, path
+from typing import Any, List, TypedDict
 from urllib.request import Request
 
 import httplib2
@@ -13,16 +16,23 @@ from googleapiclient.http import MediaFileUpload
 from google_auth_oauthlib.flow import InstalledAppFlow
 
 from celery_app import r
-from src.constants import DETAIL_CC_MTG_KEY, VIDEO_UPLOADED_CC_MTG_KEY
+from src.constants import (
+    DETAIL_CC_MTG_KEY,
+    VIDEO_UPLOADED_CC_MTG_KEY,
+    VIDEO_PLAYLIST_CC_MTG_KEY_TEMPLATE,
+    VIDEO_PLAYLIST_NAME_TEMPLATE,
+    DATE_PATTERN,
+)
 from src.processors.process import Processor
 from src.scrapers.cc_meetings import CityCouncilMeeting
 from src.settings import COMPRESSED_DIR
-from src.types import JobType, SourceType
+from src.types import JobType, SourceType, type_stubs
 from src.processors.constants import (
     PUBLIC_VIDEO_STATUS,
     VIDEO_CATEGORY_ID,
     VIDEO_DATE_KEY,
 )
+from src.util import get_year_string_from_string, get_date_string_from_string
 
 # Explicitly tell the underlying HTTP transport library not to retry, since
 # we are handling retry logic ourselves.
@@ -39,9 +49,9 @@ RETRIABLE_EXCEPTIONS = (httplib2.HttpLib2Error, IOError)
 RETRIABLE_STATUS_CODES = [500, 502, 503, 504]
 VALID_PRIVACY_STATUSES = ("public", "private", "unlisted")
 
-DATE_PATTERN = r"[0-9]{4}-[0-9]{2}-[0-9]{2}"
 TITLE_FORMAT = "Clayton CA City Council Meeting %Y %m %d"
-FILEPATH_FORMAT = "City Council Meeting %Y%m%d - City of Clayton.mp4"
+TITLE_PATTERN = "Clayton CA City Council Meeting"
+FILEPATH_TEMPLATE = "Clayton CA City Council Meeting {} - {}{}"  # todo this aint right
 
 DESCRIPTION = "Unedited video from claytonca.gov"
 KEYWORDS = "news, politics"
@@ -49,11 +59,27 @@ CLIENT_SECRETS_FILE = "/Users/gautam/dev/client_secret.json"
 
 # This OAuth 2.0 access scope allows an application to upload files to the
 # authenticated user's YouTube channel, but doesn't allow other types of access.\
-SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+SCOPES = ["https://www.googleapis.com/auth/youtube"]
 API_SERVICE_NAME = "youtube"
 API_VERSION = "v3"
 
 RESULT_COUNT = 10
+logger = logging.getLogger(__name__)
+
+
+class PlaylistInfo(TypedDict):
+    playlist_id: str
+    playlist_year: str
+
+
+class VideoInfo(TypedDict):
+    input: str | None
+    output: str | None
+    amended_output: str | None
+    playlist_id: str | None
+    year: str | None
+    date: str | None
+    part_num: str | None
 
 
 class VideoUploader(Processor):
@@ -67,11 +93,85 @@ class VideoUploader(Processor):
         self.source_type = SourceType.CITY_COUNCIL_MEETING
         self.redis_key = VIDEO_UPLOADED_CC_MTG_KEY
         self.service = self.authenticate()
+        self.playlists: List[PlaylistInfo | None] = []
+        self.videos: dict = {}
+        super().__init__()
 
     def authenticate(self):  # type: ignore
         flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRETS_FILE, SCOPES)
         credentials = flow.run_local_server(port=8080)
         return build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
+
+    def get_part_num_from_string(self, string: str) -> int:
+        part_match = re.search(r"part [0-9]+", string)
+        if part_match:
+            num_only = re.search("[0-9]+", part_match.group(0))
+            if num_only:
+                return int(num_only.group(0))
+        part_match = re.search(r"\b\d{3}\b", string)
+        if part_match:
+            return int(part_match.group(0)) + 1
+        return 1
+
+    def get_playlists(self) -> None:
+        playlists_request = self.service.playlists().list(
+            mine=True, part="snippet,contentDetails"
+        )
+        response = playlists_request.execute()
+
+        playlists = dict(
+            [(d["id"], d["snippet"]["title"]) for d in response.get("items")]
+        )
+        for playlist_id, title in playlists.items():
+            year_str = get_year_string_from_string(title)
+            if year_str:
+                playlist_info: PlaylistInfo = {playlist_id: year_str}  # type: ignore
+                self.playlists.append(playlist_info)
+                redis_key = VIDEO_PLAYLIST_CC_MTG_KEY_TEMPLATE.format(year_str)
+                r.set(redis_key, playlist_id)
+
+    def create_playlist_for_year(self, year_str: str) -> str:
+        request = self.service.playlists().insert(
+            part="snippet,status",
+            body={
+                "snippet": {
+                    "title": VIDEO_PLAYLIST_NAME_TEMPLATE.format(year_str),
+                },
+                "status": {"privacyStatus": "public"},
+            },
+        )
+        response = request.execute()
+        return response["id"]
+
+    def get_playlist_for_year(self, year_str: str) -> str:
+        if not self.playlists:
+            self.get_playlists()
+        playlist_id = r.get(VIDEO_PLAYLIST_CC_MTG_KEY_TEMPLATE.format(year_str))
+        if not playlist_id:
+            return self.create_playlist_for_year(year_str)
+        return playlist_id.decode("utf-8")
+
+    def add_video_to_playlist(self, playlist_id: str, video_id: str) -> str:
+        logger.info(f"playlist_id: {playlist_id}, video_id: {video_id}")
+        body = {
+            "snippet": {
+                "playlistId": playlist_id,
+                "resourceId": {
+                    "kind": "youtube#video",
+                    "videoId": video_id,
+                },
+            },
+        }
+
+        playlist_items_insert_request = self.service.playlistItems().insert(
+            part="snippet", body=body
+        )
+        try:
+            response = playlist_items_insert_request.execute()
+            return response["id"]
+        except Exception as e:
+            logger.error(e, extra={"playlist_id": playlist_id, "video_id": video_id})
+        return ""
 
     def initialize_upload(self, options: dict[str, Any]) -> str:
         tags = None
@@ -84,10 +184,17 @@ class VideoUploader(Processor):
                 description=options["description"],
                 tags=tags,
             ),
-            recordingDetails=dict(
-                recordingDate=options["recording_date"],  # YYYY-MM-DDThh:mm:ss.sssZ
-            ),
         )
+        if options.get("recording_date"):
+            body.update(
+                {
+                    "recordingDetails": {
+                        "recordingDate": options[
+                            "recording_date"
+                        ],  # YYYY-MM-DDThh:mm:ss.sssZ
+                    },
+                }
+            )
 
         # Call the API's videos.insert method to create and upload the video.
         insert_request = self.service.videos().insert(
@@ -150,6 +257,22 @@ class VideoUploader(Processor):
                 time.sleep(sleep_seconds)
         return video_id
 
+    def gather_dates(self, dir_path: str) -> List:
+        file_name_stub = type_stubs.get(self.source_type, "")
+        files = [
+            f
+            for f in listdir(dir_path)
+            if path.isfile(os.path.join(dir_path, f))
+            if file_name_stub in f
+        ]
+        dates = []
+        for f in files:
+            date_match = re.search(TITLE_PATTERN, f)
+            if date_match:
+                absolute_path = os.path.join(dir_path, f)
+                dates.append(absolute_path)
+        return sorted(dates)
+
     def gather_input_dates(self) -> List:
         return sorted(self.gather_dates(COMPRESSED_DIR), reverse=True)[:RESULT_COUNT]
 
@@ -193,16 +316,62 @@ class VideoUploader(Processor):
 
         return video_titles
 
+    def get_output_title_from_input(self, filepath: str) -> str:
+        absolute_path_parts = os.path.split(filepath)
+        filename = absolute_path_parts[-1]
+        part_match = re.search(r"[0-9]{3}\.", filename)
+        filename = filename.replace(".mp4", "")
+        logger.info(f"input title: {filepath}")
+        if part_match:
+            part_num = int(part_match.group(0).replace(".", ""))
+            logger.info(f"part_num: {part_num}")
+            if part_num > 0:
+                return re.sub(
+                    r"^((?:.*?[0-9]{3}){1}).*?[0-9]{3}",
+                    f"part {part_num + 1}",
+                    filename,
+                )
+        return re.sub(r" - [0-9]{3}", "", filename)
+
     def gather_output_dates(self) -> List:
         uploads_playlist_id = self.get_my_uploads_list()
         titles = []
         if uploads_playlist_id:
             uploaded_titles = self.get_recent_video_titles(uploads_playlist_id)
             for uploaded in uploaded_titles:
-                date_match = re.search(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", uploaded)
-                if date_match:
-                    titles.append(date_match.group(0))
-        return titles
+                title_match = re.search(TITLE_PATTERN, uploaded)
+                if title_match:
+                    titles.append(uploaded)
+                    date_match = re.search(DATE_PATTERN, title_match.group(0))
+                    if date_match:
+                        date_str = date_match.group(0)
+                        video_details = self.videos.get(date_str, {})
+                        video_details[date_str]
+        return sorted(titles)
+
+    def get_most_recent_missing_dates(self) -> List[str]:
+        input_dates = sorted(self.gather_input_dates())
+        output_dates = sorted(self.gather_output_dates())
+        inputs = dict(
+            [
+                (
+                    f"{get_date_string_from_string(input_date)}_{self.get_part_num_from_string(input_date)}",
+                    input_date,
+                )
+                for input_date in input_dates
+            ]
+        )
+        outputs = dict(
+            [
+                (
+                    f"{get_date_string_from_string(output_date)}_{self.get_part_num_from_string(output_date)}",
+                    output_date,
+                )
+                for output_date in output_dates
+            ]
+        )
+        missing_output_dates = sorted(list(set(inputs.keys()) - set(outputs.keys())))
+        return [inputs[date] for date in inputs if date in missing_output_dates]
 
     def get_publish_datetime(self, date: str) -> str:
         """
@@ -210,30 +379,41 @@ class VideoUploader(Processor):
         """
         cc_meeting_detail_str = r.hget(DETAIL_CC_MTG_KEY, date)
         if not cc_meeting_detail_str:
-            raise Exception("Date set for video upload is missing details in Redis")
+            logger.warning(
+                f"Date set for video upload is missing details in Redis -- {date}"
+            )
+            return ""
         cc_meeting_detail: CityCouncilMeeting = json.loads(cc_meeting_detail_str)
         if not cc_meeting_detail or isinstance(cc_meeting_detail, dict):
-            raise Exception("Malformed City Council Meeting details in Redis")
+            logger.warning(f"Malformed City Council Meeting details in Redis -- {date}")
+            return ""
         return cc_meeting_detail.get(VIDEO_DATE_KEY)
 
     def process_for_date(self, date: str) -> None:
         if not self.service:
             self.authenticate()
-
-        dt = datetime.strptime(date, "%Y-%m-%d")
-        publish_date = self.get_publish_datetime(date)
+        if not self.playlists:
+            self.get_playlists()
+        date_str = get_date_string_from_string(date)
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
         options = {
-            "file": dt.strftime(FILEPATH_FORMAT),
-            "title": dt.strftime(TITLE_FORMAT),
+            "file": date,
+            "title": self.get_output_title_from_input(date),
             "description": DESCRIPTION,
             "keywords": KEYWORDS,
             "privacy_status": PUBLIC_VIDEO_STATUS,
             "category": VIDEO_CATEGORY_ID,
-            "recording_date": publish_date,
         }
+        publish_date = self.get_publish_datetime(date)
+        if publish_date:
+            options.update(recording_date=publish_date)
 
         try:
+            logger.info(f"Uploading video for {dt}")
             video_id = self.initialize_upload(options)
+            year_str = datetime.strftime(dt, "%Y")
+            playlist_id = self.get_playlist_for_year(year_str)
+            self.add_video_to_playlist(playlist_id, video_id)
             if not video_id:
                 raise Exception("No Video ID returned")
         except HttpError as e:

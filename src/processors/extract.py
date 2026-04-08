@@ -36,6 +36,7 @@ class Extractor(Processor):
         self.job_type = JobType.EXTRACT_AUDIO
         self.source_type = SourceType.CITY_COUNCIL_MEETING
         self.redis_key = EXTRACTED_CC_MTG_KEY
+        super().__init__()
 
     def gather_input_dates(self) -> List:
         return self.gather_dates(DOWNLOADED_DIR)

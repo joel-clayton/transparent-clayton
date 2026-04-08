@@ -24,6 +24,7 @@ class Downloader(Processor):
         self.job_type = JobType.DOWNLOAD
         self.source_type = SourceType.CITY_COUNCIL_MEETING
         self.redis_key = DOWNLOADED_CC_MTG_KEY
+        super().__init__()
 
     def gather_input_dates(self) -> List:
         dates_to_upload = r.get(SCRAPED_CC_MTG_KEY)
