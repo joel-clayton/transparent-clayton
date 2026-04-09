@@ -16,7 +16,6 @@ from src.types import JobType, SourceType
 PLAYER_URL = (
     "https://claytonca.granicus.com/player/clip/{clip_id}?view_id=1&redirect=true"
 )
-logger = logging.getLogger(__name__)
 
 
 class Downloader(Processor):
@@ -51,7 +50,7 @@ class Downloader(Processor):
             outfile = self.construct_filepath_for_date(date)
 
             if os.path.exists(outfile):
-                logger.info(
+                self.logger.info(
                     "Found outfile, skipping download...",
                     extra={date: date, outfile: outfile},
                 )

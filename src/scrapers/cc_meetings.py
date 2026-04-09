@@ -208,14 +208,12 @@ def parse_meetings_from_url(latest_date: str) -> dict[str, dict[str, Any]]:
                     f"No clip_id found for cc_meeting: {structured_raw_data}"
                 )
 
-            meeting_date = structured_raw_data["Date"].strftime(DATE_OUTPUT_FORMAT)
-            structured_raw_data["Date"] = structured_raw_data["Date"].strftime(
-                DATETIME_OUTPUT_FORMAT
-            )
-            cc_meetings[meeting_date] = structured_raw_data
+            meeting_datetime = structured_raw_data["Date"].strftime(DATETIME_OUTPUT_FORMAT)
+            structured_raw_data["Date"] = meeting_datetime
+            cc_meetings[meeting_datetime] = structured_raw_data
             r.hset(
                 DETAIL_CC_MTG_KEY,
-                mapping={meeting_date: json.dumps(structured_raw_data)},
+                mapping={meeting_datetime: json.dumps(structured_raw_data)},
             )
             r.expire(DETAIL_CC_MTG_KEY, DEFAULT_ONE_WEEK_SECONDS_EXPIRATION)
     return cc_meetings

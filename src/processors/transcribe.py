@@ -15,8 +15,6 @@ from src.secrets import assembly_ai_auth_key
 base_url = "https://api.assemblyai.com"
 headers = {"authorization": assembly_ai_auth_key}
 
-logger = logging.getLogger(__name__)
-
 
 class Transcriber(Processor):
     def __init__(self) -> None:

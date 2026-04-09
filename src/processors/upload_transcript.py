@@ -25,7 +25,6 @@ DESKTOP_APP_CLIENT_SECRET = "/Users/gautam/dev/client_secret_721413148557-p0c4gq
 TRANSCRIPTS_PARENT_ID = "1MR8u-c-eFDXSPef1tHFFknivWjJ5tp79"
 TRANSCRIPT_FILE_TEMPLATE = "City Council Meeting {}"
 SHARE_LIST = ["grahamjordan2596@gmail.com"]
-logger = logging.getLogger(__name__)
 
 
 class TranscriptUploader(Processor):
@@ -76,7 +75,7 @@ class TranscriptUploader(Processor):
 
         folders = results.get("files", [])
         if not folders:
-            print(f"No folder found with name: {folder_name}")
+            self.logger.debug(f"No folder found with name: {folder_name}")
             return None
 
         # Return the ID of the first match
@@ -121,7 +120,7 @@ class TranscriptUploader(Processor):
                 )
                 .execute()
             )
-            logger.info(f"{destination_filename} updated with perms {permission}")
+            self.logger.info(f"{destination_filename} updated with perms {permission}")
         return file["id"]
 
     def list_files_in_folder(self, folder_id: str) -> List:
@@ -211,16 +210,12 @@ class TranscriptUploader(Processor):
             return None
         year_folder_name = dt.strftime("%Y")
         parent_id = self.find_folder_id(year_folder_name)
-        if year_folder_name == "2025":
-            print(
-                f"expected parent_id: 1D6vooYl9SZDrQ2YgPWM3HDcZMez5ni5n, received {parent_id}"
-            )
         if not parent_id:
             parent_id = self.create_folder(year_folder_name)
         file_id = self.create_file(parent_id, date)
 
         for email in SHARE_LIST:
             result = self.share_file(file_id, email)
-            print(f"Shared with {email}, Permission ID: {result.get('id')}")
+            self.logger.debug(f"Shared with {email}, Permission ID: {result.get('id')}")
 
-        print(f"File ID: {file_id}")
+        self.logger.debug(f"File ID: {file_id}")

@@ -73,6 +73,11 @@ def cc_meeting_workflow() -> None:
     workflow.apply_async()
 
 
+@app.task
+def cc_meeting_listener() -> None:
+    pass
+
+
 workflow = chain(
     get_cc_meeting_details_for_download.si(),
     download_cc_meeting_video.si(),
