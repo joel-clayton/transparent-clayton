@@ -51,7 +51,7 @@ VALID_PRIVACY_STATUSES = ("public", "private", "unlisted")
 
 TITLE_FORMAT = "Clayton CA City Council Meeting %Y %m %d"
 TITLE_PATTERN = "Clayton CA City Council Meeting"
-FILEPATH_TEMPLATE = "Clayton CA City Council Meeting {} - {}{}"  # todo this aint right
+FILEPATH_TEMPLATE = "Clayton CA City Council Meeting {} - {}{}"
 
 DESCRIPTION = "Unedited video from claytonca.gov"
 KEYWORDS = "news, politics"
