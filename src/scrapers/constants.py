@@ -9,8 +9,7 @@ VIDEO_FILE_NAME_REGEX = (
     "^City Council Meeting [0-9]{4}-[0-9]{2}-[0-9]{2} - City of Clayton\\.mp4$"
 )
 VIDEO_DATE_REGEX = "[0-9]{4}-[0-9]{2}-[0-9]{2}"
-DATETIME_INPUT_FORMAT = "%b %d, %Y-%H:%M %p"
-DATETIME_OUTPUT_FORMAT = "%Y-%m-%d %H:%M"
+DATETIME_INPUT_FORMAT = "%b %d, %Y-%I:%M %p"
 DATE_OUTPUT_FORMAT = "%Y-%m-%d"
 CLIP_ARG_REGEX = "clip_id=[0-9]*"
 CLIP_ID_REGEX = "[0-9]+"

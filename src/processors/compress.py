@@ -7,7 +7,6 @@ Usage:
 $ pipenv run python compress.py -d /Volumes/Gautam/Clayton/CC Meetings/Downloaded/ -t "-c:v libx265 -vtag hvc1" -o /Volumes/Gautam/Clayton/CC Meetings/Compressed/ -p "City of Clayton"
 """
 
-import logging
 import subprocess
 from typing import List
 
@@ -45,19 +44,21 @@ class Compressor(Processor):
         input_filepath = self.construct_filepath_for_date(
             date, job_type=self.input_job_type
         )
+        print(f"input_filepath: {input_filepath}")
         output_filepath = self.construct_filepath_for_date(date)
-
+        print(f"output_filepath: {output_filepath}")
         input_stream = ffmpeg.input(input_filepath)
         output_stream = ffmpeg.output(
             input_stream,
             output_filepath,
             vcodec="libx265",
+            crf=28,
             f="segment",
             segment_time=3600,
-            reset_timestamps=1,
+            reset_timestamps=0,
+            vtag="hvc1",
         )
         cmd = ffmpeg.compile(output_stream)
-        cmd = cmd[:-1] + ["-vtag", "hvc1"] + cmd[-1:]
         result = subprocess.run(cmd)
         self.logger.debug("the commandline is {}".format(result.args))
         self.logger.debug(result.stdout)  # Output of the command

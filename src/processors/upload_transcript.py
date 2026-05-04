@@ -1,15 +1,24 @@
-import logging
 import os
 import re
+import time
 from datetime import datetime
+from time import sleep
 from typing import List
 
 import googleapiclient.discovery
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.http import MediaFileUpload
 
-from src.constants import TRANSCRIPT_UPLOADED_CC_MTG_KEY, DATE_PATTERN
-from src.processors.constants import CC_MTG_FILE_TEMPLATE, EARLIEST
+from src.constants import (
+    TRANSCRIPT_UPLOADED_CC_MTG_KEY,
+    DATE_PATTERN,
+    DATETIME_OUTPUT_PATTERN,
+)
+from src.processors.constants import (
+    CC_MTG_FILE_TEMPLATE,
+    EARLIEST,
+    CC_MTG_TRANSCRIPT_TITLE_FORMAT,
+)
 from src.processors.process import Processor
 from src.settings import TRANSCRIBED_DIR
 from src.types import JobType, SourceType, job_drive_parent_id
@@ -83,7 +92,10 @@ class TranscriptUploader(Processor):
 
     def create_file(self, parent_id: str, date: str) -> str:  # type: ignore
         source_filename = CC_MTG_FILE_TEMPLATE.format(date, ".txt")
-        destination_filename = TRANSCRIPT_FILE_TEMPLATE.format(date)
+        dt = self.extract_datetime_object(date)
+        if not dt:
+            raise Exception(f"Could not extract datetime from {date}")
+        destination_filename = dt.strftime(CC_MTG_TRANSCRIPT_TITLE_FORMAT)
         file_metadata = {
             "name": destination_filename,
             "parents": [parent_id],
@@ -95,33 +107,49 @@ class TranscriptUploader(Processor):
             mimetype="text/plain",
             resumable=True,
         )
-
         # Execute the creation
-        file = (
-            self.service.files()
-            .create(
-                body=file_metadata,
-                media_body=media,
-                supportsAllDrives=True,
-            )
-            .execute()
-        )
-        file_id = file["id"]
+        max_retries = 5
+        try:
+            for attempt in range(max_retries):
+                file_id = None
+                while not file_id:
+                    file = (
+                        self.service.files()
+                        .create(
+                            body=file_metadata,
+                            media_body=media,
+                            supportsAllDrives=True,
+                        )
+                        .execute()
+                    )
+                    file_id = file.get("id")
 
-        for email in SHARE_LIST:
-            user_permission = {"type": "user", "role": "reader", "emailAddress": email}
+                for email in SHARE_LIST:
+                    user_permission = {
+                        "type": "user",
+                        "role": "reader",
+                        "emailAddress": email,
+                    }
 
-            permission = (
-                self.service.permissions()
-                .create(
-                    fileId=file_id,
-                    body=user_permission,
-                    fields="id",
-                )
-                .execute()
-            )
-            self.logger.info(f"{destination_filename} updated with perms {permission}")
-        return file["id"]
+                    sleep(5)
+                    permission = (
+                        self.service.permissions()
+                        .create(
+                            fileId=file_id,
+                            body=user_permission,
+                            fields="id",
+                        )
+                        .execute()
+                    )
+                    self.logger.info(
+                        f"{destination_filename} updated with perms {permission}"
+                    )
+                wait = 2**attempt
+                time.sleep(wait)
+
+                return file_id
+        except Exception as e:
+            raise Exception(f"Could not upload transcript for {dt}: {e}")
 
     def list_files_in_folder(self, folder_id: str) -> List:
         """Lists files in a specific Google Drive folder."""
@@ -154,9 +182,13 @@ class TranscriptUploader(Processor):
         names = [d.get("name") for d in files]
         dates = []
         for name in names:
-            date_match = re.search(DATE_PATTERN, name)
-            if date_match:
-                dates.append(date_match.group(0))
+            datetime_match = re.search(DATETIME_OUTPUT_PATTERN, name)
+            if datetime_match:
+                dates.append(datetime_match.group(0).replace(":", "_"))
+            else:
+                date_match = re.search(DATE_PATTERN, name)
+                if date_match:
+                    dates.append(date_match.group(0))
         return dates
 
     def create_folder(self, name: str) -> str:
@@ -190,7 +222,7 @@ class TranscriptUploader(Processor):
         """
         input_dates = self.gather_input_dates()
         input_years = sorted(
-            [get_year_string_from_string(input_date) for input_date in input_dates]
+            set([get_year_string_from_string(input_date) for input_date in input_dates])
         )
         folders = {}
         for year in input_years:
@@ -205,9 +237,14 @@ class TranscriptUploader(Processor):
         return sorted(files_list)
 
     def process_for_date(self, date: str) -> None:
-        dt = datetime.strptime(date, "%Y-%m-%d")
-        if dt <= EARLIEST:
+        print(f"Attempting to upload transcript for {date}")
+        dt = self.extract_datetime_object(date)
+        if dt and dt <= EARLIEST:
+            self.logger.debug(f"Skipping {date}, older than {EARLIEST}")
             return None
+        elif not dt:
+            raise Exception(f"Could not parse date from {date} for {self.job_type}")
+        self.logger.debug(f"Uploading transcript for {date}")
         year_folder_name = dt.strftime("%Y")
         parent_id = self.find_folder_id(year_folder_name)
         if not parent_id:
