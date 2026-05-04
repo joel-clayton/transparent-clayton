@@ -1,12 +1,10 @@
-import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List
 
 import requests
 
 from src.constants import TRANSCRIPT_UPLOADED_CC_MTG_KEY
-from src.processors.constants import EARLIEST
 from src.processors.process import Processor
 from src.settings import EXTRACTED_AUDIO_DIR, TRANSCRIBED_DIR
 from src.types import SourceType, JobType
@@ -14,8 +12,6 @@ from src.secrets import assembly_ai_auth_key
 
 base_url = "https://api.assemblyai.com"
 headers = {"authorization": assembly_ai_auth_key}
-
-logger = logging.getLogger(__name__)
 
 
 class Transcriber(Processor):
@@ -33,9 +29,13 @@ class Transcriber(Processor):
         return self.gather_dates(TRANSCRIBED_DIR)
 
     def process_for_date(self, date: str) -> None:
-        dt = datetime.strptime(date, "%Y-%m-%d")
-        if dt <= EARLIEST:
+        dt = self.extract_datetime_object(date)
+
+        if dt and dt <= datetime(2025, 11, 1):
             return None
+        elif not dt:
+            raise Exception(f"Could not find a datetime in {date} for {self.job_type}")
+
         input_filepath = self.construct_filepath_for_date(date, self.input_job_type)
         output_filepath = self.construct_filepath_for_date(date)
 
@@ -67,7 +67,11 @@ class Transcriber(Processor):
             if transcription_result["status"] == "completed":
                 u = open(output_filepath, "w")
                 for utterance in transcription_result["utterances"]:
-                    u.write(f"Speaker {utterance['speaker']}:\n{utterance['text']}\n\n")
+                    u.write(
+                        f"[Speaker {utterance['speaker']}] "
+                        f"({str(timedelta(seconds=int(utterance['start'] / 1000)))} - {str(timedelta(seconds=int(utterance['end'] / 1000)))})\n"
+                        f"{utterance['text']}\n\n"
+                    )
                 u.close()
                 break
 

@@ -18,14 +18,6 @@ from src.processors.process import Processor
 from src.settings import EXTRACTED_AUDIO_DIR, DOWNLOADED_DIR
 from src.types import SourceType, JobType
 
-logging.basicConfig(level="DEBUG")
-logFormatter = logging.Formatter(
-    fmt="%(filename)s :: %(asctime)s,:: %(name)s :: %(levelname)-8s :: %(message)s"
-)
-logger = logging.getLogger(__name__)
-consoleHandler = logging.StreamHandler()
-consoleHandler.setFormatter(logFormatter)
-logger.addHandler(consoleHandler)
 SRC_FILE_NAME_TEMPLATE = "City Council Meeting {} - City of Clayton.mp4"
 DST_FILE_NAME_TEMPLATE = "City Council Meeting {} - City of Clayton.m4a"
 
@@ -63,9 +55,9 @@ class Extractor(Processor):
         )
         cmd = ffmpeg.compile(output_stream)
         result = subprocess.run(cmd)
-        logger.debug("the commandline is {}".format(result.args))
-        logger.debug(result.stdout)  # Output of the command
-        logger.debug(result.stderr)  # Error messages (if any)
-        logger.debug(result.returncode)  # Exit code of the command
+        self.logger.debug("the commandline is {}".format(result.args))
+        self.logger.debug(result.stdout)  # Output of the command
+        self.logger.debug(result.stderr)  # Error messages (if any)
+        self.logger.debug(result.returncode)  # Exit code of the command
         if result.stderr:
             raise Exception(result.stderr)

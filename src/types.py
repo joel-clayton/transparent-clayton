@@ -11,7 +11,10 @@ from src.constants import (
     VIDEO_UPLOADED_CC_MTG_KEY,
     CC_MTG_PARENT_FOLDER_ID,
 )
-from src.processors.constants import CC_MTG_FILE_TEMPLATE
+from src.processors.constants import (
+    CC_MTG_FILE_TEMPLATE,
+    CC_MTG_FILE_TEMPLATE_COMPRESSED,
+)
 from src.settings import (
     COMPRESSED_DIR,
     DOWNLOADED_DIR,
@@ -48,6 +51,15 @@ job_paths = {
 
 source_file_templates = {
     SourceType.CITY_COUNCIL_MEETING: CC_MTG_FILE_TEMPLATE,
+}
+
+source_job_file_templates = {
+    SourceType.CITY_COUNCIL_MEETING: {
+        JobType.DOWNLOAD: CC_MTG_FILE_TEMPLATE,
+        JobType.COMPRESS: CC_MTG_FILE_TEMPLATE_COMPRESSED,
+        JobType.EXTRACT_AUDIO: CC_MTG_FILE_TEMPLATE,
+        JobType.TRANSCRIBE_AUDIO: CC_MTG_FILE_TEMPLATE,
+    }
 }
 
 job_file_formats = {

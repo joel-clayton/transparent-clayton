@@ -1,18 +1,22 @@
 import logging
 import os
 import re
+from datetime import datetime
 from os import listdir, path
 from typing import List
 
 from celery_app import r
+from src.constants import DATETIME_PATTERN, DATETIME_FORMAT, DATE_PATTERN, DATE_FORMAT
+from src.processors.constants import EARLIEST
 from src.types import (
     JobType,
     SourceType,
     job_file_formats,
     job_paths,
-    source_file_templates,
     type_stubs,
+    source_job_file_templates,
 )
+from src.util import get_datetime_string_from_string, get_date_string_from_string
 
 
 class Processor:
@@ -26,9 +30,9 @@ class Processor:
     def construct_filename_for_date(
         self, date: str, job_type: JobType | None = None
     ) -> str:
-        file_name_template = source_file_templates[self.source_type]
         if not job_type:
             job_type = self.job_type
+        file_name_template = source_job_file_templates[self.source_type][job_type]
         file_format = job_file_formats[job_type]
         return file_name_template.format(date, file_format)
 
@@ -55,10 +59,15 @@ class Processor:
         ]
         dates = []
         for f in files:
-            date_match = re.search(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", f)
-            if date_match:
-                date_str = date_match.group(0)
+            datetime_match = re.search(DATETIME_PATTERN, f)
+            if datetime_match:
+                date_str = datetime_match.group(0)
                 dates.append(date_str)
+            else:
+                date_match = re.search(DATE_PATTERN, f)
+                if date_match:
+                    date_str = date_match.group(0)
+                    dates.append(date_str)
         return sorted(dates)
 
     def gather_input_dates(self) -> List:
@@ -66,6 +75,22 @@ class Processor:
 
     def gather_output_dates(self) -> List:
         raise NotImplementedError
+
+    def extract_datetime_object(self, text: str) -> datetime | None:
+        try:
+            datetime_str = get_datetime_string_from_string(text)
+            dt = datetime.strptime(datetime_str, DATETIME_FORMAT)
+            return dt
+        except Exception as e:
+            self.logger.debug(f"Could not parse datetime from {text}: {e}")
+
+        try:
+            date_str = get_date_string_from_string(text)
+            dt = datetime.strptime(date_str, DATE_FORMAT)
+            return dt
+        except Exception as e:
+            self.logger.debug(f"Could not parse date from {text}: {e}")
+        return None
 
     def get_most_recent_missing_dates(self) -> List[str]:
         input_dates = sorted(self.gather_input_dates())
@@ -82,9 +107,24 @@ class Processor:
         missing_dates = self.get_most_recent_missing_dates()
         if not missing_dates:
             self.logger.info(f"Skipping {self.job_type.name}, no dates to process")
-
+        self.logger.info(f"Missing dates for job {self.job_type}: {missing_dates}")
         for missing_date in missing_dates:
-            self.process_for_date(missing_date)
-            r.hset(self.redis_key, missing_date, 1)
+            try:
+                dt = None
+                datetime_str = get_datetime_string_from_string(missing_date)
+                if datetime_str:
+                    dt = datetime.strptime(datetime_str, DATETIME_FORMAT)
+                date_str = get_date_string_from_string(missing_date)
+                if date_str:
+                    dt = datetime.strptime(date_str, DATE_FORMAT)
+                if dt and dt < EARLIEST:
+                    continue
+                self.process_for_date(missing_date)
+                r.hset(self.redis_key, missing_date, 1)
+            except Exception as e:
+                raise Exception(
+                    f"Could not parse missing date for job {self.job_type}: {e}"
+                )
 
+        self.logger.info("Done.")
         self.clean_up()

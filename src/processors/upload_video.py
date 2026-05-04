@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 import random
 import re
@@ -22,6 +21,8 @@ from src.constants import (
     VIDEO_PLAYLIST_CC_MTG_KEY_TEMPLATE,
     VIDEO_PLAYLIST_NAME_TEMPLATE,
     DATE_PATTERN,
+    DATETIME_FORMAT,
+    DATE_FORMAT,
 )
 from src.processors.process import Processor
 from src.scrapers.cc_meetings import CityCouncilMeeting
@@ -31,8 +32,14 @@ from src.processors.constants import (
     PUBLIC_VIDEO_STATUS,
     VIDEO_CATEGORY_ID,
     VIDEO_DATE_KEY,
+    CC_MTG_VIDEO_TITLE_DATETIME_FORMAT,
+    CC_MTG_VIDEO_TITLE_DATE_FORMAT,
 )
-from src.util import get_year_string_from_string, get_date_string_from_string
+from src.util import (
+    get_year_string_from_string,
+    get_date_string_from_string,
+    get_datetime_string_from_string,
+)
 
 # Explicitly tell the underlying HTTP transport library not to retry, since
 # we are handling retry logic ourselves.
@@ -50,7 +57,7 @@ RETRIABLE_STATUS_CODES = [500, 502, 503, 504]
 VALID_PRIVACY_STATUSES = ("public", "private", "unlisted")
 
 TITLE_FORMAT = "Clayton CA City Council Meeting %Y %m %d"
-TITLE_PATTERN = "Clayton CA City Council Meeting"
+COMPRESSED_TITLE_PATTERN = "Clayton CA City Council Meeting"
 FILEPATH_TEMPLATE = "Clayton CA City Council Meeting {} - {}{}"
 
 DESCRIPTION = "Unedited video from claytonca.gov"
@@ -64,7 +71,6 @@ API_SERVICE_NAME = "youtube"
 API_VERSION = "v3"
 
 RESULT_COUNT = 10
-logger = logging.getLogger(__name__)
 
 
 class PlaylistInfo(TypedDict):
@@ -152,7 +158,7 @@ class VideoUploader(Processor):
         return playlist_id.decode("utf-8")
 
     def add_video_to_playlist(self, playlist_id: str, video_id: str) -> str:
-        logger.info(f"playlist_id: {playlist_id}, video_id: {video_id}")
+        self.logger.info(f"playlist_id: {playlist_id}, video_id: {video_id}")
         body = {
             "snippet": {
                 "playlistId": playlist_id,
@@ -170,7 +176,9 @@ class VideoUploader(Processor):
             response = playlist_items_insert_request.execute()
             return response["id"]
         except Exception as e:
-            logger.error(e, extra={"playlist_id": playlist_id, "video_id": video_id})
+            self.logger.error(
+                e, extra={"playlist_id": playlist_id, "video_id": video_id}
+            )
         return ""
 
     def initialize_upload(self, options: dict[str, Any]) -> str:
@@ -223,12 +231,14 @@ class VideoUploader(Processor):
         video_id = ""
         while response is None:
             try:
-                print("Uploading file...")
+                self.logger.info("Uploading file...")
                 status, response = request.next_chunk()  # type: ignore
                 if response is not None:
                     if "id" in response:
                         video_id = response["id"]
-                        print('Video id "%s" was successfully uploaded.' % video_id)
+                        self.logger.info(
+                            'Video id "%s" was successfully uploaded.' % video_id
+                        )
                     else:
                         exit(
                             "The upload failed with an unexpected response: %s"
@@ -246,14 +256,16 @@ class VideoUploader(Processor):
                 error = "A retriable error occurred: %s" % e
 
             if error is not None:
-                print(error)
+                self.logger.error(error)
                 retry += 1
                 if retry > MAX_RETRIES:
                     exit("No longer attempting to retry.")
 
                 max_sleep = 2**retry
                 sleep_seconds = random.random() * max_sleep
-                print("Sleeping %f seconds and then retrying..." % sleep_seconds)
+                self.logger.debug(
+                    "Sleeping %f seconds and then retrying..." % sleep_seconds
+                )
                 time.sleep(sleep_seconds)
         return video_id
 
@@ -267,7 +279,7 @@ class VideoUploader(Processor):
         ]
         dates = []
         for f in files:
-            date_match = re.search(TITLE_PATTERN, f)
+            date_match = re.search(COMPRESSED_TITLE_PATTERN, f)
             if date_match:
                 absolute_path = os.path.join(dir_path, f)
                 dates.append(absolute_path)
@@ -304,12 +316,11 @@ class VideoUploader(Processor):
             part="snippet",
             maxResults=result_count,
         )
-        print("Videos in list %s" % uploads_playlist_id)
+        self.logger.debug("Videos in list %s" % uploads_playlist_id)
 
         playlistitems_list_response = playlistitems_list_request.execute()
 
         video_titles = []
-        # Print information about each video.
         for playlist_item in playlistitems_list_response["items"]:
             title = playlist_item["snippet"]["title"]
             video_titles.append(title)
@@ -319,19 +330,27 @@ class VideoUploader(Processor):
     def get_output_title_from_input(self, filepath: str) -> str:
         absolute_path_parts = os.path.split(filepath)
         filename = absolute_path_parts[-1]
+        # derive output title format from input file
+        # todo handle different date formats in different time periods
+        try:
+            datetime_str = get_datetime_string_from_string(filename)
+            dt = datetime.strptime(datetime_str, DATETIME_FORMAT)
+            output_title = dt.strftime(CC_MTG_VIDEO_TITLE_DATETIME_FORMAT)
+        except Exception:
+            self.logger.info(f"Failed to parse date from {filepath}")
+            date_str = get_date_string_from_string(filename)
+            dt = datetime.strptime(date_str, DATE_FORMAT)
+            output_title = dt.strftime(CC_MTG_VIDEO_TITLE_DATE_FORMAT)
+
+        # convert part number to title part number if necessary
         part_match = re.search(r"[0-9]{3}\.", filename)
-        filename = filename.replace(".mp4", "")
-        logger.info(f"input title: {filepath}")
         if part_match:
             part_num = int(part_match.group(0).replace(".", ""))
-            logger.info(f"part_num: {part_num}")
             if part_num > 0:
-                return re.sub(
-                    r"^((?:.*?[0-9]{3}){1}).*?[0-9]{3}",
-                    f"part {part_num + 1}",
-                    filename,
-                )
-        return re.sub(r" - [0-9]{3}", "", filename)
+                part_str = f" part {part_num + 1}"
+            else:
+                part_str = ""
+        return output_title + part_str
 
     def gather_output_dates(self) -> List:
         uploads_playlist_id = self.get_my_uploads_list()
@@ -339,7 +358,7 @@ class VideoUploader(Processor):
         if uploads_playlist_id:
             uploaded_titles = self.get_recent_video_titles(uploads_playlist_id)
             for uploaded in uploaded_titles:
-                title_match = re.search(TITLE_PATTERN, uploaded)
+                title_match = re.search(COMPRESSED_TITLE_PATTERN, uploaded)
                 if title_match:
                     titles.append(uploaded)
                     date_match = re.search(DATE_PATTERN, title_match.group(0))
@@ -355,7 +374,7 @@ class VideoUploader(Processor):
         inputs = dict(
             [
                 (
-                    f"{get_date_string_from_string(input_date)}_{self.get_part_num_from_string(input_date)}",
+                    f"{get_datetime_string_from_string(input_date)}_{self.get_part_num_from_string(input_date)}",
                     input_date,
                 )
                 for input_date in input_dates
@@ -364,7 +383,7 @@ class VideoUploader(Processor):
         outputs = dict(
             [
                 (
-                    f"{get_date_string_from_string(output_date)}_{self.get_part_num_from_string(output_date)}",
+                    f"{get_datetime_string_from_string(output_date)}_{self.get_part_num_from_string(output_date)}",
                     output_date,
                 )
                 for output_date in output_dates
@@ -379,13 +398,15 @@ class VideoUploader(Processor):
         """
         cc_meeting_detail_str = r.hget(DETAIL_CC_MTG_KEY, date)
         if not cc_meeting_detail_str:
-            logger.warning(
+            self.logger.warning(
                 f"Date set for video upload is missing details in Redis -- {date}"
             )
             return ""
         cc_meeting_detail: CityCouncilMeeting = json.loads(cc_meeting_detail_str)
         if not cc_meeting_detail or isinstance(cc_meeting_detail, dict):
-            logger.warning(f"Malformed City Council Meeting details in Redis -- {date}")
+            self.logger.warning(
+                f"Malformed City Council Meeting details in Redis -- {date}"
+            )
             return ""
         return cc_meeting_detail.get(VIDEO_DATE_KEY)
 
@@ -409,7 +430,7 @@ class VideoUploader(Processor):
             options.update(recording_date=publish_date)
 
         try:
-            logger.info(f"Uploading video for {dt}")
+            self.logger.info(f"Uploading video for {dt}")
             video_id = self.initialize_upload(options)
             year_str = datetime.strftime(dt, "%Y")
             playlist_id = self.get_playlist_for_year(year_str)
@@ -417,5 +438,7 @@ class VideoUploader(Processor):
             if not video_id:
                 raise Exception("No Video ID returned")
         except HttpError as e:
-            print("An HTTP error %d occurred:\n%s" % (e.resp.status, e.content))
+            self.logger.error(
+                "An HTTP error %d occurred:\n%s" % (e.resp.status, e.content)
+            )
         return None

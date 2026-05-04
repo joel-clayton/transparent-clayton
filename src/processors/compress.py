@@ -7,7 +7,6 @@ Usage:
 $ pipenv run python compress.py -d /Volumes/Gautam/Clayton/CC Meetings/Downloaded/ -t "-c:v libx265 -vtag hvc1" -o /Volumes/Gautam/Clayton/CC Meetings/Compressed/ -p "City of Clayton"
 """
 
-import logging
 import subprocess
 from typing import List
 
@@ -18,14 +17,6 @@ from src.processors.process import Processor
 from src.settings import DOWNLOADED_DIR, COMPRESSED_DIR
 from src.types import JobType, SourceType
 
-logging.basicConfig(level="DEBUG")
-logFormatter = logging.Formatter(
-    fmt="%(filename)s :: %(asctime)s,:: %(name)s :: %(levelname)-8s :: %(message)s"
-)
-logger = logging.getLogger(__name__)
-consoleHandler = logging.StreamHandler()
-consoleHandler.setFormatter(logFormatter)
-logger.addHandler(consoleHandler)
 SRC_FILE_NAME_TEMPLATE = "City Council Meeting {} - City of Clayton.mp4"
 DST_FILE_NAME_TEMPLATE = "Clayton CA City Council Meeting {} - %03d.mp4"
 
@@ -53,23 +44,25 @@ class Compressor(Processor):
         input_filepath = self.construct_filepath_for_date(
             date, job_type=self.input_job_type
         )
+        print(f"input_filepath: {input_filepath}")
         output_filepath = self.construct_filepath_for_date(date)
-
+        print(f"output_filepath: {output_filepath}")
         input_stream = ffmpeg.input(input_filepath)
         output_stream = ffmpeg.output(
             input_stream,
             output_filepath,
             vcodec="libx265",
+            crf=28,
             f="segment",
             segment_time=3600,
-            reset_timestamps=1,
+            reset_timestamps=0,
+            vtag="hvc1",
         )
         cmd = ffmpeg.compile(output_stream)
-        cmd = cmd[:-1] + ["-vtag", "hvc1"] + cmd[-1:]
         result = subprocess.run(cmd)
-        logger.debug("the commandline is {}".format(result.args))
-        logger.debug(result.stdout)  # Output of the command
-        logger.debug(result.stderr)  # Error messages (if any)
-        logger.debug(result.returncode)  # Exit code of the command
+        self.logger.debug("the commandline is {}".format(result.args))
+        self.logger.debug(result.stdout)  # Output of the command
+        self.logger.debug(result.stderr)  # Error messages (if any)
+        self.logger.debug(result.returncode)  # Exit code of the command
         if result.stderr:
             raise Exception(result.stderr)

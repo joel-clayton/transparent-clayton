@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 import re
 import subprocess
@@ -16,7 +15,6 @@ from src.types import JobType, SourceType
 PLAYER_URL = (
     "https://claytonca.granicus.com/player/clip/{clip_id}?view_id=1&redirect=true"
 )
-logger = logging.getLogger(__name__)
 
 
 class Downloader(Processor):
@@ -41,6 +39,7 @@ class Downloader(Processor):
             return None
 
         for date in meetings_to_download:
+            self.logger.info(f"date: {date}")
             details_str: bytes | None = r.hget(DETAIL_CC_MTG_KEY, date)
             details = {}
             if details_str:
@@ -49,9 +48,9 @@ class Downloader(Processor):
             if not clip_id:
                 raise Exception("No Clip ID found in City Council Meeting details")
             outfile = self.construct_filepath_for_date(date)
-
+            self.logger.info(f"outfile: {outfile}")
             if os.path.exists(outfile):
-                logger.info(
+                self.logger.info(
                     "Found outfile, skipping download...",
                     extra={date: date, outfile: outfile},
                 )
@@ -61,6 +60,7 @@ class Downloader(Processor):
             if not media_url:
                 raise Exception(f"Unable to find media url for date {date}")
             if media_url:
+                outfile = outfile.replace(":", "\\:")
                 self.get_media_stream(media_url, outfile)
                 r.hset(self.redis_key, date, 1)
         return None
@@ -77,5 +77,12 @@ class Downloader(Processor):
         return ""
 
     def get_media_stream(self, stream_url: str, output_file: str) -> None:
-        ffmpeg_command = ["ffmpeg", "-i", stream_url, "-codec", "copy", output_file]
+        ffmpeg_command = [
+            "ffmpeg",
+            "-i",
+            stream_url,
+            "-codec",
+            "copy",
+            f"{output_file}",
+        ]
         subprocess.run(ffmpeg_command)

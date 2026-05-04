@@ -74,4 +74,9 @@ FILE_LIST_MISMATCH = (
     "Mismatch between Redis and file paths for downloaded videos to be compressed"
 )
 DATE_PATTERN = r"[0-9]{4}-[0-9]{2}-[0-9]{2}"
+DATETIME_PATTERN = r"[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}_[0-9]{2} [APM]{2}"
+DATETIME_OUTPUT_PATTERN = r"[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} [APM]{2}"
 YEAR_PATTERN = r"\b\d{4}\b"
+DATETIME_FORMAT = "%Y-%m-%d %I_%M %p"
+DATE_FORMAT = "%Y-%m-%d"
+DATETIME_TITLE_PATTERN = "%Y-%m-%d %I:%M %p"

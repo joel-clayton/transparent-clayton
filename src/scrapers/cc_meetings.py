@@ -10,12 +10,10 @@ from selenium.webdriver.chrome.webdriver import WebDriver
 from selenium.webdriver.common.by import By
 
 from celery_app import r
-from src.constants import DETAIL_CC_MTG_KEY
+from src.constants import DETAIL_CC_MTG_KEY, DATETIME_FORMAT
 from src.scrapers.constants import (
     CLIP_ARG_REGEX,
-    DATE_OUTPUT_FORMAT,
     DATETIME_INPUT_FORMAT,
-    DATETIME_OUTPUT_FORMAT,
     DEFAULT_ONE_WEEK_SECONDS_EXPIRATION,
     DOWNLOADED_PATH,
     SOURCE_URL,
@@ -197,8 +195,10 @@ def parse_meetings_from_url(latest_date: str) -> dict[str, dict[str, Any]]:
                     header_cell_name, (None, None)
                 )
                 if extra_parser:
-                    body_cell_value = extra_parser(body_cell_value, **kwargs)  # type: ignore
-                structured_raw_data[header_cell_name] = body_cell_value
+                    parsed_value = extra_parser(body_cell_value, **kwargs)  # type: ignore
+                else:
+                    parsed_value = body_cell_value
+                structured_raw_data[header_cell_name] = parsed_value
             clip_id = get_clip_id_from_url(structured_raw_data.get("Video", ""))
 
             if clip_id:
@@ -207,15 +207,13 @@ def parse_meetings_from_url(latest_date: str) -> dict[str, dict[str, Any]]:
                 raise AttributeError(
                     f"No clip_id found for cc_meeting: {structured_raw_data}"
                 )
-
-            meeting_date = structured_raw_data["Date"].strftime(DATE_OUTPUT_FORMAT)
-            structured_raw_data["Date"] = structured_raw_data["Date"].strftime(
-                DATETIME_OUTPUT_FORMAT
-            )
-            cc_meetings[meeting_date] = structured_raw_data
+            # print(f"parsed date: {structured_raw_data['Date']}")
+            meeting_datetime = structured_raw_data["Date"].strftime(DATETIME_FORMAT)
+            structured_raw_data["Date"] = meeting_datetime
+            cc_meetings[meeting_datetime] = structured_raw_data
             r.hset(
                 DETAIL_CC_MTG_KEY,
-                mapping={meeting_date: json.dumps(structured_raw_data)},
+                mapping={meeting_datetime: json.dumps(structured_raw_data)},
             )
             r.expire(DETAIL_CC_MTG_KEY, DEFAULT_ONE_WEEK_SECONDS_EXPIRATION)
     return cc_meetings
