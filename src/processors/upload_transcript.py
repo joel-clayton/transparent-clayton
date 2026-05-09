@@ -18,6 +18,7 @@ from src.processors.constants import (
     CC_MTG_FILE_TEMPLATE,
     EARLIEST,
     CC_MTG_TRANSCRIPT_TITLE_FORMAT,
+    CC_MTG_TRANSCRIPT_TITLE_DATE_FORMAT,
 )
 from src.processors.process import Processor
 from src.settings import TRANSCRIBED_DIR
@@ -92,10 +93,15 @@ class TranscriptUploader(Processor):
 
     def create_file(self, parent_id: str, date: str) -> str:  # type: ignore
         source_filename = CC_MTG_FILE_TEMPLATE.format(date, ".txt")
-        dt = self.extract_datetime_object(date)
-        if not dt:
-            raise Exception(f"Could not extract datetime from {date}")
-        destination_filename = dt.strftime(CC_MTG_TRANSCRIPT_TITLE_FORMAT)
+        parsed = self.extract_date_or_datetime(date)
+        if not parsed:
+            raise Exception(f"Could not extract date or datetime from {date}")
+        title_format = (
+            CC_MTG_TRANSCRIPT_TITLE_FORMAT
+            if isinstance(parsed, datetime)
+            else CC_MTG_TRANSCRIPT_TITLE_DATE_FORMAT
+        )
+        destination_filename = parsed.strftime(title_format)
         file_metadata = {
             "name": destination_filename,
             "parents": [parent_id],
@@ -149,7 +155,7 @@ class TranscriptUploader(Processor):
 
                 return file_id
         except Exception as e:
-            raise Exception(f"Could not upload transcript for {dt}: {e}")
+            raise Exception(f"Could not upload transcript for {parsed}: {e}")
 
     def list_files_in_folder(self, folder_id: str) -> List:
         """Lists files in a specific Google Drive folder."""

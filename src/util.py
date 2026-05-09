@@ -44,6 +44,13 @@ def get_datetime_string_from_string(text: str) -> str:
     return ""
 
 
+def get_date_or_datetime_string_from_string(text: str) -> str:
+    datetime_str = get_datetime_string_from_string(text)
+    if datetime_str:
+        return datetime_str
+    return get_date_string_from_string(text)
+
+
 def get_year_string_from_string(text: str) -> str:
     year_match = re.search(YEAR_PATTERN, text)
     if year_match:

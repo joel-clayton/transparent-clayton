@@ -1,7 +1,7 @@
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import date, datetime
 from os import listdir, path
 from typing import List
 
@@ -76,21 +76,29 @@ class Processor:
     def gather_output_dates(self) -> List:
         raise NotImplementedError
 
-    def extract_datetime_object(self, text: str) -> datetime | None:
-        try:
-            datetime_str = get_datetime_string_from_string(text)
-            dt = datetime.strptime(datetime_str, DATETIME_FORMAT)
-            return dt
-        except Exception as e:
-            self.logger.debug(f"Could not parse datetime from {text}: {e}")
+    def extract_date_or_datetime(self, text: str) -> datetime | date | None:
+        datetime_str = get_datetime_string_from_string(text)
+        if datetime_str:
+            try:
+                return datetime.strptime(datetime_str, DATETIME_FORMAT)
+            except ValueError as e:
+                self.logger.debug(f"Could not parse datetime from {text}: {e}")
 
-        try:
-            date_str = get_date_string_from_string(text)
-            dt = datetime.strptime(date_str, DATE_FORMAT)
-            return dt
-        except Exception as e:
-            self.logger.debug(f"Could not parse date from {text}: {e}")
+        date_str = get_date_string_from_string(text)
+        if date_str:
+            try:
+                return datetime.strptime(date_str, DATE_FORMAT).date()
+            except ValueError as e:
+                self.logger.debug(f"Could not parse date from {text}: {e}")
         return None
+
+    def extract_datetime_object(self, text: str) -> datetime | None:
+        parsed = self.extract_date_or_datetime(text)
+        if parsed is None:
+            return None
+        if isinstance(parsed, datetime):
+            return parsed
+        return datetime.combine(parsed, datetime.min.time())
 
     def get_most_recent_missing_dates(self) -> List[str]:
         input_dates = sorted(self.gather_input_dates())

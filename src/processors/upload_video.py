@@ -38,6 +38,7 @@ from src.processors.constants import (
 from src.util import (
     get_year_string_from_string,
     get_date_string_from_string,
+    get_date_or_datetime_string_from_string,
     get_datetime_string_from_string,
 )
 
@@ -374,7 +375,7 @@ class VideoUploader(Processor):
         inputs = dict(
             [
                 (
-                    f"{get_datetime_string_from_string(input_date)}_{self.get_part_num_from_string(input_date)}",
+                    f"{get_date_or_datetime_string_from_string(input_date)}_{self.get_part_num_from_string(input_date)}",
                     input_date,
                 )
                 for input_date in input_dates
@@ -383,7 +384,7 @@ class VideoUploader(Processor):
         outputs = dict(
             [
                 (
-                    f"{get_datetime_string_from_string(output_date)}_{self.get_part_num_from_string(output_date)}",
+                    f"{get_date_or_datetime_string_from_string(output_date)}_{self.get_part_num_from_string(output_date)}",
                     output_date,
                 )
                 for output_date in output_dates
