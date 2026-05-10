@@ -9,3 +9,6 @@
 7. Publish google doc with downloaded transcript
 8. Manual-- Publish updated links to City Council wiki
 9. Manual-- get AI summary of transcript and update meeting wiki
+
+## Unit Tests
+- should be running pre-push
