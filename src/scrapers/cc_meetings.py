@@ -1,13 +1,14 @@
 import json
 import os
 import re
-import time
 from datetime import date, datetime
 from typing import TypedDict, Any
 
 from selenium import webdriver
+from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver.chrome.webdriver import WebDriver
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
 
 from celery_app import r
 from src.constants import DATE_FORMAT, DATETIME_FORMAT, DETAIL_CC_MTG_KEY
@@ -161,22 +162,64 @@ def get_latest_downloaded_date() -> str:
     return date_sorted_filenames[0]
 
 
+def switch_into_granicus_iframe(driver: WebDriver, timeout: int = 15) -> None:
+    """Switch the driver into the Granicus iframe.
+
+    The source page hosts several iframes (CivicClerk, Granicus, Google Maps).
+    Selecting by tag-name landed on the wrong vendor when the page added a
+    CivicClerk frame; filter by src to be specific.
+    """
+    iframe = WebDriverWait(driver, timeout).until(
+        lambda d: next(
+            (
+                f
+                for f in d.find_elements(By.TAG_NAME, "iframe")
+                if "granicus" in (f.get_attribute("src") or "")
+            ),
+            None,
+        )
+    )
+    driver.switch_to.frame(iframe)
+
+
+def find_meetings_panel(driver: WebDriver, heading: str) -> tuple[Any, list[str]]:
+    """Find the CollapsiblePanel whose tab heading matches `heading`, and
+    return its content element plus the validated header row.
+
+    Several panels on the page share the same column layout, so matching by
+    headers alone is ambiguous — we locate by tab text and then sanity-check
+    the headers against ordered_header_fields.
+    """
+    panels = driver.find_elements(By.CSS_SELECTOR, "[id^='CollapsiblePanel']")
+    seen_headings: list[str] = []
+    for panel in panels:
+        try:
+            tab = panel.find_element(By.CLASS_NAME, "CollapsiblePanelTab")
+        except NoSuchElementException:
+            continue
+        tab_text = tab.get_property("innerText").strip()
+        seen_headings.append(tab_text)
+        if tab_text != heading:
+            continue
+        content = panel.find_element(By.CLASS_NAME, "CollapsiblePanelContent")
+        for thead in content.find_elements(By.TAG_NAME, "thead"):
+            header_cells = thead.find_elements(By.XPATH, ".//th")
+            values = [cell.get_property("innerText") for cell in header_cells]
+            if values == ordered_header_fields:
+                return content, values
+        raise NoSuchElementException(
+            f"Panel {heading!r} found, but no thead matched expected headers "
+            f"{ordered_header_fields!r}."
+        )
+    raise NoSuchElementException(
+        f"No CollapsiblePanel with heading {heading!r}. Found headings: {seen_headings!r}"
+    )
+
+
 def parse_meetings_from_url(latest_date: str) -> dict[str, dict[str, Any]]:
     driver = browser()
-
-    # Give the iframe time to load content
-    time.sleep(2)
-    driver.switch_to.frame(driver.find_element(By.TAG_NAME, "iframe"))
-    parent_elem = driver.find_element(By.ID, "CollapsiblePanel2")
-    cc_panel_elem = parent_elem.find_element(By.CLASS_NAME, "CollapsiblePanelContent")
-
-    # Inspect and verify header fields
-    table_heads = cc_panel_elem.find_elements(By.TAG_NAME, "thead")
-    for index, table_head in enumerate(table_heads):
-        header_cells = table_head.find_elements(By.XPATH, ".//th")
-        header_cell_values = [cell.get_property("innerText") for cell in header_cells]
-        if any(header_cell_values) and ordered_header_fields == header_cell_values:
-            break
+    switch_into_granicus_iframe(driver)
+    cc_panel_elem, header_cell_values = find_meetings_panel(driver, "City Council")
 
     # Inspect and parse table body fields
     cc_meetings: dict[str, dict[str, Any]] = {}
