@@ -106,26 +106,27 @@ class Processor:
         return sorted(list(set(input_dates) - set(output_dates)))
 
     def clean_up(self) -> None:
-        self.logger.info("No clean up needed")
+        self.logger.debug("No clean up needed")
+
+    def log_complete_for_date(self, date: str) -> None:
+        self.logger.info(f"{self.job_type} is complete for {date}")
 
     def process_for_date(self, date: str) -> None:
         raise NotImplementedError
 
     def process(self) -> None:
-        missing_dates = self.get_most_recent_missing_dates()
-        if not missing_dates:
-            self.logger.info(f"Skipping {self.job_type.name}, no dates to process")
+        missing_dates: List[str] = self.get_most_recent_missing_dates()
         self.logger.info(f"Missing dates for job {self.job_type}: {missing_dates}")
         for missing_date in missing_dates:
             try:
-                dt = None
                 datetime_str = get_datetime_string_from_string(missing_date)
                 if datetime_str:
                     dt = datetime.strptime(datetime_str, DATETIME_FORMAT)
-                date_str = get_date_string_from_string(missing_date)
-                if date_str:
-                    dt = datetime.strptime(date_str, DATE_FORMAT)
-                if dt and dt < EARLIEST:
+                else:
+                    dt = datetime.strptime(
+                        get_date_string_from_string(missing_date), DATE_FORMAT
+                    )
+                if dt < EARLIEST:
                     continue
                 self.process_for_date(missing_date)
                 r.hset(self.redis_key, missing_date, 1)
@@ -134,5 +135,5 @@ class Processor:
                     f"Could not parse missing date for job {self.job_type}: {e}"
                 )
 
-        self.logger.info("Done.")
         self.clean_up()
+        self.logger.info(f"{self.job_type} is Done")

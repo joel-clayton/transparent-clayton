@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from src.processors.tests._helpers import TempDirTestCase, make_uploader
 from src.processors.upload_video import VideoUploader
+from src.util import get_part_num_from_string
 
 
 class TestGetPartNumFromString(unittest.TestCase):
@@ -11,24 +12,22 @@ class TestGetPartNumFromString(unittest.TestCase):
         self.uploader = make_uploader(VideoUploader)
 
     def test_extracts_explicit_part_number(self):
-        self.assertEqual(self.uploader.get_part_num_from_string("foo part 5 bar"), 5)
+        self.assertEqual(get_part_num_from_string("foo part 5 bar"), 5)
 
     def test_extracts_three_digit_segment_number_offset_by_one(self):
         self.assertEqual(
-            self.uploader.get_part_num_from_string(
+            get_part_num_from_string(
                 "Clayton CA City Council Meeting 2026-05-08 - 002.mp4"
             ),
             3,
         )
 
     def test_returns_one_when_no_part_info(self):
-        self.assertEqual(
-            self.uploader.get_part_num_from_string("nothing relevant here"), 1
-        )
+        self.assertEqual(get_part_num_from_string("nothing relevant here"), 1)
 
     def test_three_digit_segment_zero_returns_one(self):
         self.assertEqual(
-            self.uploader.get_part_num_from_string(
+            get_part_num_from_string(
                 "Clayton CA City Council Meeting 2026-05-08 - 000.mp4"
             ),
             1,

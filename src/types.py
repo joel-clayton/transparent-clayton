@@ -1,4 +1,5 @@
 from enum import Enum
+from typing import TypedDict, List
 
 from src.constants import (
     AUDIO_TRANSCRIBED_CC_MTG_KEY,
@@ -39,6 +40,7 @@ class JobType(Enum):
     TRANSCRIBE_AUDIO = 5
     UPLOAD_TRANSCRIPT = 6
     UPLOAD_VIDEO = 7
+    UPDATE_WIKI = 8
 
 
 job_paths = {
@@ -80,3 +82,19 @@ job_redis_keys = {
 }
 
 job_drive_parent_id = {JobType.UPLOAD_TRANSCRIPT: CC_MTG_PARENT_FOLDER_ID}
+
+
+class Meeting(TypedDict):
+    key: str
+    duration: str
+    agenda: str
+    minutes_and_supplemental_materials: dict | None
+    video: str
+    agenda_packet: str
+    clip_id: str
+    source_type: str
+
+
+class WikiMeeting(Meeting):
+    video_backup_links: List[str]
+    transcript_link: str

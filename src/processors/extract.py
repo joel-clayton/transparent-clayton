@@ -7,7 +7,6 @@ Usage:
 $ pipenv run python compress.py -d /Volumes/Gautam/Clayton/CC Meetings/Downloaded/ -t "-c:v libx265 -vtag hvc1" -o /Volumes/Gautam/Clayton/CC Meetings/Compressed/ -p "City of Clayton"
 """
 
-import logging
 import subprocess
 from typing import List
 
@@ -55,9 +54,10 @@ class Extractor(Processor):
         )
         cmd = ffmpeg.compile(output_stream)
         result = subprocess.run(cmd)
-        self.logger.debug("the commandline is {}".format(result.args))
         self.logger.debug(result.stdout)  # Output of the command
         self.logger.debug(result.stderr)  # Error messages (if any)
         self.logger.debug(result.returncode)  # Exit code of the command
         if result.stderr:
             raise Exception(result.stderr)
+
+        self.log_complete_for_date(date=date)

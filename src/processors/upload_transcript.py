@@ -9,10 +9,12 @@ import googleapiclient.discovery
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.http import MediaFileUpload
 
+from celery_app import r
 from src.constants import (
     TRANSCRIPT_UPLOADED_CC_MTG_KEY,
     DATE_PATTERN,
     DATETIME_OUTPUT_PATTERN,
+    TRANSCRIPT_LINK_CC_MTG_KEY_TEMPLATE,
 )
 from src.processors.constants import (
     CC_MTG_FILE_TEMPLATE,
@@ -23,7 +25,7 @@ from src.processors.constants import (
 from src.processors.process import Processor
 from src.settings import TRANSCRIBED_DIR
 from src.types import JobType, SourceType, job_drive_parent_id
-from src.util import get_year_string_from_string
+from src.util import get_year_string_from_string, send_to_discord_bots
 
 # If modifying these scopes, delete the file token.json.
 SCOPES = [
@@ -157,7 +159,7 @@ class TranscriptUploader(Processor):
         except Exception as e:
             raise Exception(f"Could not upload transcript for {parsed}: {e}")
 
-    def list_files_in_folder(self, folder_id: str) -> List:
+    def retrieve_and_store_files_in_folder(self, folder_id: str) -> List:
         """Lists files in a specific Google Drive folder."""
         files = []
         page_token = None
@@ -173,7 +175,7 @@ class TranscriptUploader(Processor):
                 .list(
                     q=query,
                     spaces="drive",
-                    fields="nextPageToken, files(id, name, mimeType)",
+                    fields="nextPageToken, files(id, name, mimeType, webViewLink)",
                     pageToken=page_token,
                 )
                 .execute()
@@ -185,16 +187,30 @@ class TranscriptUploader(Processor):
             if not page_token:
                 break
 
-        names = [d.get("name") for d in files]
         dates = []
-        for name in names:
+        for file in files:
+            name = file.get("name")
+            link = file.get("webViewLink")
             datetime_match = re.search(DATETIME_OUTPUT_PATTERN, name)
             if datetime_match:
-                dates.append(datetime_match.group(0).replace(":", "_"))
+                dt_str = datetime_match.group(0)
+                dt_str_internal = dt_str.replace(":", "_")
+                dates.append(dt_str_internal)
+                r.set(
+                    TRANSCRIPT_LINK_CC_MTG_KEY_TEMPLATE.format(
+                        meeting_key=dt_str_internal
+                    ),
+                    link,
+                )
             else:
                 date_match = re.search(DATE_PATTERN, name)
                 if date_match:
-                    dates.append(date_match.group(0))
+                    date = date_match.group(0)
+                    dates.append(date)
+                    r.set(
+                        TRANSCRIPT_LINK_CC_MTG_KEY_TEMPLATE.format(meeting_key=date),
+                        link,
+                    )
         return dates
 
     def create_folder(self, name: str) -> str:
@@ -238,12 +254,11 @@ class TranscriptUploader(Processor):
             if not folder_id:
                 self.logger.warning(f"No folder ID found for {folder_name}")
                 continue
-            files_list += self.list_files_in_folder(folder_id)
+            files_list += self.retrieve_and_store_files_in_folder(folder_id)
 
         return sorted(files_list)
 
     def process_for_date(self, date: str) -> None:
-        print(f"Attempting to upload transcript for {date}")
         dt = self.extract_datetime_object(date)
         if dt and dt <= EARLIEST:
             self.logger.debug(f"Skipping {date}, older than {EARLIEST}")
@@ -261,4 +276,5 @@ class TranscriptUploader(Processor):
             result = self.share_file(file_id, email)
             self.logger.debug(f"Shared with {email}, Permission ID: {result.get('id')}")
 
-        self.logger.debug(f"File ID: {file_id}")
+        self.log_complete_for_date(date=date)
+        send_to_discord_bots(f"{self.job_type.name} completed for {date}")

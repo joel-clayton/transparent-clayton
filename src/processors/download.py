@@ -39,16 +39,14 @@ class Downloader(Processor):
             return None
 
         for date in meetings_to_download:
-            self.logger.info(f"date: {date}")
             details_str: bytes | None = r.hget(DETAIL_CC_MTG_KEY, date)
             details = {}
-            if details_str:
-                details = json.loads(details_str.decode("utf-8"))
-            clip_id = details.get("ClipId")
-            if not clip_id:
-                raise Exception("No Clip ID found in City Council Meeting details")
+            if not details_str:
+                raise Exception(
+                    f"Could not parse meeting details from Redis for {date}"
+                )
+            details = json.loads(details_str.decode("utf-8"))
             outfile = self.construct_filepath_for_date(date)
-            self.logger.info(f"outfile: {outfile}")
             if os.path.exists(outfile):
                 self.logger.info(
                     "Found outfile, skipping download...",
@@ -56,13 +54,27 @@ class Downloader(Processor):
                 )
                 continue
 
-            media_url = self.get_m3u_url(clip_id)
-            if not media_url:
-                raise Exception(f"Unable to find media url for date {date}")
-            if media_url:
-                outfile = outfile.replace(":", "\\:")
-                self.get_media_stream(media_url, outfile)
-                r.hset(self.redis_key, date, 1)
+            # CivicClerk stores a direct media URL in `video` (progressive MP4
+            # on cpmedia.azureedge.net). Granicus stores a player-page URL
+            # there and requires resolving the HLS playlist via clip_id.
+            video = details.get("video") or ""
+            if video.endswith((".mp4", ".m3u8")):
+                self.logger.debug("Trying civicclerk method")
+                media_url = video
+            else:
+                self.logger.debug("Trying granicus method")
+                clip_id = details.get("clip_id")
+                if not clip_id:
+                    raise Exception("No Clip ID found in City Council Meeting details")
+                media_url = self.get_m3u_url(clip_id)
+                if not media_url:
+                    raise Exception(f"Unable to find media url for date {date}")
+
+            outfile = outfile.replace(":", "\\:")
+            self.get_media_stream(media_url, outfile)
+            r.hset(self.redis_key, date, 1)
+            self.log_complete_for_date(date=date)
+
         return None
 
     def get_m3u_url(self, clip_id: str) -> str:

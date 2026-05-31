@@ -15,7 +15,6 @@ class _StubProcessor(Processor):
         super().__init__()
 
 
-# todo tests to handle finding output dates for different ranges of input dates
 class TestExtractDateOrDatetime(unittest.TestCase):
     def setUp(self):
         self.processor = _StubProcessor()

@@ -5,31 +5,45 @@ from celery import chain
 from celery.schedules import crontab
 
 from celery_app import app, r
-from src.constants import (
-    SCRAPED_CC_MTG_KEY,
-)
+from src.constants import SCRAPED_CC_MTG_KEY
 from src.processors.compress import Compressor
 from src.processors.download import Downloader
 from src.processors.extract import Extractor
 from src.processors.transcribe import Transcriber
+from src.processors.update_wiki import WikiUpdater
 from src.scrapers.cc_meetings import get_latest_downloaded_date, parse_meetings_from_url
 from src.processors.upload_transcript import TranscriptUploader
 from src.processors.upload_video import VideoUploader
+from src.util import get_datetime_from_string
 
 logger = logging.getLogger(__name__)
 
 
 @app.task
 def get_cc_meeting_details_for_download() -> None:
-    latest_date = get_latest_downloaded_date()
-    if not latest_date:
+    latest_date_str = get_latest_downloaded_date()
+    logger.info(f"latest date str: {latest_date_str}")
+    if not latest_date_str:
         logger.warning("Did not find any downloaded City Council meetings in storage.")
         return
-    meetings_to_process = parse_meetings_from_url(latest_date)
-    meeting_dates = sorted(
-        [key for key in meetings_to_process.keys() if key > latest_date]
-    )
-    r.set(SCRAPED_CC_MTG_KEY, json.dumps(meeting_dates))
+    try:
+        latest_date = get_datetime_from_string(latest_date_str)
+        if latest_date is None:
+            logger.warning(f"Could not parse a date from {latest_date_str!r}; skipping")
+            return
+        meetings_to_process = parse_meetings_from_url(latest_date)
+        meeting_dates = sorted(
+            [
+                m["key"]
+                for m in meetings_to_process
+                if (parsed := get_datetime_from_string(m["key"])) is not None
+                and parsed > latest_date
+            ]
+        )
+        r.set(SCRAPED_CC_MTG_KEY, json.dumps(meeting_dates))
+        logger.info(f"meetings_to_process: {meetings_to_process}")
+    except Exception as e:
+        log_error(None, e, e.__traceback__)
 
 
 @app.task
@@ -69,24 +83,51 @@ def upload_cc_meeting_transcript() -> None:
 
 
 @app.task
+def update_cc_mtg_wiki() -> None:
+    wiki_updater = WikiUpdater()
+    wiki_updater.process()
+
+
+@app.task
+def notify_success() -> None:
+    logger.info("Completed processing 🎉")
+
+
+@app.task
 def cc_meeting_workflow() -> None:
     workflow.apply_async()
 
 
 @app.task
 def cc_meeting_listener() -> None:
-    pass
+    """
+    Poll the original source to kick off the workflow when appropriate
+    """
+    raise NotImplementedError
+
+
+@app.task
+def log_error(request: object, exc: BaseException, traceback: object) -> None:
+    for message in (
+        f"REQUEST: {request}",
+        f"EXCEPTION: {exc}",
+        f"TRACEBACK: {traceback}",
+    ):
+        # send_to_discord_bots(message)
+        logger.error(message)
 
 
 workflow = chain(
-    get_cc_meeting_details_for_download.si(),
-    download_cc_meeting_video.si(),
-    compress_cc_meeting_video.si(),
-    upload_cc_meeting_video.si(),
-    extract_cc_meeting_audio.si(),
-    transcribe_cc_meeting_audio.si(),
-    upload_cc_meeting_transcript.si(),
+    get_cc_meeting_details_for_download.si().on_error(log_error.s()),
+    download_cc_meeting_video.si().on_error(log_error.s()),
+    compress_cc_meeting_video.si().on_error(log_error.s()),
+    upload_cc_meeting_video.si().on_error(log_error.s()),
+    extract_cc_meeting_audio.si().on_error(log_error.s()),
+    transcribe_cc_meeting_audio.si().on_error(log_error.s()),
+    upload_cc_meeting_transcript.si().on_error(log_error.s()),
+    notify_success.si().on_error(log_error.s()),
 )
+
 
 app.conf.beat_schedule = {
     "cc-meeting-workflow": {
