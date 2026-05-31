@@ -10,5 +10,18 @@
 8. Manual-- Publish updated links to City Council wiki
 9. Manual-- get AI summary of transcript and update meeting wiki
 
+```mermaid
+flowchart TD
+    A[Scraper] --> B(Downloader)
+    B -->|Video| C(Compressor)
+    C -->D(VideoUploader)
+    B -->|Text| E(Extractor)
+    E --> F(Transcriber)
+    F --> G(TranscriptUploader)
+    D --> H(WikiUpdater)
+    G --> H(WikiUpdater)
+    A --> H(WikiUpdater)
+```
+
 ## Unit Tests
 - should be running pre-push
