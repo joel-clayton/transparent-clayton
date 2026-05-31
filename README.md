@@ -14,4 +14,4 @@ flowchart TD
 ```
 
 ## Unit Tests
-- should be running pre-push
+`pipenv run python -m unittest discover`
