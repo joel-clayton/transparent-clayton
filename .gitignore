@@ -9,3 +9,6 @@ celerybeat-schedule*
 set_keys.sh
 .DS_Store
 logs/
+pywikibot-Joelclayton*
+apicache/
+throttle.ctrl

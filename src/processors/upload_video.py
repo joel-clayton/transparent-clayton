@@ -23,23 +23,26 @@ from src.constants import (
     DATE_PATTERN,
     DATETIME_FORMAT,
     DATE_FORMAT,
+    VIDEO_LINK_TEMPLATE,
+    VIDEO_LINK_CC_MTG_KEY_TEMPLATE,
 )
 from src.processors.process import Processor
-from src.scrapers.cc_meetings import CityCouncilMeeting
 from src.settings import COMPRESSED_DIR
-from src.types import JobType, SourceType, type_stubs
+from src.types import JobType, SourceType, type_stubs, Meeting
 from src.processors.constants import (
     PUBLIC_VIDEO_STATUS,
     VIDEO_CATEGORY_ID,
-    VIDEO_DATE_KEY,
     CC_MTG_VIDEO_TITLE_DATETIME_FORMAT,
     CC_MTG_VIDEO_TITLE_DATE_FORMAT,
+    MIN_COMPRESSED_VIDEO_MB,
 )
 from src.util import (
     get_year_string_from_string,
     get_date_string_from_string,
     get_date_or_datetime_string_from_string,
     get_datetime_string_from_string,
+    send_to_discord_bots,
+    get_part_num_from_string,
 )
 
 # Explicitly tell the underlying HTTP transport library not to retry, since
@@ -71,22 +74,12 @@ SCOPES = ["https://www.googleapis.com/auth/youtube"]
 API_SERVICE_NAME = "youtube"
 API_VERSION = "v3"
 
-RESULT_COUNT = 10
+RESULT_COUNT = 30
 
 
 class PlaylistInfo(TypedDict):
     playlist_id: str
     playlist_year: str
-
-
-class VideoInfo(TypedDict):
-    input: str | None
-    output: str | None
-    amended_output: str | None
-    playlist_id: str | None
-    year: str | None
-    date: str | None
-    part_num: str | None
 
 
 class VideoUploader(Processor):
@@ -108,17 +101,6 @@ class VideoUploader(Processor):
         flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRETS_FILE, SCOPES)
         credentials = flow.run_local_server(port=8080)
         return build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
-
-    def get_part_num_from_string(self, string: str) -> int:
-        part_match = re.search(r"part [0-9]+", string)
-        if part_match:
-            num_only = re.search("[0-9]+", part_match.group(0))
-            if num_only:
-                return int(num_only.group(0))
-        part_match = re.search(r"\b\d{3}\b", string)
-        if part_match:
-            return int(part_match.group(0)) + 1
-        return 1
 
     def get_playlists(self) -> None:
         playlists_request = self.service.playlists().list(
@@ -308,6 +290,17 @@ class VideoUploader(Processor):
 
         return None
 
+    def update_video_links_in_redis(self, video_ids: dict[str, str]) -> None:
+        for title, video_id in video_ids.items():
+            meeting_key = get_date_or_datetime_string_from_string(title)
+            part_num = get_part_num_from_string(title)
+            redis_key = VIDEO_LINK_CC_MTG_KEY_TEMPLATE.format(
+                meeting_key=meeting_key,
+                part_num=part_num,
+            )
+
+            r.set(redis_key, VIDEO_LINK_TEMPLATE.format(video_id))
+
     def get_recent_video_titles(
         self, uploads_playlist_id: List, result_count: int = RESULT_COUNT
     ) -> List:
@@ -322,10 +315,13 @@ class VideoUploader(Processor):
         playlistitems_list_response = playlistitems_list_request.execute()
 
         video_titles = []
+        video_ids = {}
         for playlist_item in playlistitems_list_response["items"]:
             title = playlist_item["snippet"]["title"]
             video_titles.append(title)
-
+            video_id = playlist_item["snippet"]["resourceId"]["videoId"]
+            video_ids[title] = video_id
+        self.update_video_links_in_redis(video_ids)
         return video_titles
 
     def get_output_title_from_input(self, filepath: str) -> str:
@@ -375,7 +371,7 @@ class VideoUploader(Processor):
         inputs = dict(
             [
                 (
-                    f"{get_date_or_datetime_string_from_string(input_date)}_{self.get_part_num_from_string(input_date)}",
+                    f"{get_date_or_datetime_string_from_string(input_date)}_{get_part_num_from_string(input_date)}",
                     input_date,
                 )
                 for input_date in input_dates
@@ -384,7 +380,7 @@ class VideoUploader(Processor):
         outputs = dict(
             [
                 (
-                    f"{get_date_or_datetime_string_from_string(output_date)}_{self.get_part_num_from_string(output_date)}",
+                    f"{get_date_or_datetime_string_from_string(output_date)}_{get_part_num_from_string(output_date)}",
                     output_date,
                 )
                 for output_date in output_dates
@@ -403,19 +399,26 @@ class VideoUploader(Processor):
                 f"Date set for video upload is missing details in Redis -- {date}"
             )
             return ""
-        cc_meeting_detail: CityCouncilMeeting = json.loads(cc_meeting_detail_str)
-        if not cc_meeting_detail or isinstance(cc_meeting_detail, dict):
+        cc_meeting_detail: Meeting = json.loads(cc_meeting_detail_str)
+        if not cc_meeting_detail or not isinstance(cc_meeting_detail, dict):
             self.logger.warning(
                 f"Malformed City Council Meeting details in Redis -- {date}"
             )
             return ""
-        return cc_meeting_detail.get(VIDEO_DATE_KEY)
+        return cc_meeting_detail.get("key", "")
+
+    def get_file_size(self, filepath: str) -> float:
+        file_size_bytes = os.path.getsize(filepath)
+        return file_size_bytes / (1024 * 1024)
 
     def process_for_date(self, date: str) -> None:
         if not self.service:
             self.authenticate()
         if not self.playlists:
             self.get_playlists()
+        if self.get_file_size(date) < MIN_COMPRESSED_VIDEO_MB:
+            self.logger.info(f"Skipping {date}, video file size is below minimum")
+            return None
         date_str = get_date_string_from_string(date)
         dt = datetime.strptime(date_str, "%Y-%m-%d")
         options = {
@@ -442,4 +445,7 @@ class VideoUploader(Processor):
             self.logger.error(
                 "An HTTP error %d occurred:\n%s" % (e.resp.status, e.content)
             )
+
+        self.log_complete_for_date(date=date)
+        send_to_discord_bots(f"{self.job_type.name} completed for {date}")
         return None

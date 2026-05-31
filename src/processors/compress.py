@@ -44,9 +44,7 @@ class Compressor(Processor):
         input_filepath = self.construct_filepath_for_date(
             date, job_type=self.input_job_type
         )
-        print(f"input_filepath: {input_filepath}")
         output_filepath = self.construct_filepath_for_date(date)
-        print(f"output_filepath: {output_filepath}")
         input_stream = ffmpeg.input(input_filepath)
         output_stream = ffmpeg.output(
             input_stream,
@@ -60,9 +58,9 @@ class Compressor(Processor):
         )
         cmd = ffmpeg.compile(output_stream)
         result = subprocess.run(cmd)
-        self.logger.debug("the commandline is {}".format(result.args))
         self.logger.debug(result.stdout)  # Output of the command
         self.logger.debug(result.stderr)  # Error messages (if any)
         self.logger.debug(result.returncode)  # Exit code of the command
         if result.stderr:
             raise Exception(result.stderr)
+        self.log_complete_for_date(date=date)

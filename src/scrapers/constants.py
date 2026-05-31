@@ -1,6 +1,8 @@
+from datetime import datetime
 from pathlib import Path
 
 SOURCE_URL = "https://claytonca.gov/government/city-council/"
+CIVIC_CLERK_URL = "https://claytonca.portal.civicclerk.com/"
 DOWNLOADED_PATH = Path("/Volumes/Gautam/Clayton/CC Meetings/Downloaded")
 VIDEO_FILE_NAME_TEMPLATE = (
     "City Council Meeting {} - City of Clayton.mp4"  # e.g. 2024-10-02
@@ -19,3 +21,4 @@ COMPRESSION_OPTIONS = "-c:v libx265 -vtag hvc1"
 COMPRESSION_PATTERN = "City of Clayton"
 
 DEFAULT_ONE_WEEK_SECONDS_EXPIRATION = 60 * 60 * 24 * 7
+CIVIC_CLERK_START_DATE = datetime(2026, 5, 10)

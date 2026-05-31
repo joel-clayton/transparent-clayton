@@ -6,6 +6,8 @@ EXTRACTED_KEY = "extracted"
 AUDIO_TRANSCRIBED_KEY = "audio_transcribed"
 VIDEO_UPLOADED_KEY = "video_uploaded"
 TRANSCRIPT_UPLOADED_KEY = "transcript_uploaded"
+WIKI_UPDATED_KEY = "wiki_updated"
+COMPLETED_KEY = "completed"
 
 CC_MTG_KEY = "cc_mtg"
 
@@ -17,9 +19,17 @@ EXTRACTED_CC_MTG_KEY = f"{EXTRACTED_KEY}.{CC_MTG_KEY}"
 AUDIO_TRANSCRIBED_CC_MTG_KEY = f"{AUDIO_TRANSCRIBED_KEY}.{CC_MTG_KEY}"
 VIDEO_UPLOADED_CC_MTG_KEY = f"{VIDEO_UPLOADED_KEY}.{CC_MTG_KEY}"
 TRANSCRIPT_UPLOADED_CC_MTG_KEY = f"{TRANSCRIPT_UPLOADED_KEY}.{CC_MTG_KEY}"
+WIKI_UPDATED_CC_MTG_KEY = f"{WIKI_UPDATED_KEY}.{CC_MTG_KEY}"
+COMPLETED_CC_MTG_KEY = f"{COMPLETED_KEY}.{CC_MTG_KEY}"
+VIDEO_LINK_CC_MTG_KEY_TEMPLATE = "video_link.cc_mtg.{meeting_key}.{part_num}"
+TRANSCRIPT_LINK_CC_MTG_KEY_TEMPLATE = "transcript_link.cc_mtg.{meeting_key}"
 
 VIDEO_PLAYLIST_CC_MTG_KEY_TEMPLATE = "video_playlist.cc_mtg.{}"
+
 VIDEO_PLAYLIST_NAME_TEMPLATE = "{} City Council Meetings"
+VIDEO_LINK_TEMPLATE = "https://www.youtube.com/watch?v={}"
+PART_NUMBER_TITLE_PATTERN = r"part [0-9]*"
+
 CC_MTG_FILE_FORMAT = "City Council Meeting %Y-%m-%d - City of Clayton{}"
 CC_MTG_FILE_STUB = "City Council Meeting"
 

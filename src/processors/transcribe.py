@@ -82,3 +82,5 @@ class Transcriber(Processor):
 
             else:
                 time.sleep(30)
+
+        self.log_complete_for_date(date=date)
