@@ -8,10 +8,10 @@ from src.constants import TRANSCRIPT_UPLOADED_CC_MTG_KEY
 from src.processors.process import Processor
 from src.settings import EXTRACTED_AUDIO_DIR, TRANSCRIBED_DIR
 from src.types import SourceType, JobType
-from src.secrets import assembly_ai_auth_key
+from src.secrets import ASSEMBLY_AI_AUTH_KEY
 
 base_url = "https://api.assemblyai.com"
-headers = {"authorization": assembly_ai_auth_key}
+headers = {"authorization": ASSEMBLY_AI_AUTH_KEY}
 
 
 class Transcriber(Processor):

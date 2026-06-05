@@ -358,14 +358,16 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
         )
         # Snapshot the listing before we navigate away; element references go
         # stale once we leave the page.
-        targets: list[tuple[str, datetime]] = []
+        targets: list[tuple[str, datetime, str]] = []
         now_local = datetime.now(CIVIC_CLERK_TZ).replace(tzinfo=None)
-        for a in driver.find_elements(By.CSS_SELECTOR, "li.meeting-event a[data-id]"):
-            title = a.get_property("innerText") or ""
+        for list_elem in driver.find_elements(
+            By.CSS_SELECTOR, "li.meeting-event a[data-id]"
+        ):
+            title = list_elem.get_property("innerText") or ""
             if "City Council" not in title:
                 continue
-            data_id = a.get_attribute("data-id") or ""
-            data_date = a.get_attribute("data-date") or ""
+            data_id = list_elem.get_attribute("data-id") or ""
+            data_date = list_elem.get_attribute("data-date") or ""
             if not (data_id and data_date):
                 continue
             meeting_dt = datetime.fromisoformat(
@@ -373,15 +375,26 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
             ).replace(tzinfo=None)
             if meeting_dt <= latest_date or meeting_dt >= now_local:
                 continue
-            targets.append((data_id, meeting_dt))
+            video_div = list_elem.find_element(By.XPATH, "following-sibling::*")
+            link_elems = video_div.find_elements(
+                By.CSS_SELECTOR, "[aria-label='Go To Event Media']"
+            )
+            if link_elems:
+                video_link = link_elems[0].get_property("href")
+            else:
+                video_link = ""
+            targets.append((data_id, meeting_dt, video_link))
 
         _civic_clerk_logger.info(
             f"Found {len(targets)} past City Council meeting(s) after {latest_date}"
         )
 
-        for data_id, meeting_dt in targets:
+        for data_id, meeting_dt, video_link in targets:
             files = _scrape_civic_clerk_meeting_files(driver, data_id)
-            video_url = _scrape_civic_clerk_meeting_video(driver, data_id)
+            if video_link:
+                video_url = video_link
+            else:
+                raise Exception(f"Could not parse video link for meeting: {meeting_dt}")
             meeting_key = meeting_dt.strftime(DATETIME_FORMAT)
             agenda_packet = files.pop("Agenda Packet", "")
             meeting: Meeting = {
@@ -406,8 +419,14 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
 
 def parse_meetings_from_url(latest_date: datetime) -> list[Meeting]:
     if latest_date > CIVIC_CLERK_START_DATE:
+        logger.info(
+            f"Latest date {latest_date} is after {CIVIC_CLERK_START_DATE}, skipping Granicus workflow"
+        )
         return parse_meetings_from_civic_clerk_iframe(latest_date)
     else:
+        logger.info(
+            f"Latest date {latest_date} is before {CIVIC_CLERK_START_DATE}, using Granicus workflow"
+        )
         new_meetings: list[Meeting] = []
         driver = browser()
         try:

@@ -14,7 +14,7 @@ from src.constants import (
 )
 from src.processors.constants import (
     CC_MTG_FILE_TEMPLATE,
-    CC_MTG_FILE_TEMPLATE_COMPRESSED,
+    CC_MTG_FILE_TEMPLATE_COMPRESSED_SEGMENTED,
 )
 from src.settings import (
     COMPRESSED_DIR,
@@ -58,7 +58,7 @@ source_file_templates = {
 source_job_file_templates = {
     SourceType.CITY_COUNCIL_MEETING: {
         JobType.DOWNLOAD: CC_MTG_FILE_TEMPLATE,
-        JobType.COMPRESS: CC_MTG_FILE_TEMPLATE_COMPRESSED,
+        JobType.COMPRESS: CC_MTG_FILE_TEMPLATE_COMPRESSED_SEGMENTED,
         JobType.EXTRACT_AUDIO: CC_MTG_FILE_TEMPLATE,
         JobType.TRANSCRIBE_AUDIO: CC_MTG_FILE_TEMPLATE,
     }
