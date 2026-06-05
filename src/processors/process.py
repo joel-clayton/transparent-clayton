@@ -116,7 +116,7 @@ class Processor:
 
     def process(self) -> None:
         missing_dates: List[str] = self.get_most_recent_missing_dates()
-        self.logger.info(f"Missing dates for job {self.job_type}: {missing_dates}")
+        self.logger.debug(f"Missing dates for job {self.job_type}: {missing_dates}")
         for missing_date in missing_dates:
             try:
                 datetime_str = get_datetime_string_from_string(missing_date)

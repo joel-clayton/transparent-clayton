@@ -18,8 +18,14 @@ CONTENT_DETAILS = dict(
 VIDEO_DATE_KEY: str = "key"
 PUBLIC_VIDEO_STATUS = "public"
 VIDEO_CATEGORY_ID = 25
+VIDEO_SEGMENT_TIME = 3600
+VIDEO_LARGE_SEGMENT_TIME = 60 * 60 * 12
 CC_MTG_FILE_TEMPLATE = "City Council Meeting {} - City of Clayton{}"
-CC_MTG_FILE_TEMPLATE_COMPRESSED = "Clayton CA City Council Meeting {} - %03d{}"
+CC_MTG_FILE_TEMPLATE_YT_DLP = "City Council Meeting {} - City of Clayton.%(ext)s"
+CC_MTG_FILE_TEMPLATE_COMPRESSED_SEGMENTED = (
+    "Clayton CA City Council Meeting {} - %03d{}"
+)
+CC_MTG_FILE_TEMPLATE_COMPRESSED_NOT_SEGMENTED = "Clayton CA City Council Meeting {}{}"
 CC_MTG_VIDEO_TITLE_DATETIME_FORMAT = "Clayton CA City Council Meeting %Y-%m-%d %I:%M %p"
 CC_MTG_VIDEO_TITLE_DATE_FORMAT = "Clayton CA City Council Meeting %Y-%m-%d"
 CC_MTG_TRANSCRIPT_TITLE_FORMAT = "City Council Meeting %Y-%m-%d %I:%M %p"

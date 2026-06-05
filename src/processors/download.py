@@ -8,6 +8,7 @@ import requests
 
 from celery_app import r
 from src.constants import DETAIL_CC_MTG_KEY, SCRAPED_CC_MTG_KEY, DOWNLOADED_CC_MTG_KEY
+from src.processors.constants import CC_MTG_FILE_TEMPLATE_YT_DLP
 from src.processors.process import Processor
 from src.settings import DOWNLOADED_DIR
 from src.types import JobType, SourceType
@@ -15,6 +16,11 @@ from src.types import JobType, SourceType
 PLAYER_URL = (
     "https://claytonca.granicus.com/player/clip/{clip_id}?view_id=1&redirect=true"
 )
+YTDL_OPTS = {
+    "outtmpl": os.path.join(DOWNLOADED_DIR, CC_MTG_FILE_TEMPLATE_YT_DLP),
+    "recodevideo": "mp4",
+    "format": "bestvideo[ext=mp4]+bestaudio[ext=mp4]/best[ext=mp4]",
+}
 
 
 class Downloader(Processor):
@@ -58,9 +64,18 @@ class Downloader(Processor):
             # on cpmedia.azureedge.net). Granicus stores a player-page URL
             # there and requires resolving the HLS playlist via clip_id.
             video = details.get("video") or ""
-            if video.endswith((".mp4", ".m3u8")):
+            if "youtube" in video:
+                self.logger.error("Trying youtube-dl method")
+                from yt_dlp import YoutubeDL
+
+                YTDL_OPTS["outtmpl"] = YTDL_OPTS["outtmpl"].format(date)
+                print(YTDL_OPTS)
+                with YoutubeDL(YTDL_OPTS) as ydl:
+                    ydl.download([video])
+
+            elif video.endswith((".mp4", ".m3u8")):
                 self.logger.debug("Trying civicclerk method")
-                media_url = video
+                self.get_media_stream(video, outfile)
             else:
                 self.logger.debug("Trying granicus method")
                 clip_id = details.get("clip_id")
@@ -69,9 +84,9 @@ class Downloader(Processor):
                 media_url = self.get_m3u_url(clip_id)
                 if not media_url:
                     raise Exception(f"Unable to find media url for date {date}")
+                self.get_media_stream(media_url, outfile)
 
             outfile = outfile.replace(":", "\\:")
-            self.get_media_stream(media_url, outfile)
             r.hset(self.redis_key, date, 1)
             self.log_complete_for_date(date=date)
 

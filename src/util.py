@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from datetime import datetime
 from typing import Any, List
@@ -124,3 +125,8 @@ def get_part_num_from_string(string: str) -> int:
     if part_match:
         return int(part_match.group(0)) + 1
     return 1
+
+
+def get_file_size_in_mb(filepath: str) -> float:
+    file_size_bytes = os.path.getsize(filepath)
+    return file_size_bytes / (1024 * 1024)

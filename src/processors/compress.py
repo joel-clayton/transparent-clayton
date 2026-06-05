@@ -13,9 +13,11 @@ from typing import List
 import ffmpeg
 
 from src.constants import COMPRESSED_CC_MTG_KEY
+from src.processors.constants import VIDEO_SEGMENT_TIME, VIDEO_LARGE_SEGMENT_TIME
 from src.processors.process import Processor
 from src.settings import DOWNLOADED_DIR, COMPRESSED_DIR
 from src.types import JobType, SourceType
+from src.util import get_file_size_in_mb
 
 SRC_FILE_NAME_TEMPLATE = "City Council Meeting {} - City of Clayton.mp4"
 DST_FILE_NAME_TEMPLATE = "Clayton CA City Council Meeting {} - %03d.mp4"
@@ -46,13 +48,16 @@ class Compressor(Processor):
         )
         output_filepath = self.construct_filepath_for_date(date)
         input_stream = ffmpeg.input(input_filepath)
+        needs_segmentation = get_file_size_in_mb(input_filepath) >= 256
         output_stream = ffmpeg.output(
             input_stream,
             output_filepath,
             vcodec="libx265",
             crf=28,
             f="segment",
-            segment_time=3600,
+            segment_time=VIDEO_SEGMENT_TIME
+            if needs_segmentation
+            else VIDEO_LARGE_SEGMENT_TIME,
             reset_timestamps=0,
             vtag="hvc1",
         )

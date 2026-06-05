@@ -43,6 +43,7 @@ from src.util import (
     get_datetime_string_from_string,
     send_to_discord_bots,
     get_part_num_from_string,
+    get_file_size_in_mb,
 )
 
 # Explicitly tell the underlying HTTP transport library not to retry, since
@@ -407,16 +408,12 @@ class VideoUploader(Processor):
             return ""
         return cc_meeting_detail.get("key", "")
 
-    def get_file_size(self, filepath: str) -> float:
-        file_size_bytes = os.path.getsize(filepath)
-        return file_size_bytes / (1024 * 1024)
-
     def process_for_date(self, date: str) -> None:
         if not self.service:
             self.authenticate()
         if not self.playlists:
             self.get_playlists()
-        if self.get_file_size(date) < MIN_COMPRESSED_VIDEO_MB:
+        if get_file_size_in_mb(date) < MIN_COMPRESSED_VIDEO_MB:
             self.logger.info(f"Skipping {date}, video file size is below minimum")
             return None
         date_str = get_date_string_from_string(date)

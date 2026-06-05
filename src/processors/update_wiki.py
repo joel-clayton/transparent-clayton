@@ -31,6 +31,7 @@ from src.util import (
     get_year_string_from_string,
     get_date_or_datetime_string_from_string,
     get_date_string_from_string,
+    send_to_discord_bots,
 )
 
 
@@ -39,12 +40,12 @@ class WikiUpdater(Processor):
         self.job_type = JobType.UPDATE_WIKI
         self.source_type = SourceType.CITY_COUNCIL_MEETING
         self.redis_key = WIKI_UPDATED_CC_MTG_KEY
-        self.site = self.authenticate()
         self.video_backup_links: dict[str, str] = {}
         self.transcript_links: dict[str, str] = {}
         self.input_keys: list[str] = []
         self.output_keys: list[str] = []
         super().__init__()
+        self.site = self.authenticate()
 
     def authenticate(self) -> "pywikibot.site.APISite":
         url = os.environ.get("WIKI_URL")
@@ -295,3 +296,4 @@ class WikiUpdater(Processor):
         if new_page_sections:
             self.update_page_sections_for_page(page, new_page_sections, date)
         self.logger.info(f"processed wiki update for {date}")
+        send_to_discord_bots(f"{self.job_type.name} completed for {date}")
