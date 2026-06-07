@@ -35,6 +35,7 @@ CC_MTG_FILE_STUB = "City Council Meeting"
 
 CC_MTG_PARENT_FOLDER_ID = "1MR8u-c-eFDXSPef1tHFFknivWjJ5tp79"
 
+EXITED_EARLY = "Exited early with no meetings"
 """
 Redis key schema
 
