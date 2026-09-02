@@ -22,3 +22,14 @@ COMPRESSION_PATTERN = "City of Clayton"
 
 DEFAULT_ONE_WEEK_SECONDS_EXPIRATION = 60 * 60 * 24 * 7
 CIVIC_CLERK_START_DATE = datetime(2026, 5, 10)
+
+# Fault-tolerance knobs for unattended (cron-driven) scraping.
+PAGE_LOAD_TIMEOUT = 45  # seconds; caps a hung driver.get so cron can't stall
+LISTING_WAIT_TIMEOUT = 30  # seconds to wait for the meeting listing to hydrate
+# Body text longer than this means the page rendered, so a missing selector is a
+# structure change (needs a human) rather than a transient load failure.
+MIN_RENDERED_BODY_CHARS = 200
+SCRAPE_RETRY_ATTEMPTS = 3
+SCRAPE_RETRY_BASE_DELAY = 2.0  # seconds; first backoff, doubled each retry
+SCRAPE_RETRY_MAX_DELAY = 30.0  # seconds; per-backoff ceiling
+SCRAPE_RETRY_DEADLINE = 120.0  # seconds; total wall-clock ceiling across retries
