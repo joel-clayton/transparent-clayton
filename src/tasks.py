@@ -23,12 +23,16 @@ logger = logging.getLogger(__name__)
 
 @app.task()
 def get_cc_meeting_details_for_download() -> None:
-    latest_date_str = get_latest_downloaded_date()
-    logger.info(f"latest date str: {latest_date_str}")
-    if not latest_date_str:
-        logger.warning("Did not find any downloaded City Council meetings in storage.")
-        return
     try:
+        # Inside the try so an unmounted volume surfaces as a transient error
+        # (get_latest_downloaded_date raises) rather than crashing uncaught.
+        latest_date_str = get_latest_downloaded_date()
+        logger.info(f"latest date str: {latest_date_str}")
+        if not latest_date_str:
+            logger.warning(
+                "Did not find any downloaded City Council meetings in storage."
+            )
+            return
         latest_date = get_datetime_from_string(latest_date_str)
         if latest_date is None:
             raise Exception(

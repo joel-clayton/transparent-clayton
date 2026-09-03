@@ -4,6 +4,7 @@ from pathlib import Path
 SOURCE_URL = "https://claytonca.gov/government/city-council/"
 CIVIC_CLERK_URL = "https://claytonca.portal.civicclerk.com/"
 DOWNLOADED_PATH = Path("/Volumes/Gautam/Clayton/CC Meetings/Downloaded")
+RAW_SNAPSHOT_PATH = Path("/Volumes/Gautam/Clayton/CC Meetings/RawSnapshots")
 VIDEO_FILE_NAME_TEMPLATE = (
     "City Council Meeting {} - City of Clayton.mp4"  # e.g. 2024-10-02
 )
@@ -33,3 +34,4 @@ SCRAPE_RETRY_ATTEMPTS = 3
 SCRAPE_RETRY_BASE_DELAY = 2.0  # seconds; first backoff, doubled each retry
 SCRAPE_RETRY_MAX_DELAY = 30.0  # seconds; per-backoff ceiling
 SCRAPE_RETRY_DEADLINE = 120.0  # seconds; total wall-clock ceiling across retries
+SCRAPE_URL_HEAD_TIMEOUT = 10.0  # seconds; per-request timeout for HEAD-resolve checks
