@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 from datetime import datetime
@@ -22,6 +23,11 @@ from src.processors.constants import (
     TIME_PATTERN,
 )
 from src.secrets import DISCORD_WEBHOOK_BOTS
+
+logger = logging.getLogger(__name__)
+
+# Discord rejects webhook messages longer than 2000 characters with a 400.
+DISCORD_MESSAGE_LIMIT = 2000
 
 
 def get_detail_from_redis(key: str) -> Any:
@@ -109,10 +115,32 @@ def get_year_string_from_string(text: str) -> str:
 
 
 def send_to_discord_bots(message: str) -> None:
+    """Best-effort Discord alert; never raises.
+
+    This is the pipeline's alerting channel, so a webhook failure must not
+    become a *second* uncaught exception that crashes the task raising the
+    original alert. discord.py already retries transient 429/5xx internally and
+    then surfaces exhaustion as a misleading ``RuntimeError("Unreachable code in
+    HTTP handling.")``; we log any failure and move on. Messages are truncated
+    to Discord's 2000-character limit to avoid 400s on long tracebacks.
+    """
     from discord import SyncWebhook
 
-    webhook = SyncWebhook.from_url(DISCORD_WEBHOOK_BOTS)
-    webhook.send(message)
+    if not DISCORD_WEBHOOK_BOTS:
+        logger.warning("DISCORD_WEBHOOK_BOTS is not configured; dropping alert.")
+        return
+
+    if len(message) > DISCORD_MESSAGE_LIMIT:
+        message = message[: DISCORD_MESSAGE_LIMIT - 1] + "…"
+
+    try:
+        webhook = SyncWebhook.from_url(DISCORD_WEBHOOK_BOTS)
+        webhook.send(message)
+    except Exception as exc:
+        # Includes discord.py's HTTPException/DiscordServerError, the
+        # "Unreachable code in HTTP handling" RuntimeError on retry exhaustion,
+        # and any network error. Alerting is best-effort.
+        logger.warning("Failed to send Discord alert (%s): %s", type(exc).__name__, exc)
 
 
 def get_part_num_from_string(string: str) -> int:
