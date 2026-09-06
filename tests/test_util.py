@@ -1,5 +1,7 @@
 import unittest
+from unittest import mock
 
+import src.util as util
 from src.util import (
     get_date_or_datetime_string_from_string,
     get_date_string_from_string,
@@ -94,6 +96,56 @@ class TestGetYearStringFromString(unittest.TestCase):
 
     def test_returns_empty_when_absent(self):
         self.assertEqual(get_year_string_from_string("no year"), "")
+
+
+class TestSendToDiscordBots(unittest.TestCase):
+    _WEBHOOK = "https://discord.com/api/webhooks/1/token"
+
+    def test_swallows_webhook_errors(self):
+        webhook = mock.Mock()
+        webhook.send.side_effect = RuntimeError("Unreachable code in HTTP handling.")
+        cls = mock.Mock()
+        cls.from_url.return_value = webhook
+        with (
+            mock.patch("discord.SyncWebhook", cls),
+            mock.patch.object(util, "DISCORD_WEBHOOK_BOTS", self._WEBHOOK),
+        ):
+            with self.assertLogs("src.util", level="WARNING"):
+                util.send_to_discord_bots("boom")  # must not raise
+        webhook.send.assert_called_once()
+
+    def test_drops_when_webhook_unconfigured(self):
+        cls = mock.Mock()
+        with (
+            mock.patch("discord.SyncWebhook", cls),
+            mock.patch.object(util, "DISCORD_WEBHOOK_BOTS", ""),
+        ):
+            with self.assertLogs("src.util", level="WARNING"):
+                util.send_to_discord_bots("nope")
+        cls.from_url.assert_not_called()
+
+    def test_truncates_long_messages(self):
+        webhook = mock.Mock()
+        cls = mock.Mock()
+        cls.from_url.return_value = webhook
+        with (
+            mock.patch("discord.SyncWebhook", cls),
+            mock.patch.object(util, "DISCORD_WEBHOOK_BOTS", self._WEBHOOK),
+        ):
+            util.send_to_discord_bots("x" * 5000)
+        sent = webhook.send.call_args.args[0]
+        self.assertLessEqual(len(sent), util.DISCORD_MESSAGE_LIMIT)
+
+    def test_sends_short_message_unchanged(self):
+        webhook = mock.Mock()
+        cls = mock.Mock()
+        cls.from_url.return_value = webhook
+        with (
+            mock.patch("discord.SyncWebhook", cls),
+            mock.patch.object(util, "DISCORD_WEBHOOK_BOTS", self._WEBHOOK),
+        ):
+            util.send_to_discord_bots("hello")
+        webhook.send.assert_called_once_with("hello")
 
 
 if __name__ == "__main__":
