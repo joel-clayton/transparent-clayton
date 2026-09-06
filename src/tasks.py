@@ -13,6 +13,7 @@ from src.processors.extract import Extractor
 from src.processors.transcribe import Transcriber
 from src.processors.update_wiki import WikiUpdater
 from src.scrapers.cc_meetings import get_latest_downloaded_date, parse_meetings_from_url
+from src.scrapers.errors import SiteStructureError, TransientScrapeError
 from src.processors.upload_transcript import TranscriptUploader
 from src.processors.upload_video import VideoUploader
 from src.util import get_datetime_from_string, send_to_discord_bots
@@ -47,6 +48,15 @@ def get_cc_meeting_details_for_download() -> None:
         r.set(SCRAPED_CC_MTG_KEY, json.dumps(meeting_dates))
         logger.info(f"meetings_to_process: {meetings_to_process}")
         return
+    except SiteStructureError as e:
+        # The page loaded but the parser found nothing it recognised — retrying
+        # won't help, a human needs to look at the changed markup.
+        log_error(None, e, e.__traceback__)
+        raise Ignore(f"Site structure changed; scraper needs attention: {e}")
+    except TransientScrapeError as e:
+        # Network/WebDriver flakiness that survived the retry ceiling.
+        log_error(None, e, e.__traceback__)
+        raise Ignore(f"Transient scrape failure after retries: {e}")
     except Exception as e:
         log_error(None, e, e.__traceback__)
         raise Ignore(f"Something has gone pear-shaped: {e}")
@@ -106,6 +116,7 @@ def cc_meeting_workflow() -> None:
 
 @app.task
 def log_error(request: object, exc: BaseException, traceback: object) -> None:
+    print(f"request: {request}, exc: {exc}, traceback: {traceback}")
     for message in (
         f"REQUEST: {request}",
         f"EXCEPTION: {exc}",

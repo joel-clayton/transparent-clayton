@@ -4,11 +4,16 @@ import os
 import re
 import time
 from datetime import date, datetime
-from typing import TypedDict, Any
+from typing import TypedDict, Any, cast
 from zoneinfo import ZoneInfo
 
+from pydantic import ValidationError
 from selenium import webdriver
-from selenium.common.exceptions import NoSuchElementException, TimeoutException
+from selenium.common.exceptions import (
+    NoSuchElementException,
+    TimeoutException,
+    WebDriverException,
+)
 from selenium.webdriver.chrome.webdriver import WebDriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -21,9 +26,19 @@ from src.scrapers.constants import (
     DATE_INPUT_FORMAT,
     DATETIME_INPUT_FORMAT,
     DOWNLOADED_PATH,
+    LISTING_WAIT_TIMEOUT,
+    MIN_RENDERED_BODY_CHARS,
+    PAGE_LOAD_TIMEOUT,
+    SCRAPE_RETRY_ATTEMPTS,
+    SCRAPE_RETRY_BASE_DELAY,
+    SCRAPE_RETRY_DEADLINE,
+    SCRAPE_RETRY_MAX_DELAY,
     SOURCE_URL,
     CIVIC_CLERK_START_DATE,
 )
+from src.scrapers.errors import SiteStructureError, TransientScrapeError
+from src.scrapers.models import CITY_COUNCIL_MEETING_SOURCE, MeetingRecord
+from src.scrapers.retry import retry_transient
 from src.types import Meeting
 from src.util import get_date_or_datetime_string_from_string
 
@@ -32,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 def browser() -> WebDriver:
     driver = webdriver.Chrome()
+    driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
     driver.get(SOURCE_URL)
     return driver
 
@@ -228,7 +244,9 @@ def _civic_clerk_browser() -> WebDriver:
         "--user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
     )
-    return webdriver.Chrome(options=opts)
+    driver = webdriver.Chrome(options=opts)
+    driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
+    return driver
 
 
 def _scrape_civic_clerk_meeting_files(
@@ -336,6 +354,50 @@ def _scrape_civic_clerk_meeting_video(driver: WebDriver, meeting_id: str) -> str
     return driver.execute_script(_JW_PLAYLIST_JS) or ""
 
 
+LISTING_SELECTOR = "li.meeting-event a[data-id]"
+
+
+def _page_rendered(driver: WebDriver) -> bool:
+    """True if the body has rendered a non-trivial amount of text.
+
+    Used to tell "the SPA rendered but our selector is gone" (structure change)
+    from "the page never loaded" (transient).
+    """
+    try:
+        body = driver.find_element(By.TAG_NAME, "body").get_property("innerText")
+    except (NoSuchElementException, WebDriverException):
+        return False
+    return len(str(body or "").strip()) > MIN_RENDERED_BODY_CHARS
+
+
+def _load_meeting_listing(driver: WebDriver) -> None:
+    """Load the CivicClerk portal and wait for the meeting listing to hydrate.
+
+    Raises :class:`TransientScrapeError` on a load/wait timeout where the page
+    is still blank (retryable), and :class:`SiteStructureError` when the page
+    rendered but nothing matches ``LISTING_SELECTOR`` (the markup changed).
+    """
+    try:
+        driver.get(CIVIC_CLERK_URL)
+    except (TimeoutException, WebDriverException) as exc:
+        raise TransientScrapeError(
+            f"Timed out loading {CIVIC_CLERK_URL}: {exc}"
+        ) from exc
+    try:
+        WebDriverWait(driver, LISTING_WAIT_TIMEOUT).until(
+            lambda d: d.find_elements(By.CSS_SELECTOR, LISTING_SELECTOR)
+        )
+    except TimeoutException as exc:
+        if _page_rendered(driver):
+            raise SiteStructureError(
+                f"CivicClerk portal rendered but no elements matched "
+                f"{LISTING_SELECTOR!r}; the meeting listing markup may have changed."
+            ) from exc
+        raise TransientScrapeError(
+            f"CivicClerk meeting listing did not load in {LISTING_WAIT_TIMEOUT}s: {exc}"
+        ) from exc
+
+
 def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meeting]:
     """Scrape past City Council meetings from the CivicClerk portal.
 
@@ -352,17 +414,19 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
     driver = _civic_clerk_browser()
     new_meetings: list[Meeting] = []
     try:
-        driver.get(CIVIC_CLERK_URL)
-        WebDriverWait(driver, 30).until(
-            lambda d: d.find_elements(By.CSS_SELECTOR, "li.meeting-event a[data-id]")
+        retry_transient(
+            lambda: _load_meeting_listing(driver),
+            label="load CivicClerk meeting listing",
+            attempts=SCRAPE_RETRY_ATTEMPTS,
+            base_delay=SCRAPE_RETRY_BASE_DELAY,
+            max_delay=SCRAPE_RETRY_MAX_DELAY,
+            deadline=SCRAPE_RETRY_DEADLINE,
         )
         # Snapshot the listing before we navigate away; element references go
         # stale once we leave the page.
         targets: list[tuple[str, datetime, str]] = []
         now_local = datetime.now(CIVIC_CLERK_TZ).replace(tzinfo=None)
-        for list_elem in driver.find_elements(
-            By.CSS_SELECTOR, "li.meeting-event a[data-id]"
-        ):
+        for list_elem in driver.find_elements(By.CSS_SELECTOR, LISTING_SELECTOR):
             title = list_elem.get_property("innerText") or ""
             if "City Council" not in title:
                 continue
@@ -394,19 +458,30 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
             if video_link:
                 video_url = video_link
             else:
-                raise Exception(f"Could not parse video link for meeting: {meeting_dt}")
+                _civic_clerk_logger.warning(
+                    f"Could not parse video link for meeting: {meeting_dt}"
+                )
+                continue
             meeting_key = meeting_dt.strftime(DATETIME_FORMAT)
             agenda_packet = files.pop("Agenda Packet", "")
-            meeting: Meeting = {
-                "key": meeting_key,
-                "duration": "",
-                "agenda": agenda_packet,
-                "agenda_packet": agenda_packet,
-                "minutes_and_supplemental_materials": files or None,
-                "video": video_url,
-                "clip_id": data_id,
-                "source_type": "city_council_meeting",
-            }
+            try:
+                record = MeetingRecord(
+                    key=meeting_key,
+                    duration="",
+                    agenda=agenda_packet,
+                    agenda_packet=agenda_packet,
+                    minutes_and_supplemental_materials=files or None,
+                    video=video_url,
+                    clip_id=data_id,
+                    source_type=CITY_COUNCIL_MEETING_SOURCE,
+                    scraped_at=now_local.isoformat(timespec="seconds"),
+                )
+            except ValidationError as exc:
+                _civic_clerk_logger.warning(
+                    "Quarantined meeting %s; failed validation: %s", meeting_key, exc
+                )
+                continue
+            meeting = cast(Meeting, record.model_dump(mode="json"))
             r.hset(
                 DETAIL_CC_MTG_KEY,
                 mapping={meeting_key: json.dumps(meeting)},
@@ -490,18 +565,27 @@ def parse_meetings_from_url(latest_date: datetime) -> list[Meeting]:
                     )
                     meeting_key = parsed_date.strftime(output_format)
                     structured_raw_data["Date"] = meeting_key
-                    meeting_details: Meeting = {
-                        "key": structured_raw_data.get("Date") or "",
-                        "duration": structured_raw_data.get("Duration") or "",
-                        "agenda": structured_raw_data.get("Agenda") or "",
-                        "agenda_packet": structured_raw_data.get("AgendaPacket") or "",
-                        "minutes_and_supplemental_materials": structured_raw_data.get(
-                            "MinutesAndSupplementalMaterials"
-                        ),
-                        "video": structured_raw_data.get("Video") or "",
-                        "clip_id": structured_raw_data.get("ClipId") or "",
-                        "source_type": "city_council_meeting",
-                    }
+                    try:
+                        record = MeetingRecord(
+                            key=structured_raw_data.get("Date") or "",
+                            duration=structured_raw_data.get("Duration") or "",
+                            agenda=structured_raw_data.get("Agenda") or "",
+                            agenda_packet=structured_raw_data.get("AgendaPacket") or "",
+                            minutes_and_supplemental_materials=structured_raw_data.get(
+                                "MinutesAndSupplementalMaterials"
+                            ),
+                            video=structured_raw_data.get("Video") or "",
+                            clip_id=structured_raw_data.get("ClipId") or "",
+                            source_type=CITY_COUNCIL_MEETING_SOURCE,
+                        )
+                    except ValidationError as exc:
+                        logger.warning(
+                            "Quarantined Granicus meeting %s; failed validation: %s",
+                            meeting_key,
+                            exc,
+                        )
+                        continue
+                    meeting_details = cast(Meeting, record.model_dump(mode="json"))
                     r.hset(
                         DETAIL_CC_MTG_KEY,
                         mapping={meeting_key: json.dumps(meeting_details)},
