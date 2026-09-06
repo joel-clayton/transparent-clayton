@@ -20,7 +20,6 @@ from src.constants import (
     VIDEO_UPLOADED_CC_MTG_KEY,
     VIDEO_PLAYLIST_CC_MTG_KEY_TEMPLATE,
     VIDEO_PLAYLIST_NAME_TEMPLATE,
-    DATE_PATTERN,
     DATETIME_FORMAT,
     DATE_FORMAT,
     VIDEO_LINK_TEMPLATE,
@@ -359,11 +358,6 @@ class VideoUploader(Processor):
                 title_match = re.search(COMPRESSED_TITLE_PATTERN, uploaded)
                 if title_match:
                     titles.append(uploaded)
-                    date_match = re.search(DATE_PATTERN, title_match.group(0))
-                    if date_match:
-                        date_str = date_match.group(0)
-                        video_details = self.videos.get(date_str, {})
-                        video_details[date_str]
         return sorted(titles)
 
     def get_most_recent_missing_dates(self) -> List[str]:

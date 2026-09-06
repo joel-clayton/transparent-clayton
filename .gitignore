@@ -12,3 +12,4 @@ logs/
 pywikibot-Joelclayton*
 apicache/
 throttle.ctrl
+.claude/
