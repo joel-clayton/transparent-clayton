@@ -8,11 +8,14 @@ VIDEO_UPLOADED_KEY = "video_uploaded"
 TRANSCRIPT_UPLOADED_KEY = "transcript_uploaded"
 WIKI_UPDATED_KEY = "wiki_updated"
 COMPLETED_KEY = "completed"
+SEEN_KEY = "seen"
 
 CC_MTG_KEY = "cc_mtg"
 
 DETAIL_CC_MTG_KEY = f"{DETAIL_KEY}.{CC_MTG_KEY}"
 SCRAPED_CC_MTG_KEY = f"{SCRAPED_KEY}.{CC_MTG_KEY}"
+# Redis set of meeting ids fully scraped + handed off, for idempotent re-runs.
+SEEN_CC_MTG_KEY = f"{SEEN_KEY}.{CC_MTG_KEY}"
 DOWNLOADED_CC_MTG_KEY = f"{DOWNLOADED_KEY}.{CC_MTG_KEY}"
 COMPRESSED_CC_MTG_KEY = f"{COMPRESSED_KEY}.{CC_MTG_KEY}"
 EXTRACTED_CC_MTG_KEY = f"{EXTRACTED_KEY}.{CC_MTG_KEY}"

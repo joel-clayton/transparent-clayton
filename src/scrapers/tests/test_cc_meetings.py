@@ -1,6 +1,9 @@
 import unittest
 from datetime import date, datetime
+from unittest import mock
 
+from src.constants import SEEN_CC_MTG_KEY
+from src.scrapers import cc_meetings
 from src.scrapers.cc_meetings import (
     get_clip_id_from_url,
     get_inner_text_from_html,
@@ -80,6 +83,24 @@ class TestGetClipIdFromUrl(unittest.TestCase):
 
     def test_returns_none_when_no_clip_id(self):
         self.assertIsNone(get_clip_id_from_url("https://example.com/no-clip"))
+
+
+class TestSeenSet(unittest.TestCase):
+    def test_is_seen_checks_membership(self):
+        with mock.patch.object(cc_meetings, "r") as r:
+            r.sismember.return_value = 1
+            self.assertTrue(cc_meetings._is_seen("42"))
+            r.sismember.assert_called_once_with(SEEN_CC_MTG_KEY, "42")
+
+    def test_is_seen_false_when_absent(self):
+        with mock.patch.object(cc_meetings, "r") as r:
+            r.sismember.return_value = 0
+            self.assertFalse(cc_meetings._is_seen("42"))
+
+    def test_mark_seen_adds_to_set(self):
+        with mock.patch.object(cc_meetings, "r") as r:
+            cc_meetings._mark_seen("42")
+            r.sadd.assert_called_once_with(SEEN_CC_MTG_KEY, "42")
 
 
 if __name__ == "__main__":

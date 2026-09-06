@@ -19,7 +19,12 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 
 from celery_app import r
-from src.constants import DATE_FORMAT, DATETIME_FORMAT, DETAIL_CC_MTG_KEY
+from src.constants import (
+    DATE_FORMAT,
+    DATETIME_FORMAT,
+    DETAIL_CC_MTG_KEY,
+    SEEN_CC_MTG_KEY,
+)
 from src.scrapers.constants import (
     CIVIC_CLERK_URL,
     CLIP_ARG_REGEX,
@@ -37,6 +42,7 @@ from src.scrapers.constants import (
     SOURCE_URL,
     CIVIC_CLERK_START_DATE,
 )
+from src.scrapers.alerting import AlertLevel, alert
 from src.scrapers.errors import SiteStructureError, TransientScrapeError
 from src.scrapers.models import CITY_COUNCIL_MEETING_SOURCE, MeetingRecord
 from src.scrapers.retry import retry_transient
@@ -449,6 +455,16 @@ def replay_files_from_snapshot(
         driver.quit()
 
 
+def _is_seen(meeting_id: str) -> bool:
+    """Whether this meeting id was already fully scraped and handed off."""
+    return bool(r.sismember(SEEN_CC_MTG_KEY, meeting_id))
+
+
+def _mark_seen(meeting_id: str) -> None:
+    """Record a meeting id as fully handed off so future runs skip it."""
+    r.sadd(SEEN_CC_MTG_KEY, meeting_id)
+
+
 def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meeting]:
     """Scrape past City Council meetings from the CivicClerk portal.
 
@@ -513,7 +529,16 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
             f"Found {len(targets)} past City Council meeting(s) after {latest_date}"
         )
 
+        quarantined: list[str] = []
         for data_id, meeting_dt, video_link in targets:
+            # Idempotency: skip meetings already fully handed off on a prior run,
+            # so re-running the same day (before downloads advance the latest
+            # date) creates no duplicate downstream work.
+            if _is_seen(data_id):
+                _civic_clerk_logger.debug(
+                    "Skipping already-processed meeting %s (%s)", data_id, meeting_dt
+                )
+                continue
             files = _scrape_civic_clerk_meeting_files(driver, data_id)
             # The driver is still on the files page; capture it before parsing
             # decisions so a broken parser can be replayed against this exact DOM.
@@ -524,8 +549,11 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
             if video_link:
                 video_url = video_link
             else:
-                _civic_clerk_logger.warning(
-                    f"Could not parse video link for meeting: {meeting_dt}"
+                # Kept behavior: drop meetings without a video, but do NOT mark
+                # them seen, so a later run picks them up once the video posts.
+                quarantined.append(f"{meeting_dt}: no video link yet")
+                _civic_clerk_logger.debug(
+                    "No video link yet for meeting %s (%s)", data_id, meeting_dt
                 )
                 continue
             meeting_key = meeting_dt.strftime(DATETIME_FORMAT)
@@ -544,7 +572,8 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
                     snapshot_ref=snapshot_ref,
                 )
             except ValidationError as exc:
-                _civic_clerk_logger.warning(
+                quarantined.append(f"{meeting_key}: failed validation ({exc})")
+                _civic_clerk_logger.debug(
                     "Quarantined meeting %s; failed validation: %s", meeting_key, exc
                 )
                 continue
@@ -560,7 +589,8 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
                 deadline=SCRAPE_RETRY_DEADLINE,
             )
             if not video_ok:
-                _civic_clerk_logger.warning(
+                quarantined.append(f"{meeting_key}: video URL not reachable")
+                _civic_clerk_logger.debug(
                     "Quarantined meeting %s; video URL returned an error status: %s",
                     meeting_key,
                     record.video,
@@ -591,7 +621,16 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
                 DETAIL_CC_MTG_KEY,
                 mapping={meeting_key: json.dumps(meeting)},
             )
+            _mark_seen(data_id)
             new_meetings.append(meeting)
+
+        if quarantined:
+            # One batched summary instead of per-record noise on every run.
+            alert(
+                AlertLevel.WARNING,
+                f"{len(quarantined)} CivicClerk meeting(s) skipped/quarantined "
+                "this run:\n- " + "\n- ".join(quarantined),
+            )
     finally:
         driver.quit()
     return new_meetings
