@@ -2,7 +2,7 @@ import unittest
 from datetime import date, datetime
 from unittest import mock
 
-from src.constants import SEEN_CC_MTG_KEY
+from src.constants import AV_SEEN_CC_MTG_KEY, NO_ASSETS_CC_MTG_KEY
 from src.scrapers import cc_meetings
 from src.scrapers.cc_meetings import (
     get_clip_id_from_url,
@@ -85,22 +85,27 @@ class TestGetClipIdFromUrl(unittest.TestCase):
         self.assertIsNone(get_clip_id_from_url("https://example.com/no-clip"))
 
 
-class TestSeenSet(unittest.TestCase):
-    def test_is_seen_checks_membership(self):
-        with mock.patch.object(cc_meetings, "r") as r:
-            r.sismember.return_value = 1
-            self.assertTrue(cc_meetings._is_seen("42"))
-            r.sismember.assert_called_once_with(SEEN_CC_MTG_KEY, "42")
+class TestRedisTrackHelpers(unittest.TestCase):
+    def test_av_seen_reflects_membership(self):
+        for return_value, expected in ((1, True), (0, False)):
+            with self.subTest(return_value=return_value):
+                with mock.patch.object(cc_meetings, "r") as r:
+                    r.sismember.return_value = return_value
+                    self.assertIs(cc_meetings._av_seen("42"), expected)
+                    r.sismember.assert_called_once_with(AV_SEEN_CC_MTG_KEY, "42")
 
-    def test_is_seen_false_when_absent(self):
+    def test_mark_av_seen_adds_to_av_track(self):
         with mock.patch.object(cc_meetings, "r") as r:
-            r.sismember.return_value = 0
-            self.assertFalse(cc_meetings._is_seen("42"))
+            cc_meetings._mark_av_seen("42")
+            r.sadd.assert_called_once_with(AV_SEEN_CC_MTG_KEY, "42")
 
-    def test_mark_seen_adds_to_set(self):
+    def test_no_assets_mark_then_clear(self):
+        key = "2026-06-03 07_00 PM"
         with mock.patch.object(cc_meetings, "r") as r:
-            cc_meetings._mark_seen("42")
-            r.sadd.assert_called_once_with(SEEN_CC_MTG_KEY, "42")
+            cc_meetings._mark_no_assets(key)
+            cc_meetings._clear_no_assets(key)
+            r.sadd.assert_called_once_with(NO_ASSETS_CC_MTG_KEY, key)
+            r.srem.assert_called_once_with(NO_ASSETS_CC_MTG_KEY, key)
 
 
 if __name__ == "__main__":

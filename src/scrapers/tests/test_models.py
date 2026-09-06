@@ -5,6 +5,7 @@ from pydantic import ValidationError
 from src.scrapers.models import (
     CITY_COUNCIL_MEETING_SOURCE,
     MeetingRecord,
+    PipelineClass,
     ScrapeStatus,
 )
 
@@ -86,6 +87,7 @@ class TestMeetingRecordSerialization(unittest.TestCase):
             self.assertIn(field, dumped)
         self.assertEqual(dumped["source_type"], "city_council_meeting")
         self.assertEqual(dumped["status"], "complete")
+        self.assertEqual(dumped["pipeline_class"], "full")
         self.assertEqual(
             dumped["minutes_and_supplemental_materials"],
             {"Staff Report": "https://x/s.pdf"},
@@ -99,6 +101,37 @@ class TestMeetingRecordSerialization(unittest.TestCase):
             some_removed_legacy_field="whatever",
         )
         self.assertFalse(hasattr(record, "some_removed_legacy_field"))
+
+
+class TestPipelineClass(unittest.TestCase):
+    def test_classification_matrix(self):
+        cases = [
+            ("video only", {"video": "https://x/y.mp4"}, PipelineClass.FULL),
+            (
+                "video wins over docs",
+                {"video": "https://x/y.mp4", "agenda_packet": "https://x/a.pdf"},
+                PipelineClass.FULL,
+            ),
+            (
+                "agenda packet only",
+                {"agenda_packet": "https://x/a.pdf"},
+                PipelineClass.DOCS_ONLY,
+            ),
+            (
+                "minutes only",
+                {
+                    "minutes_and_supplemental_materials": {
+                        "Staff Report": "https://x/s.pdf"
+                    }
+                },
+                PipelineClass.DOCS_ONLY,
+            ),
+            ("nothing published", {}, PipelineClass.NO_ASSETS),
+        ]
+        for label, assets, expected in cases:
+            with self.subTest(label):
+                record = MeetingRecord(key="2026-06-03", clip_id="1", **assets)
+                self.assertEqual(record.pipeline_class, expected)
 
 
 if __name__ == "__main__":
