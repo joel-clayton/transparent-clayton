@@ -4,7 +4,7 @@ import os
 import re
 import time
 from datetime import date, datetime
-from typing import TypedDict, Any, cast
+from typing import TypedDict, Any, Callable, cast
 from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
@@ -29,6 +29,7 @@ from src.scrapers.constants import (
     LISTING_WAIT_TIMEOUT,
     MIN_RENDERED_BODY_CHARS,
     PAGE_LOAD_TIMEOUT,
+    RAW_SNAPSHOT_PATH,
     SCRAPE_RETRY_ATTEMPTS,
     SCRAPE_RETRY_BASE_DELAY,
     SCRAPE_RETRY_DEADLINE,
@@ -39,6 +40,8 @@ from src.scrapers.constants import (
 from src.scrapers.errors import SiteStructureError, TransientScrapeError
 from src.scrapers.models import CITY_COUNCIL_MEETING_SOURCE, MeetingRecord
 from src.scrapers.retry import retry_transient
+from src.scrapers.snapshot import SnapshotStore, fetch_stamp
+from src.scrapers.validate import url_resolves, url_resolves_best_effort
 from src.types import Meeting
 from src.util import get_date_or_datetime_string_from_string
 
@@ -154,6 +157,12 @@ element_parser = {
 
 
 def get_latest_downloaded_date() -> str:
+    # A missing directory means the external volume isn't mounted (transient),
+    # which is distinct from a mounted-but-empty directory (a legit "" result).
+    if not os.path.isdir(DOWNLOADED_PATH):
+        raise TransientScrapeError(
+            f"Downloads volume not mounted or missing: {DOWNLOADED_PATH}"
+        )
     filenames = os.listdir(DOWNLOADED_PATH)
     time_sorted_filenames = sorted(
         [filename for filename in filenames if filename.endswith(".mp4")], reverse=True
@@ -292,6 +301,16 @@ def _scrape_civic_clerk_meeting_files(
             stable = 0
         last_count = count
 
+    return _extract_files_from_dom(driver)
+
+
+def _extract_files_from_dom(driver: WebDriver) -> dict[str, str]:
+    """Pair download buttons with their file anchors on the current DOM.
+
+    Split out from navigation/hydration so the same extraction runs against a
+    live page or a replayed snapshot loaded via ``file://``.
+    """
+    selector = "button[aria-label^='Download ']"
     download_buttons = driver.find_elements(By.CSS_SELECTOR, selector)
     file_anchors = driver.find_elements(
         By.CSS_SELECTOR,
@@ -398,6 +417,38 @@ def _load_meeting_listing(driver: WebDriver) -> None:
         ) from exc
 
 
+def _try_snapshot(operation: Callable[[], str], description: str) -> str | None:
+    """Run a snapshot write, warning (not failing the run) on an IO error.
+
+    The mount guard already confirmed the volume; an individual write failure
+    should cost us the replay net for one page, not the whole scrape.
+    """
+    try:
+        return operation()
+    except OSError as exc:
+        _civic_clerk_logger.warning("Could not snapshot %s: %s", description, exc)
+        return None
+
+
+def replay_files_from_snapshot(
+    ref: str, name: str = "files.html", store: SnapshotStore | None = None
+) -> dict[str, str]:
+    """Re-parse a meeting's files from its saved snapshot.
+
+    Recovery path for after a site change breaks the live parser: fix
+    :func:`_extract_files_from_dom`, then replay the last-known-good capture
+    (loaded via ``file://``) instead of losing the meeting's data.
+    """
+    store = store or SnapshotStore(RAW_SNAPSHOT_PATH)
+    snapshot_path = store.path_for(ref, name)
+    driver = _civic_clerk_browser()
+    try:
+        driver.get(snapshot_path.as_uri())
+        return _extract_files_from_dom(driver)
+    finally:
+        driver.quit()
+
+
 def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meeting]:
     """Scrape past City Council meetings from the CivicClerk portal.
 
@@ -412,8 +463,12 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
     strip the timezone rather than convert.
     """
     driver = _civic_clerk_browser()
+    store = SnapshotStore(RAW_SNAPSHOT_PATH)
     new_meetings: list[Meeting] = []
     try:
+        # Fail fast (and transiently) if the snapshot volume isn't mounted,
+        # before spending time driving the browser.
+        store.ensure_ready()
         retry_transient(
             lambda: _load_meeting_listing(driver),
             label="load CivicClerk meeting listing",
@@ -422,10 +477,15 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
             max_delay=SCRAPE_RETRY_MAX_DELAY,
             deadline=SCRAPE_RETRY_DEADLINE,
         )
-        # Snapshot the listing before we navigate away; element references go
-        # stale once we leave the page.
-        targets: list[tuple[str, datetime, str]] = []
         now_local = datetime.now(CIVIC_CLERK_TZ).replace(tzinfo=None)
+        stamp = fetch_stamp(now_local)
+        # Snapshot the raw listing before we navigate away, so a later parser
+        # break can be replayed; element references also go stale once we leave.
+        _try_snapshot(
+            lambda: store.write_listing(stamp, driver.page_source),
+            "meeting listing",
+        )
+        targets: list[tuple[str, datetime, str]] = []
         for list_elem in driver.find_elements(By.CSS_SELECTOR, LISTING_SELECTOR):
             title = list_elem.get_property("innerText") or ""
             if "City Council" not in title:
@@ -455,6 +515,12 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
 
         for data_id, meeting_dt, video_link in targets:
             files = _scrape_civic_clerk_meeting_files(driver, data_id)
+            # The driver is still on the files page; capture it before parsing
+            # decisions so a broken parser can be replayed against this exact DOM.
+            snapshot_ref = _try_snapshot(
+                lambda: store.write(data_id, stamp, "files.html", driver.page_source),
+                f"files page for meeting {data_id}",
+            )
             if video_link:
                 video_url = video_link
             else:
@@ -475,12 +541,51 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
                     clip_id=data_id,
                     source_type=CITY_COUNCIL_MEETING_SOURCE,
                     scraped_at=now_local.isoformat(timespec="seconds"),
+                    snapshot_ref=snapshot_ref,
                 )
             except ValidationError as exc:
                 _civic_clerk_logger.warning(
                     "Quarantined meeting %s; failed validation: %s", meeting_key, exc
                 )
                 continue
+            # Require the video to actually resolve before handoff. A network
+            # failure raises TransientScrapeError (retried, then bubbles up to
+            # alert); a real error status quarantines just this record.
+            video_ok = retry_transient(
+                lambda: url_resolves(record.video),
+                label=f"resolve video URL for {meeting_key}",
+                attempts=SCRAPE_RETRY_ATTEMPTS,
+                base_delay=SCRAPE_RETRY_BASE_DELAY,
+                max_delay=SCRAPE_RETRY_MAX_DELAY,
+                deadline=SCRAPE_RETRY_DEADLINE,
+            )
+            if not video_ok:
+                _civic_clerk_logger.warning(
+                    "Quarantined meeting %s; video URL returned an error status: %s",
+                    meeting_key,
+                    record.video,
+                )
+                continue
+            # Document links are TTL'd and some CDNs reject HEAD; warn but don't
+            # block handoff on them.
+            for label, doc_url in (
+                record.minutes_and_supplemental_materials or {}
+            ).items():
+                if not url_resolves_best_effort(doc_url):
+                    _civic_clerk_logger.warning(
+                        "Meeting %s document %r did not resolve: %s",
+                        meeting_key,
+                        label,
+                        doc_url,
+                    )
+            if record.agenda_packet and not url_resolves_best_effort(
+                record.agenda_packet
+            ):
+                _civic_clerk_logger.warning(
+                    "Meeting %s agenda packet did not resolve: %s",
+                    meeting_key,
+                    record.agenda_packet,
+                )
             meeting = cast(Meeting, record.model_dump(mode="json"))
             r.hset(
                 DETAIL_CC_MTG_KEY,
