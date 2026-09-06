@@ -15,6 +15,7 @@ from src.processors.update_wiki import WikiUpdater
 from src.scrapers.cc_meetings import get_latest_downloaded_date, parse_meetings_from_url
 from src.scrapers.alerting import AlertLevel, alert
 from src.scrapers.errors import SiteStructureError, TransientScrapeError
+from src.scrapers.models import PipelineClass
 from src.processors.upload_transcript import TranscriptUploader
 from src.processors.upload_video import VideoUploader
 from src.util import get_datetime_from_string, send_to_discord_bots
@@ -42,15 +43,16 @@ def get_cc_meeting_details_for_download() -> None:
         meetings_to_process = parse_meetings_from_url(latest_date)
         if not meetings_to_process:
             raise Ignore(EXITED_EARLY)
-        meeting_dates = sorted(
-            [
-                m["key"]
-                for m in meetings_to_process
-                if (parsed := get_datetime_from_string(m["key"])) is not None
-                and parsed > latest_date
-            ]
+        # Only FULL (video) meetings drive the A/V pipeline; docs-only meetings
+        # are handled by the wiki/archival stages and must never be downloaded.
+        video_dates = sorted(
+            m["key"]
+            for m in meetings_to_process
+            if m.get("pipeline_class") == PipelineClass.FULL.value
+            and (parsed := get_datetime_from_string(m["key"])) is not None
+            and parsed > latest_date
         )
-        r.set(SCRAPED_CC_MTG_KEY, json.dumps(meeting_dates))
+        r.set(SCRAPED_CC_MTG_KEY, json.dumps(video_dates))
         logger.info(f"meetings_to_process: {meetings_to_process}")
         return
     except Ignore:

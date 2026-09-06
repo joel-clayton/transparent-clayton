@@ -646,11 +646,13 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
                 mapping={meeting_key: json.dumps(meeting)},
             )
             if record.pipeline_class is PipelineClass.FULL:
-                # Only video meetings drive the A/V pipeline (scraped.cc_mtg).
+                # Only video meetings drive the A/V pipeline; mark handed off so
+                # re-runs skip re-scraping. The task routes FULL keys (only) into
+                # scraped.cc_mtg.
                 _mark_av_seen(data_id)
-                new_meetings.append(meeting)
-            # DOCS_ONLY meetings are persisted to detail with their pipeline_class
-            # and picked up by the doc-archival + wiki stages (slices 2a-ii/2a-2).
+            # Return FULL and DOCS_ONLY meetings: both reach the wiki stage, and
+            # the task filters FULL for the A/V pipeline.
+            new_meetings.append(meeting)
 
         if quarantined:
             # One batched summary instead of per-record noise on every run.
