@@ -1,8 +1,9 @@
 import json
 import os
 import re
+import shutil
 import subprocess
-from typing import List
+from typing import Any, List
 
 import requests
 
@@ -16,11 +17,19 @@ from src.types import JobType, SourceType
 PLAYER_URL = (
     "https://claytonca.granicus.com/player/clip/{clip_id}?view_id=1&redirect=true"
 )
-YTDL_OPTS = {
+YTDL_OPTS: dict[str, Any] = {
     "outtmpl": os.path.join(DOWNLOADED_DIR, CC_MTG_FILE_TEMPLATE_YT_DLP),
     "recodevideo": "mp4",
     "format": "bestvideo[ext=mp4]+bestaudio[ext=mp4]/best[ext=mp4]",
+    "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
 }
+
+# yt-dlp needs a JS runtime for some YouTube clients. Prefer an explicit
+# DENO_PATH, else discover deno on PATH; omit the option entirely if absent so
+# this runs on any host rather than a hardcoded developer path.
+DENO_PATH = os.environ.get("DENO_PATH") or shutil.which("deno")
+if DENO_PATH:
+    YTDL_OPTS["js_runtimes"] = {"deno": {"path": DENO_PATH}}
 
 
 class Downloader(Processor):
@@ -69,9 +78,11 @@ class Downloader(Processor):
                 from yt_dlp import YoutubeDL
 
                 YTDL_OPTS["outtmpl"] = YTDL_OPTS["outtmpl"].format(date)
-                print(YTDL_OPTS)
-                with YoutubeDL(YTDL_OPTS) as ydl:
-                    ydl.download([video])
+                try:
+                    with YoutubeDL(YTDL_OPTS) as ydl:
+                        ydl.download([video])
+                except Exception as ex:
+                    print(f"yt error: {ex}")
 
             elif video.endswith((".mp4", ".m3u8")):
                 self.logger.debug("Trying civicclerk method")
