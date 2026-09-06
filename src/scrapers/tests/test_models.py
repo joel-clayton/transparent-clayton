@@ -5,6 +5,7 @@ from pydantic import ValidationError
 from src.scrapers.models import (
     CITY_COUNCIL_MEETING_SOURCE,
     MeetingRecord,
+    PipelineClass,
     ScrapeStatus,
 )
 
@@ -99,6 +100,39 @@ class TestMeetingRecordSerialization(unittest.TestCase):
             some_removed_legacy_field="whatever",
         )
         self.assertFalse(hasattr(record, "some_removed_legacy_field"))
+
+
+class TestPipelineClass(unittest.TestCase):
+    def _record(self, **overrides):
+        kwargs = dict(key="2026-06-03", clip_id="1", video="")
+        kwargs.update(overrides)
+        return MeetingRecord(**kwargs)
+
+    def test_video_classifies_full(self):
+        record = self._record(video="https://x/y.mp4")
+        self.assertEqual(record.pipeline_class, PipelineClass.FULL)
+
+    def test_video_wins_even_with_docs(self):
+        record = self._record(video="https://x/y.mp4", agenda_packet="https://x/a.pdf")
+        self.assertEqual(record.pipeline_class, PipelineClass.FULL)
+
+    def test_docs_only_when_no_video(self):
+        record = self._record(agenda_packet="https://x/a.pdf")
+        self.assertEqual(record.pipeline_class, PipelineClass.DOCS_ONLY)
+
+    def test_minutes_alone_is_docs_only(self):
+        record = self._record(
+            minutes_and_supplemental_materials={"Staff Report": "https://x/s.pdf"}
+        )
+        self.assertEqual(record.pipeline_class, PipelineClass.DOCS_ONLY)
+
+    def test_no_assets_when_empty(self):
+        record = self._record()
+        self.assertEqual(record.pipeline_class, PipelineClass.NO_ASSETS)
+
+    def test_pipeline_class_serialized(self):
+        record = self._record(agenda_packet="https://x/a.pdf")
+        self.assertEqual(record.model_dump(mode="json")["pipeline_class"], "docs_only")
 
 
 if __name__ == "__main__":

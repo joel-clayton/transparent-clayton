@@ -32,6 +32,18 @@ class ScrapeStatus(str, Enum):
     QUARANTINED = "quarantined"  # failed validation -> never handed off
 
 
+class PipelineClass(str, Enum):
+    """How an event is routed, based on which assets it has (Phase 2).
+
+    Independent of ``ScrapeStatus`` (which is about scrape validity): a valid
+    record still routes differently depending on its assets.
+    """
+
+    FULL = "full"  # has video (+/- docs) -> full A/V pipeline + doc archive
+    DOCS_ONLY = "docs_only"  # docs but no video -> archive + wiki entry, no A/V
+    NO_ASSETS = "no_assets"  # nothing published -> transparency page only
+
+
 class MeetingRecord(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -53,6 +65,7 @@ class MeetingRecord(BaseModel):
     scraped_at: str | None = None
     snapshot_ref: str | None = None
     status: ScrapeStatus = ScrapeStatus.COMPLETE
+    pipeline_class: PipelineClass = PipelineClass.NO_ASSETS
 
     @field_validator("key")
     @classmethod
@@ -95,4 +108,15 @@ class MeetingRecord(BaseModel):
             self.status = (
                 ScrapeStatus.COMPLETE if self.video else ScrapeStatus.PENDING_VIDEO
             )
+        self.pipeline_class = self._classify()
         return self
+
+    def _classify(self) -> PipelineClass:
+        has_docs = bool(
+            self.agenda or self.agenda_packet or self.minutes_and_supplemental_materials
+        )
+        if self.video:
+            return PipelineClass.FULL
+        if has_docs:
+            return PipelineClass.DOCS_ONLY
+        return PipelineClass.NO_ASSETS

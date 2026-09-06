@@ -20,10 +20,11 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 from celery_app import r
 from src.constants import (
+    AV_SEEN_CC_MTG_KEY,
     DATE_FORMAT,
     DATETIME_FORMAT,
     DETAIL_CC_MTG_KEY,
-    SEEN_CC_MTG_KEY,
+    NO_ASSETS_CC_MTG_KEY,
 )
 from src.scrapers.constants import (
     CIVIC_CLERK_URL,
@@ -44,7 +45,11 @@ from src.scrapers.constants import (
 )
 from src.scrapers.alerting import AlertLevel, alert
 from src.scrapers.errors import SiteStructureError, TransientScrapeError
-from src.scrapers.models import CITY_COUNCIL_MEETING_SOURCE, MeetingRecord
+from src.scrapers.models import (
+    CITY_COUNCIL_MEETING_SOURCE,
+    MeetingRecord,
+    PipelineClass,
+)
 from src.scrapers.retry import retry_transient
 from src.scrapers.snapshot import SnapshotStore, fetch_stamp
 from src.scrapers.validate import url_resolves, url_resolves_best_effort
@@ -455,14 +460,42 @@ def replay_files_from_snapshot(
         driver.quit()
 
 
-def _is_seen(meeting_id: str) -> bool:
-    """Whether this meeting id was already fully scraped and handed off."""
-    return bool(r.sismember(SEEN_CC_MTG_KEY, meeting_id))
+def _av_seen(meeting_id: str) -> bool:
+    """Whether this meeting's video was already handed off to the A/V pipeline."""
+    return bool(r.sismember(AV_SEEN_CC_MTG_KEY, meeting_id))
 
 
-def _mark_seen(meeting_id: str) -> None:
-    """Record a meeting id as fully handed off so future runs skip it."""
-    r.sadd(SEEN_CC_MTG_KEY, meeting_id)
+def _mark_av_seen(meeting_id: str) -> None:
+    """Record a meeting's video as handed off so future runs skip re-scraping it."""
+    r.sadd(AV_SEEN_CC_MTG_KEY, meeting_id)
+
+
+def _mark_no_assets(meeting_key: str) -> None:
+    """Record a meeting as having no published materials (transparency page)."""
+    r.sadd(NO_ASSETS_CC_MTG_KEY, meeting_key)
+
+
+def _clear_no_assets(meeting_key: str) -> None:
+    """Drop a meeting from the no-assets set once it has published something."""
+    r.srem(NO_ASSETS_CC_MTG_KEY, meeting_key)
+
+
+def _warn_unresolved_docs(record: MeetingRecord, meeting_key: str) -> None:
+    """Best-effort HEAD-check of document links; warn but never block handoff."""
+    for label, doc_url in (record.minutes_and_supplemental_materials or {}).items():
+        if not url_resolves_best_effort(doc_url):
+            _civic_clerk_logger.warning(
+                "Meeting %s document %r did not resolve: %s",
+                meeting_key,
+                label,
+                doc_url,
+            )
+    if record.agenda_packet and not url_resolves_best_effort(record.agenda_packet):
+        _civic_clerk_logger.warning(
+            "Meeting %s agenda packet did not resolve: %s",
+            meeting_key,
+            record.agenda_packet,
+        )
 
 
 def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meeting]:
@@ -531,12 +564,15 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
 
         quarantined: list[str] = []
         for data_id, meeting_dt, video_link in targets:
-            # Idempotency: skip meetings already fully handed off on a prior run,
-            # so re-running the same day (before downloads advance the latest
-            # date) creates no duplicate downstream work.
-            if _is_seen(data_id):
+            # Idempotency: skip meetings whose video was already handed off to the
+            # A/V pipeline. Meetings without a handed-off video (docs-only, or
+            # awaiting a video) are re-examined each run so a later-posted video
+            # is still picked up.
+            if _av_seen(data_id):
                 _civic_clerk_logger.debug(
-                    "Skipping already-processed meeting %s (%s)", data_id, meeting_dt
+                    "Skipping meeting %s (%s); video already handed off",
+                    data_id,
+                    meeting_dt,
                 )
                 continue
             files = _scrape_civic_clerk_meeting_files(driver, data_id)
@@ -546,16 +582,6 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
                 lambda: store.write(data_id, stamp, "files.html", driver.page_source),
                 f"files page for meeting {data_id}",
             )
-            if video_link:
-                video_url = video_link
-            else:
-                # Kept behavior: drop meetings without a video, but do NOT mark
-                # them seen, so a later run picks them up once the video posts.
-                quarantined.append(f"{meeting_dt}: no video link yet")
-                _civic_clerk_logger.debug(
-                    "No video link yet for meeting %s (%s)", data_id, meeting_dt
-                )
-                continue
             meeting_key = meeting_dt.strftime(DATETIME_FORMAT)
             agenda_packet = files.pop("Agenda Packet", "")
             try:
@@ -565,7 +591,7 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
                     agenda=agenda_packet,
                     agenda_packet=agenda_packet,
                     minutes_and_supplemental_materials=files or None,
-                    video=video_url,
+                    video=video_link,
                     clip_id=data_id,
                     source_type=CITY_COUNCIL_MEETING_SOURCE,
                     scraped_at=now_local.isoformat(timespec="seconds"),
@@ -577,52 +603,54 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
                     "Quarantined meeting %s; failed validation: %s", meeting_key, exc
                 )
                 continue
-            # Require the video to actually resolve before handoff. A network
-            # failure raises TransientScrapeError (retried, then bubbles up to
-            # alert); a real error status quarantines just this record.
-            video_ok = retry_transient(
-                lambda: url_resolves(record.video),
-                label=f"resolve video URL for {meeting_key}",
-                attempts=SCRAPE_RETRY_ATTEMPTS,
-                base_delay=SCRAPE_RETRY_BASE_DELAY,
-                max_delay=SCRAPE_RETRY_MAX_DELAY,
-                deadline=SCRAPE_RETRY_DEADLINE,
-            )
-            if not video_ok:
-                quarantined.append(f"{meeting_key}: video URL not reachable")
+
+            # NO_ASSETS: nothing published — record for the transparency page and
+            # move on. Not persisted to detail and not marked A/V-seen, so if the
+            # city later posts materials a future run reclassifies it.
+            if record.pipeline_class is PipelineClass.NO_ASSETS:
+                _mark_no_assets(meeting_key)
                 _civic_clerk_logger.debug(
-                    "Quarantined meeting %s; video URL returned an error status: %s",
-                    meeting_key,
-                    record.video,
+                    "No published materials for meeting %s (%s)", data_id, meeting_dt
                 )
                 continue
-            # Document links are TTL'd and some CDNs reject HEAD; warn but don't
-            # block handoff on them.
-            for label, doc_url in (
-                record.minutes_and_supplemental_materials or {}
-            ).items():
-                if not url_resolves_best_effort(doc_url):
-                    _civic_clerk_logger.warning(
-                        "Meeting %s document %r did not resolve: %s",
-                        meeting_key,
-                        label,
-                        doc_url,
-                    )
-            if record.agenda_packet and not url_resolves_best_effort(
-                record.agenda_packet
-            ):
-                _civic_clerk_logger.warning(
-                    "Meeting %s agenda packet did not resolve: %s",
-                    meeting_key,
-                    record.agenda_packet,
+
+            # Has assets, so it must not linger on the transparency page.
+            _clear_no_assets(meeting_key)
+
+            # FULL: the video must actually resolve before A/V handoff. A network
+            # failure raises TransientScrapeError (retried, then bubbles up to
+            # alert); a real error status quarantines just this record.
+            if record.pipeline_class is PipelineClass.FULL:
+                video_ok = retry_transient(
+                    lambda: url_resolves(record.video),
+                    label=f"resolve video URL for {meeting_key}",
+                    attempts=SCRAPE_RETRY_ATTEMPTS,
+                    base_delay=SCRAPE_RETRY_BASE_DELAY,
+                    max_delay=SCRAPE_RETRY_MAX_DELAY,
+                    deadline=SCRAPE_RETRY_DEADLINE,
                 )
+                if not video_ok:
+                    quarantined.append(f"{meeting_key}: video URL not reachable")
+                    _civic_clerk_logger.debug(
+                        "Quarantined meeting %s; video URL returned an error: %s",
+                        meeting_key,
+                        record.video,
+                    )
+                    continue
+
+            _warn_unresolved_docs(record, meeting_key)
+
             meeting = cast(Meeting, record.model_dump(mode="json"))
             r.hset(
                 DETAIL_CC_MTG_KEY,
                 mapping={meeting_key: json.dumps(meeting)},
             )
-            _mark_seen(data_id)
-            new_meetings.append(meeting)
+            if record.pipeline_class is PipelineClass.FULL:
+                # Only video meetings drive the A/V pipeline (scraped.cc_mtg).
+                _mark_av_seen(data_id)
+                new_meetings.append(meeting)
+            # DOCS_ONLY meetings are persisted to detail with their pipeline_class
+            # and picked up by the doc-archival + wiki stages (slices 2a-ii/2a-2).
 
         if quarantined:
             # One batched summary instead of per-record noise on every run.

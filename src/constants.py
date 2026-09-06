@@ -8,14 +8,25 @@ VIDEO_UPLOADED_KEY = "video_uploaded"
 TRANSCRIPT_UPLOADED_KEY = "transcript_uploaded"
 WIKI_UPDATED_KEY = "wiki_updated"
 COMPLETED_KEY = "completed"
-SEEN_KEY = "seen"
+# Asset-routing tracks (Phase 2): a meeting can be handled in stages, so each
+# asset track is recorded separately rather than one blanket "seen" flag.
+AV_SEEN_KEY = "av_seen"  # video handed off to the A/V pipeline
+DOCS_ARCHIVED_KEY = "docs_archived"  # documents downloaded + archived
+NO_ASSETS_KEY = "no_assets"  # meetings the city posted with no published materials
 
 CC_MTG_KEY = "cc_mtg"
 
 DETAIL_CC_MTG_KEY = f"{DETAIL_KEY}.{CC_MTG_KEY}"
 SCRAPED_CC_MTG_KEY = f"{SCRAPED_KEY}.{CC_MTG_KEY}"
-# Redis set of meeting ids fully scraped + handed off, for idempotent re-runs.
-SEEN_CC_MTG_KEY = f"{SEEN_KEY}.{CC_MTG_KEY}"
+# Redis set of meeting ids whose video was handed off to the A/V pipeline, for
+# idempotent re-runs. A no-video meeting is NOT added here, so a later run still
+# picks up its video once the city posts it.
+AV_SEEN_CC_MTG_KEY = f"{AV_SEEN_KEY}.{CC_MTG_KEY}"
+# Redis set of meeting ids whose documents have been archived.
+DOCS_ARCHIVED_CC_MTG_KEY = f"{DOCS_ARCHIVED_KEY}.{CC_MTG_KEY}"
+# Redis set of meeting keys currently classified as having no published assets;
+# the transparency wiki page is regenerated from this set each run.
+NO_ASSETS_CC_MTG_KEY = f"{NO_ASSETS_KEY}.{CC_MTG_KEY}"
 DOWNLOADED_CC_MTG_KEY = f"{DOWNLOADED_KEY}.{CC_MTG_KEY}"
 COMPRESSED_CC_MTG_KEY = f"{COMPRESSED_KEY}.{CC_MTG_KEY}"
 EXTRACTED_CC_MTG_KEY = f"{EXTRACTED_KEY}.{CC_MTG_KEY}"
