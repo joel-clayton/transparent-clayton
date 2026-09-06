@@ -13,6 +13,7 @@ from src.processors.extract import Extractor
 from src.processors.transcribe import Transcriber
 from src.processors.update_wiki import WikiUpdater
 from src.scrapers.cc_meetings import get_latest_downloaded_date, parse_meetings_from_url
+from src.scrapers.alerting import AlertLevel, alert
 from src.scrapers.errors import SiteStructureError, TransientScrapeError
 from src.processors.upload_transcript import TranscriptUploader
 from src.processors.upload_video import VideoUploader
@@ -23,12 +24,16 @@ logger = logging.getLogger(__name__)
 
 @app.task()
 def get_cc_meeting_details_for_download() -> None:
-    latest_date_str = get_latest_downloaded_date()
-    logger.info(f"latest date str: {latest_date_str}")
-    if not latest_date_str:
-        logger.warning("Did not find any downloaded City Council meetings in storage.")
-        return
     try:
+        # Inside the try so an unmounted volume surfaces as a transient error
+        # (get_latest_downloaded_date raises) rather than crashing uncaught.
+        latest_date_str = get_latest_downloaded_date()
+        logger.info(f"latest date str: {latest_date_str}")
+        if not latest_date_str:
+            logger.warning(
+                "Did not find any downloaded City Council meetings in storage."
+            )
+            return
         latest_date = get_datetime_from_string(latest_date_str)
         if latest_date is None:
             raise Exception(
@@ -48,17 +53,24 @@ def get_cc_meeting_details_for_download() -> None:
         r.set(SCRAPED_CC_MTG_KEY, json.dumps(meeting_dates))
         logger.info(f"meetings_to_process: {meetings_to_process}")
         return
+    except Ignore:
+        # "No new meetings" (EXITED_EARLY) is the normal empty result — stay quiet.
+        logger.info("No new meetings to process; exiting quietly")
+        raise
     except SiteStructureError as e:
         # The page loaded but the parser found nothing it recognised — retrying
         # won't help, a human needs to look at the changed markup.
-        log_error(None, e, e.__traceback__)
+        alert(
+            AlertLevel.ACTIONABLE,
+            f"Site structure changed; scraper needs attention: {e}",
+        )
         raise Ignore(f"Site structure changed; scraper needs attention: {e}")
     except TransientScrapeError as e:
         # Network/WebDriver flakiness that survived the retry ceiling.
-        log_error(None, e, e.__traceback__)
+        alert(AlertLevel.ACTIONABLE, f"Transient scrape failure after retries: {e}")
         raise Ignore(f"Transient scrape failure after retries: {e}")
     except Exception as e:
-        log_error(None, e, e.__traceback__)
+        alert(AlertLevel.ACTIONABLE, f"Unexpected scraper failure: {e}")
         raise Ignore(f"Something has gone pear-shaped: {e}")
 
 
