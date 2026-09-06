@@ -87,6 +87,7 @@ class TestMeetingRecordSerialization(unittest.TestCase):
             self.assertIn(field, dumped)
         self.assertEqual(dumped["source_type"], "city_council_meeting")
         self.assertEqual(dumped["status"], "complete")
+        self.assertEqual(dumped["pipeline_class"], "full")
         self.assertEqual(
             dumped["minutes_and_supplemental_materials"],
             {"Staff Report": "https://x/s.pdf"},
@@ -103,36 +104,34 @@ class TestMeetingRecordSerialization(unittest.TestCase):
 
 
 class TestPipelineClass(unittest.TestCase):
-    def _record(self, **overrides):
-        kwargs = dict(key="2026-06-03", clip_id="1", video="")
-        kwargs.update(overrides)
-        return MeetingRecord(**kwargs)
-
-    def test_video_classifies_full(self):
-        record = self._record(video="https://x/y.mp4")
-        self.assertEqual(record.pipeline_class, PipelineClass.FULL)
-
-    def test_video_wins_even_with_docs(self):
-        record = self._record(video="https://x/y.mp4", agenda_packet="https://x/a.pdf")
-        self.assertEqual(record.pipeline_class, PipelineClass.FULL)
-
-    def test_docs_only_when_no_video(self):
-        record = self._record(agenda_packet="https://x/a.pdf")
-        self.assertEqual(record.pipeline_class, PipelineClass.DOCS_ONLY)
-
-    def test_minutes_alone_is_docs_only(self):
-        record = self._record(
-            minutes_and_supplemental_materials={"Staff Report": "https://x/s.pdf"}
-        )
-        self.assertEqual(record.pipeline_class, PipelineClass.DOCS_ONLY)
-
-    def test_no_assets_when_empty(self):
-        record = self._record()
-        self.assertEqual(record.pipeline_class, PipelineClass.NO_ASSETS)
-
-    def test_pipeline_class_serialized(self):
-        record = self._record(agenda_packet="https://x/a.pdf")
-        self.assertEqual(record.model_dump(mode="json")["pipeline_class"], "docs_only")
+    def test_classification_matrix(self):
+        cases = [
+            ("video only", {"video": "https://x/y.mp4"}, PipelineClass.FULL),
+            (
+                "video wins over docs",
+                {"video": "https://x/y.mp4", "agenda_packet": "https://x/a.pdf"},
+                PipelineClass.FULL,
+            ),
+            (
+                "agenda packet only",
+                {"agenda_packet": "https://x/a.pdf"},
+                PipelineClass.DOCS_ONLY,
+            ),
+            (
+                "minutes only",
+                {
+                    "minutes_and_supplemental_materials": {
+                        "Staff Report": "https://x/s.pdf"
+                    }
+                },
+                PipelineClass.DOCS_ONLY,
+            ),
+            ("nothing published", {}, PipelineClass.NO_ASSETS),
+        ]
+        for label, assets, expected in cases:
+            with self.subTest(label):
+                record = MeetingRecord(key="2026-06-03", clip_id="1", **assets)
+                self.assertEqual(record.pipeline_class, expected)
 
 
 if __name__ == "__main__":
