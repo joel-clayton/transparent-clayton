@@ -6,13 +6,19 @@ import shutil
 import sys
 import tempfile
 from collections import Counter
-from typing import List
+from typing import Any, List, Mapping
 
 from celery_app import r
 import pywikibot
 from pywikibot.textlib import Section
 
-from src.constants import WIKI_UPDATED_CC_MTG_KEY, DETAIL_CC_MTG_KEY, DATETIME_FORMAT
+from src.constants import (
+    WIKI_UPDATED_CC_MTG_KEY,
+    DETAIL_CC_MTG_KEY,
+    NO_ASSETS_CC_MTG_KEY,
+    DATETIME_FORMAT,
+    DATE_FORMAT,
+)
 from src.processors.constants import (
     CC_MTG_WIKI_YEAR_NAME_TEMPLATE,
     WIKI_MTG_TABLE_DATA,
@@ -20,11 +26,15 @@ from src.processors.constants import (
     WIKI_MTG_SECTION_TITLE,
     WIKI_MTG_TABLE_OPEN,
     WIKI_MTG_TABLE_CLOSE,
+    WIKI_NO_MATERIALS_PAGE,
+    WIKI_NO_MATERIALS_INTRO,
+    WIKI_NO_MATERIALS_EMPTY,
     NATURAL_DATETIME_FORMAT,
     NATURAL_DATE_FORMAT,
     WIKI_AI_SECTION_TITLE,
 )
 from src.processors.process import Processor
+from src.scrapers.models import PipelineClass
 from src.settings import TRANSCRIBED_DIR
 from src.types import JobType, SourceType, WikiMeeting
 from src.util import (
@@ -33,6 +43,63 @@ from src.util import (
     get_date_string_from_string,
     send_to_discord_bots,
 )
+
+
+def _humanize_meeting_key(key: str) -> str:
+    """Render a meeting key ('2026-06-03 07_00 PM' or '2026-06-03') for display."""
+    for fmt, out in (
+        (DATETIME_FORMAT, NATURAL_DATETIME_FORMAT),
+        (DATE_FORMAT, NATURAL_DATE_FORMAT),
+    ):
+        try:
+            return datetime.strptime(key, fmt).strftime(out)
+        except ValueError:
+            continue
+    return key
+
+
+def render_meeting_table_row(
+    meeting_details: Mapping[str, Any], video_backups: list[str]
+) -> str:
+    """Build the ` || `-joined wikitable cells from whichever assets exist.
+
+    Only present assets get a cell, so a docs-only meeting renders cleanly with
+    no empty `[None Video]`/`[None Transcript]` cells.
+    """
+    cells: list[str] = []
+    agenda = meeting_details.get("agenda")
+    if agenda:
+        cells.append(f"[{agenda} Agenda]")
+    video = meeting_details.get("video")
+    if video:
+        cells.append(f"[{video} Video]")
+    agenda_packet = meeting_details.get("agenda_packet")
+    if agenda_packet:
+        cells.append(f"[{agenda_packet} Agenda Packet]")
+    for name, url in (
+        meeting_details.get("minutes_and_supplemental_materials") or {}
+    ).items():
+        if url:
+            cells.append(f"[{url} {name}]")
+    transcript = meeting_details.get("transcript_link")
+    if transcript:
+        cells.append(f"[{transcript} Transcript]")
+    for i, link in enumerate(video_backups, start=1):
+        cell = f"[{link} Video Backup]"
+        if i > 1:
+            cell = cell.replace("Backup", f"Backup part {i}")
+        cells.append(cell)
+    return " || ".join(cells)
+
+
+def render_no_materials_page(keys: list[str]) -> str:
+    """Build the transparency page body from the no-asset meeting keys."""
+    if not keys:
+        return WIKI_NO_MATERIALS_EMPTY
+    rows = "\n".join(
+        f"* {_humanize_meeting_key(k)}" for k in sorted(keys, reverse=True)
+    )
+    return f"{WIKI_NO_MATERIALS_INTRO}\n\n{rows}\n"
 
 
 class WikiUpdater(Processor):
@@ -161,10 +228,25 @@ class WikiUpdater(Processor):
         return dt.strftime(NATURAL_DATE_FORMAT)
 
     def gather_input_dates(self) -> List:
+        """Meetings eligible for a year-page entry: video meetings (via their
+        transcript files) plus docs-only meetings (from detail), so a docs-only
+        meeting gets an entry even though it has no transcript.
         """
-        from Transcripts folder
-        """
-        return self.gather_dates(TRANSCRIBED_DIR)
+        transcribed = self.gather_dates(TRANSCRIBED_DIR)
+        return sorted(set(transcribed) | set(self._gather_docs_only_keys()))
+
+    def _gather_docs_only_keys(self) -> list[str]:
+        keys: list[str] = []
+        for _field, raw in (r.hgetall(DETAIL_CC_MTG_KEY) or {}).items():
+            try:
+                detail = json.loads(raw.decode("utf-8"))
+            except (ValueError, AttributeError):
+                continue
+            if detail.get(
+                "pipeline_class"
+            ) == PipelineClass.DOCS_ONLY.value and detail.get("key"):
+                keys.append(detail["key"])
+        return keys
 
     def gather_output_dates(self) -> List:
         """
@@ -213,26 +295,12 @@ class WikiUpdater(Processor):
             raise Exception(
                 f"key missing from meeting_details object {meeting_details}"
             )
-        table_items = [
-            f"[{meeting_details.get('agenda')} Agenda]",
-            f"[{meeting_details.get('video')} Video]",
-            f"[{meeting_details.get('agenda_packet')} Agenda Packet]",
-            f"[{meeting_details.get('transcript_link')} Transcript]",
-        ]
-        video_links = self.get_video_backup_links_for_key(key)
-        if not video_links:
-            raise Exception(f"Video links not found for {key}")
-        for i, link in enumerate(video_links, start=1):
-            video_cell = f"[{link} Video Backup]"
-            if i > 1:
-                video_cell = video_cell.replace("Backup", f"Backup part {i}")
-            table_items.append(video_cell)
-        table_data = " || ".join(table_items)
-
+        table_data = render_meeting_table_row(
+            meeting_details, self.get_video_backup_links_for_key(key)
+        )
         title = WIKI_MTG_SECTION_TITLE.format(
             meeting_key=self.derive_correct_date_header(key)
         )
-
         content = " ".join(
             [
                 WIKI_MTG_TABLE_OPEN,
@@ -240,15 +308,20 @@ class WikiUpdater(Processor):
                 WIKI_MTG_TABLE_CLOSE,
             ]
         )
-        ai_title = WIKI_AI_SECTION_TITLE
-        ai_content = WIKI_AI_SECTION.format(
-            ai_summary_text="TBD",
-            transcript_link=meeting_details.get("transcript_link"),
-        )
-        return [
-            Section(title=title, content=content),
-            Section(title=ai_title, content=ai_content),
-        ]
+        sections = [Section(title=title, content=content)]
+
+        # Only meetings with a transcript get an AI-summary section.
+        transcript_link = meeting_details.get("transcript_link")
+        if transcript_link:
+            sections.append(
+                Section(
+                    title=WIKI_AI_SECTION_TITLE,
+                    content=WIKI_AI_SECTION.format(
+                        ai_summary_text="TBD", transcript_link=transcript_link
+                    ),
+                )
+            )
+        return sections
 
     def update_page_sections_for_page(
         self, page_name: str, sections: List[Section], date: str
@@ -297,3 +370,21 @@ class WikiUpdater(Processor):
             self.update_page_sections_for_page(page, new_page_sections, date)
         self.logger.info(f"processed wiki update for {date}")
         send_to_discord_bots(f"{self.job_type.name} completed for {date}")
+
+    def update_transparency_page(self) -> None:
+        """Regenerate the combined 'Meetings Without Published Materials' page
+        from the no-asset set. Idempotent: only saves when the body changes, so
+        meetings that later publish materials fall off automatically.
+        """
+        raw = r.smembers(NO_ASSETS_CC_MTG_KEY) or set()
+        keys = [k.decode("utf-8") if isinstance(k, bytes) else k for k in raw]
+        body = render_no_materials_page(keys)
+        page = pywikibot.Page(self.site, WIKI_NO_MATERIALS_PAGE)
+        if page.text.strip() != body.strip():
+            page.text = body
+            page.save(summary="Updated meetings without published materials")
+            self.logger.info("Updated transparency page with %d meeting(s)", len(keys))
+
+    def process(self) -> None:
+        super().process()
+        self.update_transparency_page()
