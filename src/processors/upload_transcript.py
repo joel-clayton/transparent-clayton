@@ -10,21 +10,15 @@ from googleapiclient.http import MediaFileUpload
 
 from celery_app import r
 from src.constants import (
-    TRANSCRIPT_UPLOADED_CC_MTG_KEY,
+    TRANSCRIPT_UPLOADED_KEY,
     DATE_PATTERN,
     DATETIME_OUTPUT_PATTERN,
-    TRANSCRIPT_LINK_CC_MTG_KEY_TEMPLATE,
 )
-from src.processors.constants import (
-    CC_MTG_FILE_TEMPLATE,
-    EARLIEST,
-    CC_MTG_TRANSCRIPT_TITLE_FORMAT,
-    CC_MTG_TRANSCRIPT_TITLE_DATE_FORMAT,
-)
+from src.processors.constants import EARLIEST
 from src.processors.google_auth import load_credentials
 from src.processors.process import Processor
 from src.settings import TRANSCRIBED_DIR
-from src.types import JobType, SourceType, job_drive_parent_id
+from src.types import JobType, SourceType, job_drive_parent_id, MEETING_TYPE_BY_SOURCE
 from src.util import get_year_string_from_string, send_to_discord_bots
 
 # If modifying these scopes, delete the file token.json.
@@ -44,10 +38,13 @@ SHARE_LIST = ["grahamjordan2596@gmail.com"]
 
 
 class TranscriptUploader(Processor):
-    def __init__(self) -> None:
+    def __init__(
+        self, source_type: SourceType = SourceType.CITY_COUNCIL_MEETING
+    ) -> None:
         self.job_type = JobType.UPLOAD_TRANSCRIPT
-        self.source_type = SourceType.CITY_COUNCIL_MEETING
-        self.redis_key = TRANSCRIPT_UPLOADED_CC_MTG_KEY
+        self.source_type = source_type
+        self.meeting_type = MEETING_TYPE_BY_SOURCE[source_type]
+        self.redis_key = self.meeting_type.redis_key(TRANSCRIPT_UPLOADED_KEY)
         self.service = self.authenticate()
         super().__init__()
 
@@ -98,14 +95,14 @@ class TranscriptUploader(Processor):
         return folders[0]["id"]
 
     def create_file(self, parent_id: str, date: str) -> str:  # type: ignore
-        source_filename = CC_MTG_FILE_TEMPLATE.format(date, ".txt")
+        source_filename = self.meeting_type.file_template.format(date, ".txt")
         parsed = self.extract_date_or_datetime(date)
         if not parsed:
             raise Exception(f"Could not extract date or datetime from {date}")
         title_format = (
-            CC_MTG_TRANSCRIPT_TITLE_FORMAT
+            self.meeting_type.transcript_title_datetime_format
             if isinstance(parsed, datetime)
-            else CC_MTG_TRANSCRIPT_TITLE_DATE_FORMAT
+            else self.meeting_type.transcript_title_date_format
         )
         destination_filename = parsed.strftime(title_format)
         file_metadata = {
@@ -201,7 +198,7 @@ class TranscriptUploader(Processor):
                 dt_str_internal = dt_str.replace(":", "_")
                 dates.append(dt_str_internal)
                 r.set(
-                    TRANSCRIPT_LINK_CC_MTG_KEY_TEMPLATE.format(
+                    self.meeting_type.transcript_link_key_template.format(
                         meeting_key=dt_str_internal
                     ),
                     link,
@@ -212,7 +209,9 @@ class TranscriptUploader(Processor):
                     date = date_match.group(0)
                     dates.append(date)
                     r.set(
-                        TRANSCRIPT_LINK_CC_MTG_KEY_TEMPLATE.format(meeting_key=date),
+                        self.meeting_type.transcript_link_key_template.format(
+                            meeting_key=date
+                        ),
                         link,
                     )
         return dates
