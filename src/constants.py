@@ -37,6 +37,8 @@ WIKI_UPDATED_CC_MTG_KEY = f"{WIKI_UPDATED_KEY}.{CC_MTG_KEY}"
 COMPLETED_CC_MTG_KEY = f"{COMPLETED_KEY}.{CC_MTG_KEY}"
 VIDEO_LINK_CC_MTG_KEY_TEMPLATE = "video_link.cc_mtg.{meeting_key}.{part_num}"
 TRANSCRIPT_LINK_CC_MTG_KEY_TEMPLATE = "transcript_link.cc_mtg.{meeting_key}"
+# Per-meeting Redis hash of {document label: durable Drive link} once archived.
+DOC_LINK_CC_MTG_KEY_TEMPLATE = "doc_link.cc_mtg.{meeting_key}"
 
 VIDEO_PLAYLIST_CC_MTG_KEY_TEMPLATE = "video_playlist.cc_mtg.{}"
 

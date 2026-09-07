@@ -16,6 +16,7 @@ from src.constants import (
     WIKI_UPDATED_CC_MTG_KEY,
     DETAIL_CC_MTG_KEY,
     NO_ASSETS_CC_MTG_KEY,
+    DOC_LINK_CC_MTG_KEY_TEMPLATE,
     DATETIME_FORMAT,
     DATE_FORMAT,
 )
@@ -59,28 +60,38 @@ def _humanize_meeting_key(key: str) -> str:
 
 
 def render_meeting_table_row(
-    meeting_details: Mapping[str, Any], video_backups: list[str]
+    meeting_details: Mapping[str, Any],
+    video_backups: list[str],
+    doc_links: Mapping[str, str] | None = None,
 ) -> str:
     """Build the ` || `-joined wikitable cells from whichever assets exist.
 
     Only present assets get a cell, so a docs-only meeting renders cleanly with
-    no empty `[None Video]`/`[None Transcript]` cells.
+    no empty `[None Video]`/`[None Transcript]` cells. When a durable archived
+    link exists for a document (``doc_links`` keyed by label), it is used in
+    place of the expiring CivicClerk source URL.
     """
+    links = dict(doc_links or {})
     cells: list[str] = []
     agenda = meeting_details.get("agenda")
+    agenda_packet = meeting_details.get("agenda_packet")
+    durable_packet = links.get("Agenda Packet")
     if agenda:
-        cells.append(f"[{agenda} Agenda]")
+        # Agenda and Agenda Packet are the same file in CivicClerk; prefer the
+        # durable copy for the Agenda cell too when they match.
+        agenda_link = durable_packet if agenda == agenda_packet else None
+        cells.append(f"[{agenda_link or agenda} Agenda]")
     video = meeting_details.get("video")
     if video:
         cells.append(f"[{video} Video]")
-    agenda_packet = meeting_details.get("agenda_packet")
     if agenda_packet:
-        cells.append(f"[{agenda_packet} Agenda Packet]")
+        cells.append(f"[{durable_packet or agenda_packet} Agenda Packet]")
     for name, url in (
         meeting_details.get("minutes_and_supplemental_materials") or {}
     ).items():
-        if url:
-            cells.append(f"[{url} {name}]")
+        durable = links.get(name) or url
+        if durable:
+            cells.append(f"[{durable} {name}]")
     transcript = meeting_details.get("transcript_link")
     if transcript:
         cells.append(f"[{transcript} Transcript]")
@@ -190,6 +201,16 @@ class WikiUpdater(Processor):
 
         return matches
 
+    def get_doc_links_for_key(self, meeting_key: str) -> dict[str, str]:
+        """Durable archived document links ({label: Drive link}) for a meeting."""
+        raw = r.hgetall(DOC_LINK_CC_MTG_KEY_TEMPLATE.format(meeting_key=meeting_key))
+        return {
+            (k.decode("utf-8") if isinstance(k, bytes) else k): (
+                v.decode("utf-8") if isinstance(v, bytes) else v
+            )
+            for k, v in (raw or {}).items()
+        }
+
     def get_transcript_link(self, date: str) -> str | None:
         link = self.transcript_links.get(date)
         if link:
@@ -296,7 +317,9 @@ class WikiUpdater(Processor):
                 f"key missing from meeting_details object {meeting_details}"
             )
         table_data = render_meeting_table_row(
-            meeting_details, self.get_video_backup_links_for_key(key)
+            meeting_details,
+            self.get_video_backup_links_for_key(key),
+            doc_links=self.get_doc_links_for_key(key),
         )
         title = WIKI_MTG_SECTION_TITLE.format(
             meeting_key=self.derive_correct_date_header(key)
