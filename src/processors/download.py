@@ -8,17 +8,16 @@ from typing import Any, List
 import requests
 
 from celery_app import r
-from src.constants import DETAIL_CC_MTG_KEY, SCRAPED_CC_MTG_KEY, DOWNLOADED_CC_MTG_KEY
-from src.processors.constants import CC_MTG_FILE_TEMPLATE_YT_DLP
+from src.constants import DETAIL_KEY, SCRAPED_KEY, DOWNLOADED_KEY
 from src.processors.process import Processor
 from src.settings import DOWNLOADED_DIR
-from src.types import JobType, SourceType
+from src.types import JobType, SourceType, MEETING_TYPE_BY_SOURCE
 
 PLAYER_URL = (
     "https://claytonca.granicus.com/player/clip/{clip_id}?view_id=1&redirect=true"
 )
+# outtmpl is set per-download from the meeting type's yt-dlp filename template.
 YTDL_OPTS: dict[str, Any] = {
-    "outtmpl": os.path.join(DOWNLOADED_DIR, CC_MTG_FILE_TEMPLATE_YT_DLP),
     "recodevideo": "mp4",
     "format": "bestvideo[ext=mp4]+bestaudio[ext=mp4]/best[ext=mp4]",
     "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
@@ -33,14 +32,17 @@ if DENO_PATH:
 
 
 class Downloader(Processor):
-    def __init__(self) -> None:
+    def __init__(
+        self, source_type: SourceType = SourceType.CITY_COUNCIL_MEETING
+    ) -> None:
         self.job_type = JobType.DOWNLOAD
-        self.source_type = SourceType.CITY_COUNCIL_MEETING
-        self.redis_key = DOWNLOADED_CC_MTG_KEY
+        self.source_type = source_type
+        self.meeting_type = MEETING_TYPE_BY_SOURCE[source_type]
+        self.redis_key = self.meeting_type.redis_key(DOWNLOADED_KEY)
         super().__init__()
 
     def gather_input_dates(self) -> List:
-        dates_to_upload = r.get(SCRAPED_CC_MTG_KEY)
+        dates_to_upload = r.get(self.meeting_type.redis_key(SCRAPED_KEY))
         if dates_to_upload:
             return json.loads(dates_to_upload)
         return []
@@ -54,7 +56,9 @@ class Downloader(Processor):
             return None
 
         for date in meetings_to_download:
-            details_str: bytes | None = r.hget(DETAIL_CC_MTG_KEY, date)
+            details_str: bytes | None = r.hget(
+                self.meeting_type.redis_key(DETAIL_KEY), date
+            )
             details = {}
             if not details_str:
                 raise Exception(
@@ -77,9 +81,14 @@ class Downloader(Processor):
                 self.logger.error("Trying youtube-dl method")
                 from yt_dlp import YoutubeDL
 
-                YTDL_OPTS["outtmpl"] = YTDL_OPTS["outtmpl"].format(date)
+                opts = {
+                    **YTDL_OPTS,
+                    "outtmpl": os.path.join(
+                        DOWNLOADED_DIR, self.meeting_type.file_template_yt_dlp
+                    ).format(date),
+                }
                 try:
-                    with YoutubeDL(YTDL_OPTS) as ydl:
+                    with YoutubeDL(opts) as ydl:
                         ydl.download([video])
                 except Exception as ex:
                     print(f"yt error: {ex}")
