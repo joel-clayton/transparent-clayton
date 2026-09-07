@@ -3,7 +3,6 @@ from typing import TypedDict, List
 
 from src.constants import (
     AUDIO_TRANSCRIBED_CC_MTG_KEY,
-    CC_MTG_FILE_STUB,
     COMPRESSED_CC_MTG_KEY,
     DOWNLOADED_CC_MTG_KEY,
     EXTRACTED_CC_MTG_KEY,
@@ -12,10 +11,7 @@ from src.constants import (
     VIDEO_UPLOADED_CC_MTG_KEY,
     CC_MTG_PARENT_FOLDER_ID,
 )
-from src.processors.constants import (
-    CC_MTG_FILE_TEMPLATE,
-    CC_MTG_FILE_TEMPLATE_COMPRESSED_SEGMENTED,
-)
+from src.meeting_types import CITY_COUNCIL, PLANNING_COMMISSION, MeetingType
 from src.settings import (
     COMPRESSED_DIR,
     DOWNLOADED_DIR,
@@ -27,9 +23,18 @@ from src.settings import (
 class SourceType(Enum):
     CITY_COUNCIL_MEETING = 1
     BUDGET_AND_AUDIT_MEETING = 2
+    PLANNING_COMMISSION = 3
 
 
-type_stubs = {SourceType.CITY_COUNCIL_MEETING: CC_MTG_FILE_STUB}
+# Bridge the enum (used as a dict key across the pipeline) to the MeetingType
+# config that is the single source of every per-type string.
+MEETING_TYPE_BY_SOURCE: dict[SourceType, MeetingType] = {
+    SourceType.CITY_COUNCIL_MEETING: CITY_COUNCIL,
+    SourceType.PLANNING_COMMISSION: PLANNING_COMMISSION,
+}
+
+
+type_stubs = {source: mt.file_stub for source, mt in MEETING_TYPE_BY_SOURCE.items()}
 
 
 class JobType(Enum):
@@ -52,16 +57,17 @@ job_paths = {
 
 
 source_file_templates = {
-    SourceType.CITY_COUNCIL_MEETING: CC_MTG_FILE_TEMPLATE,
+    source: mt.file_template for source, mt in MEETING_TYPE_BY_SOURCE.items()
 }
 
 source_job_file_templates = {
-    SourceType.CITY_COUNCIL_MEETING: {
-        JobType.DOWNLOAD: CC_MTG_FILE_TEMPLATE,
-        JobType.COMPRESS: CC_MTG_FILE_TEMPLATE_COMPRESSED_SEGMENTED,
-        JobType.EXTRACT_AUDIO: CC_MTG_FILE_TEMPLATE,
-        JobType.TRANSCRIBE_AUDIO: CC_MTG_FILE_TEMPLATE,
+    source: {
+        JobType.DOWNLOAD: mt.file_template,
+        JobType.COMPRESS: mt.compressed_segmented_template,
+        JobType.EXTRACT_AUDIO: mt.file_template,
+        JobType.TRANSCRIBE_AUDIO: mt.file_template,
     }
+    for source, mt in MEETING_TYPE_BY_SOURCE.items()
 }
 
 job_file_formats = {
