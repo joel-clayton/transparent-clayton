@@ -36,6 +36,28 @@ class TestRenderMeetingTableRow(unittest.TestCase):
         self.assertNotIn("Transcript", row)
         self.assertNotIn("None", row)
 
+    def test_prefers_durable_archived_links(self):
+        row = render_meeting_table_row(
+            {
+                "agenda": "https://src/a.pdf",
+                "agenda_packet": "https://src/a.pdf",
+                "minutes_and_supplemental_materials": {
+                    "Staff Report": "https://src/s.pdf"
+                },
+            },
+            [],
+            doc_links={
+                "Agenda Packet": "https://drive/a",
+                "Staff Report": "https://drive/s",
+            },
+        )
+        # Durable links replace the expiring source URLs everywhere (incl. the
+        # Agenda cell, since agenda == agenda_packet in CivicClerk).
+        self.assertIn("[https://drive/a Agenda]", row)
+        self.assertIn("[https://drive/a Agenda Packet]", row)
+        self.assertIn("[https://drive/s Staff Report]", row)
+        self.assertNotIn("src/", row)
+
 
 class TestRenderNoMaterialsPage(unittest.TestCase):
     def test_lists_keys_newest_first(self):

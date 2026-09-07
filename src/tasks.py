@@ -7,6 +7,7 @@ from celery.schedules import crontab
 
 from celery_app import app, r
 from src.constants import SCRAPED_CC_MTG_KEY, EXITED_EARLY
+from src.processors.archive_docs import DocumentArchiver
 from src.processors.compress import Compressor
 from src.processors.download import Downloader
 from src.processors.extract import Extractor
@@ -113,6 +114,12 @@ def upload_cc_meeting_transcript() -> None:
 
 
 @app.task
+def archive_cc_meeting_docs() -> None:
+    archiver = DocumentArchiver()
+    archiver.process()
+
+
+@app.task
 def update_cc_mtg_wiki() -> None:
     wiki_updater = WikiUpdater()
     wiki_updater.process()
@@ -150,6 +157,7 @@ workflow = chain(
     extract_cc_meeting_audio.si().on_error(log_error.s()),
     transcribe_cc_meeting_audio.si().on_error(log_error.s()),
     upload_cc_meeting_transcript.si().on_error(log_error.s()),
+    archive_cc_meeting_docs.si().on_error(log_error.s()),
     update_cc_mtg_wiki.si().on_error(log_error.s()),
     notify_success.si().on_error(log_error.s()),
 )
