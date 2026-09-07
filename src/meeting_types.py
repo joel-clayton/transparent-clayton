@@ -70,6 +70,11 @@ class MeetingType:
         return f"Clayton CA {self.display_name} Meeting {{}}{{}}"
 
     @property
+    def compressed_title_prefix(self) -> str:
+        """Prefix matched against compressed filenames + uploaded video titles."""
+        return f"Clayton CA {self.display_name} Meeting"
+
+    @property
     def video_title_datetime_format(self) -> str:
         return f"Clayton CA {self.display_name} Meeting %Y-%m-%d %I:%M %p"
 

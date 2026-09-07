@@ -16,23 +16,18 @@ from src.processors.google_auth import load_credentials
 
 from celery_app import r
 from src.constants import (
-    DETAIL_CC_MTG_KEY,
-    VIDEO_UPLOADED_CC_MTG_KEY,
-    VIDEO_PLAYLIST_CC_MTG_KEY_TEMPLATE,
-    VIDEO_PLAYLIST_NAME_TEMPLATE,
+    DETAIL_KEY,
+    VIDEO_UPLOADED_KEY,
     DATETIME_FORMAT,
     DATE_FORMAT,
     VIDEO_LINK_TEMPLATE,
-    VIDEO_LINK_CC_MTG_KEY_TEMPLATE,
 )
 from src.processors.process import Processor
 from src.settings import COMPRESSED_DIR
-from src.types import JobType, SourceType, type_stubs, Meeting
+from src.types import JobType, SourceType, type_stubs, Meeting, MEETING_TYPE_BY_SOURCE
 from src.processors.constants import (
     PUBLIC_VIDEO_STATUS,
     VIDEO_CATEGORY_ID,
-    CC_MTG_VIDEO_TITLE_DATETIME_FORMAT,
-    CC_MTG_VIDEO_TITLE_DATE_FORMAT,
     MIN_COMPRESSED_VIDEO_MB,
 )
 from src.util import (
@@ -60,9 +55,6 @@ RETRIABLE_EXCEPTIONS = (httplib2.HttpLib2Error, IOError)
 RETRIABLE_STATUS_CODES = [500, 502, 503, 504]
 VALID_PRIVACY_STATUSES = ("public", "private", "unlisted")
 
-TITLE_FORMAT = "Clayton CA City Council Meeting %Y %m %d"
-COMPRESSED_TITLE_PATTERN = "Clayton CA City Council Meeting"
-FILEPATH_TEMPLATE = "Clayton CA City Council Meeting {} - {}{}"
 
 DESCRIPTION = "Unedited video from claytonca.gov"
 KEYWORDS = "news, politics"
@@ -92,10 +84,13 @@ class VideoUploader(Processor):
     source_type: SourceType
     redis_key: str
 
-    def __init__(self) -> None:
+    def __init__(
+        self, source_type: SourceType = SourceType.CITY_COUNCIL_MEETING
+    ) -> None:
         self.job_type = JobType.UPLOAD_VIDEO
-        self.source_type = SourceType.CITY_COUNCIL_MEETING
-        self.redis_key = VIDEO_UPLOADED_CC_MTG_KEY
+        self.source_type = source_type
+        self.meeting_type = MEETING_TYPE_BY_SOURCE[source_type]
+        self.redis_key = self.meeting_type.redis_key(VIDEO_UPLOADED_KEY)
         self.service = self.authenticate()
         self.playlists: List[PlaylistInfo | None] = []
         self.videos: dict = {}
@@ -123,7 +118,9 @@ class VideoUploader(Processor):
             if year_str:
                 playlist_info: PlaylistInfo = {playlist_id: year_str}  # type: ignore
                 self.playlists.append(playlist_info)
-                redis_key = VIDEO_PLAYLIST_CC_MTG_KEY_TEMPLATE.format(year_str)
+                redis_key = self.meeting_type.video_playlist_key_template.format(
+                    year_str
+                )
                 r.set(redis_key, playlist_id)
 
     def create_playlist_for_year(self, year_str: str) -> str:
@@ -131,7 +128,7 @@ class VideoUploader(Processor):
             part="snippet,status",
             body={
                 "snippet": {
-                    "title": VIDEO_PLAYLIST_NAME_TEMPLATE.format(year_str),
+                    "title": self.meeting_type.playlist_name_template.format(year_str),
                 },
                 "status": {"privacyStatus": "public"},
             },
@@ -142,7 +139,9 @@ class VideoUploader(Processor):
     def get_playlist_for_year(self, year_str: str) -> str:
         if not self.playlists:
             self.get_playlists()
-        playlist_id = r.get(VIDEO_PLAYLIST_CC_MTG_KEY_TEMPLATE.format(year_str))
+        playlist_id = r.get(
+            self.meeting_type.video_playlist_key_template.format(year_str)
+        )
         if not playlist_id:
             return self.create_playlist_for_year(year_str)
         return playlist_id.decode("utf-8")
@@ -269,7 +268,7 @@ class VideoUploader(Processor):
         ]
         dates = []
         for f in files:
-            date_match = re.search(COMPRESSED_TITLE_PATTERN, f)
+            date_match = re.search(self.meeting_type.compressed_title_prefix, f)
             if date_match:
                 absolute_path = os.path.join(dir_path, f)
                 dates.append(absolute_path)
@@ -301,7 +300,7 @@ class VideoUploader(Processor):
         for title, video_id in video_ids.items():
             meeting_key = get_date_or_datetime_string_from_string(title)
             part_num = get_part_num_from_string(title)
-            redis_key = VIDEO_LINK_CC_MTG_KEY_TEMPLATE.format(
+            redis_key = self.meeting_type.video_link_key_template.format(
                 meeting_key=meeting_key,
                 part_num=part_num,
             )
@@ -339,12 +338,12 @@ class VideoUploader(Processor):
         try:
             datetime_str = get_datetime_string_from_string(filename)
             dt = datetime.strptime(datetime_str, DATETIME_FORMAT)
-            output_title = dt.strftime(CC_MTG_VIDEO_TITLE_DATETIME_FORMAT)
+            output_title = dt.strftime(self.meeting_type.video_title_datetime_format)
         except Exception:
             self.logger.info(f"Failed to parse date from {filepath}")
             date_str = get_date_string_from_string(filename)
             dt = datetime.strptime(date_str, DATE_FORMAT)
-            output_title = dt.strftime(CC_MTG_VIDEO_TITLE_DATE_FORMAT)
+            output_title = dt.strftime(self.meeting_type.video_title_date_format)
 
         # convert part number to title part number if necessary
         part_match = re.search(r"[0-9]{3}\.", filename)
@@ -362,7 +361,9 @@ class VideoUploader(Processor):
         if uploads_playlist_id:
             uploaded_titles = self.get_recent_video_titles(uploads_playlist_id)
             for uploaded in uploaded_titles:
-                title_match = re.search(COMPRESSED_TITLE_PATTERN, uploaded)
+                title_match = re.search(
+                    self.meeting_type.compressed_title_prefix, uploaded
+                )
                 if title_match:
                     titles.append(uploaded)
         return sorted(titles)
@@ -395,7 +396,7 @@ class VideoUploader(Processor):
         """
         Get this from the redis data for a given date
         """
-        cc_meeting_detail_str = r.hget(DETAIL_CC_MTG_KEY, date)
+        cc_meeting_detail_str = r.hget(self.meeting_type.redis_key(DETAIL_KEY), date)
         if not cc_meeting_detail_str:
             self.logger.warning(
                 f"Date set for video upload is missing details in Redis -- {date}"

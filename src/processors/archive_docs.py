@@ -28,10 +28,10 @@ from googleapiclient.http import MediaIoBaseUpload
 from celery_app import r
 from src.constants import (
     CC_MTG_PARENT_FOLDER_ID,
-    DETAIL_CC_MTG_KEY,
-    DOCS_ARCHIVED_CC_MTG_KEY,
-    DOC_LINK_CC_MTG_KEY_TEMPLATE,
+    DETAIL_KEY,
+    DOCS_ARCHIVED_KEY,
 )
+from src.meeting_types import CITY_COUNCIL, MeetingType
 from src.processors.google_auth import load_credentials
 from src.processors.upload_transcript import (
     DESKTOP_APP_CLIENT_SECRET,
@@ -65,7 +65,8 @@ def docs_to_archive(detail: Mapping[str, object]) -> dict[str, str]:
 
 
 class DocumentArchiver:
-    def __init__(self) -> None:
+    def __init__(self, meeting_type: MeetingType = CITY_COUNCIL) -> None:
+        self.meeting_type = meeting_type
         self.logger = logging.getLogger(f"{__name__}::DocumentArchiver")
         credentials = load_credentials(
             scopes=SCOPES,
@@ -88,10 +89,14 @@ class DocumentArchiver:
     def _unarchived_meetings(self) -> list[tuple[str, dict]]:
         archived = {
             m.decode("utf-8") if isinstance(m, bytes) else m
-            for m in (r.smembers(DOCS_ARCHIVED_CC_MTG_KEY) or set())
+            for m in (
+                r.smembers(self.meeting_type.redis_key(DOCS_ARCHIVED_KEY)) or set()
+            )
         }
         out: list[tuple[str, dict]] = []
-        for _field, raw in (r.hgetall(DETAIL_CC_MTG_KEY) or {}).items():
+        for _field, raw in (
+            r.hgetall(self.meeting_type.redis_key(DETAIL_KEY)) or {}
+        ).items():
             try:
                 detail = json.loads(raw.decode("utf-8"))
             except (ValueError, AttributeError):
@@ -114,12 +119,12 @@ class DocumentArchiver:
                 links[label] = link
         if links:
             r.hset(
-                DOC_LINK_CC_MTG_KEY_TEMPLATE.format(meeting_key=meeting_key),
+                self.meeting_type.doc_link_key_template.format(meeting_key=meeting_key),
                 mapping=cast("Mapping[str | bytes, str]", links),
             )
         # Mark archived only after the uploads succeeded (a raise above skips
         # this, so the meeting is retried next run).
-        r.sadd(DOCS_ARCHIVED_CC_MTG_KEY, meeting_key)
+        r.sadd(self.meeting_type.redis_key(DOCS_ARCHIVED_KEY), meeting_key)
         self.logger.info("Archived %d document(s) for %s", len(links), meeting_key)
 
     def _archive_one(self, folder_id: str, label: str, url: str) -> str:
@@ -147,7 +152,7 @@ class DocumentArchiver:
         return created.get("webViewLink", "")
 
     def _ensure_meeting_folder(self, meeting_key: str) -> str:
-        name = f"City Council Meeting {meeting_key}"
+        name = f"{self.meeting_type.file_stub} {meeting_key}"
         existing = self._find_folder(name)
         if existing:
             return existing

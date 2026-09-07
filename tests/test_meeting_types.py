@@ -124,6 +124,14 @@ class TestClassifyAndSecondType(unittest.TestCase):
         self.assertEqual(
             pc.wiki_year_template, "List of {} Planning Commission Meetings"
         )
+        self.assertEqual(
+            pc.compressed_title_prefix, "Clayton CA Planning Commission Meeting"
+        )
+
+    def test_compressed_title_prefix_city_council(self):
+        self.assertEqual(
+            mt.CITY_COUNCIL.compressed_title_prefix, "Clayton CA City Council Meeting"
+        )
 
 
 class TestGeneratedSourceTypeDicts(unittest.TestCase):
