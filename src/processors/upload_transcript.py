@@ -6,7 +6,6 @@ from time import sleep
 from typing import List
 
 import googleapiclient.discovery
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.http import MediaFileUpload
 
 from celery_app import r
@@ -22,6 +21,7 @@ from src.processors.constants import (
     CC_MTG_TRANSCRIPT_TITLE_FORMAT,
     CC_MTG_TRANSCRIPT_TITLE_DATE_FORMAT,
 )
+from src.processors.google_auth import load_credentials
 from src.processors.process import Processor
 from src.settings import TRANSCRIBED_DIR
 from src.types import JobType, SourceType, job_drive_parent_id
@@ -34,6 +34,10 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive.file",
 ]
 DESKTOP_APP_CLIENT_SECRET = "/Users/gautam/dev/client_secret_721413148557-p0c4gqeha85bo7astbjc9c29hp3a30b6.apps.googleusercontent.com.json"
+# Cached OAuth token so Drive uploads run headless after a one-time consent.
+DRIVE_TOKEN_FILE = os.environ.get("DRIVE_TOKEN_FILE") or os.path.join(
+    os.path.dirname(DESKTOP_APP_CLIENT_SECRET), "drive_token.json"
+)
 TRANSCRIPTS_PARENT_ID = "1MR8u-c-eFDXSPef1tHFFknivWjJ5tp79"
 TRANSCRIPT_FILE_TEMPLATE = "City Council Meeting {}"
 SHARE_LIST = ["grahamjordan2596@gmail.com"]
@@ -225,10 +229,11 @@ class TranscriptUploader(Processor):
         return folder["id"]
 
     def authenticate(self):  # type: ignore
-        flow = InstalledAppFlow.from_client_secrets_file(
-            DESKTOP_APP_CLIENT_SECRET, SCOPES
+        credentials = load_credentials(
+            scopes=SCOPES,
+            client_secret_path=DESKTOP_APP_CLIENT_SECRET,
+            token_path=DRIVE_TOKEN_FILE,
         )
-        credentials = flow.run_local_server(port=0)
         return googleapiclient.discovery.build("drive", "v3", credentials=credentials)
 
     def get_year_from_date(self, date: str) -> str:

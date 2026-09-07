@@ -12,7 +12,7 @@ import httplib2
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
-from google_auth_oauthlib.flow import InstalledAppFlow
+from src.processors.google_auth import load_credentials
 
 from celery_app import r
 from src.constants import (
@@ -67,6 +67,10 @@ FILEPATH_TEMPLATE = "Clayton CA City Council Meeting {} - {}{}"
 DESCRIPTION = "Unedited video from claytonca.gov"
 KEYWORDS = "news, politics"
 CLIENT_SECRETS_FILE = "/Users/gautam/dev/client_secret.json"
+# Cached OAuth token so uploads run headless after a one-time consent.
+YOUTUBE_TOKEN_FILE = os.environ.get("YOUTUBE_TOKEN_FILE") or os.path.join(
+    os.path.dirname(CLIENT_SECRETS_FILE), "youtube_token.json"
+)
 
 # This OAuth 2.0 access scope allows an application to upload files to the
 # authenticated user's YouTube channel, but doesn't allow other types of access.\
@@ -98,8 +102,11 @@ class VideoUploader(Processor):
         super().__init__()
 
     def authenticate(self):  # type: ignore
-        flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRETS_FILE, SCOPES)
-        credentials = flow.run_local_server(port=8080)
+        credentials = load_credentials(
+            scopes=SCOPES,
+            client_secret_path=CLIENT_SECRETS_FILE,
+            token_path=YOUTUBE_TOKEN_FILE,
+        )
         return build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
 
     def get_playlists(self) -> None:
