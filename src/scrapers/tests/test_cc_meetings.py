@@ -3,6 +3,7 @@ from datetime import date, datetime
 from unittest import mock
 
 from src.constants import AV_SEEN_CC_MTG_KEY, NO_ASSETS_CC_MTG_KEY
+from src.meeting_types import CITY_COUNCIL, PLANNING_COMMISSION
 from src.scrapers import cc_meetings
 from src.scrapers.cc_meetings import (
     get_clip_id_from_url,
@@ -86,26 +87,42 @@ class TestGetClipIdFromUrl(unittest.TestCase):
 
 
 class TestRedisTrackHelpers(unittest.TestCase):
-    def test_av_seen_reflects_membership(self):
-        for return_value, expected in ((1, True), (0, False)):
-            with self.subTest(return_value=return_value):
-                with mock.patch.object(cc_meetings, "r") as r:
-                    r.sismember.return_value = return_value
-                    self.assertIs(cc_meetings._av_seen("42"), expected)
-                    r.sismember.assert_called_once_with(AV_SEEN_CC_MTG_KEY, "42")
-
-    def test_mark_av_seen_adds_to_av_track(self):
+    def test_av_seen_uses_city_council_key(self):
         with mock.patch.object(cc_meetings, "r") as r:
-            cc_meetings._mark_av_seen("42")
-            r.sadd.assert_called_once_with(AV_SEEN_CC_MTG_KEY, "42")
+            r.sismember.return_value = 1
+            self.assertTrue(cc_meetings._av_seen(CITY_COUNCIL, "42"))
+            r.sismember.assert_called_once_with(AV_SEEN_CC_MTG_KEY, "42")
+
+    def test_mark_av_seen_routes_by_type(self):
+        with mock.patch.object(cc_meetings, "r") as r:
+            cc_meetings._mark_av_seen(PLANNING_COMMISSION, "42")
+            r.sadd.assert_called_once_with("av_seen.pc_mtg", "42")
 
     def test_no_assets_mark_then_clear(self):
         key = "2026-06-03 07_00 PM"
         with mock.patch.object(cc_meetings, "r") as r:
-            cc_meetings._mark_no_assets(key)
-            cc_meetings._clear_no_assets(key)
+            cc_meetings._mark_no_assets(CITY_COUNCIL, key)
+            cc_meetings._clear_no_assets(CITY_COUNCIL, key)
             r.sadd.assert_called_once_with(NO_ASSETS_CC_MTG_KEY, key)
             r.srem.assert_called_once_with(NO_ASSETS_CC_MTG_KEY, key)
+
+
+class TestGetLatestDownloadedDate(unittest.TestCase):
+    def _latest(self, meeting_type, filenames):
+        with (
+            mock.patch.object(cc_meetings.os.path, "isdir", return_value=True),
+            mock.patch.object(cc_meetings.os, "listdir", return_value=filenames),
+        ):
+            return cc_meetings.get_latest_downloaded_date(meeting_type)
+
+    def test_watermark_is_filtered_by_type_stub(self):
+        files = [
+            "City Council Meeting 2026-06-03 - City of Clayton.mp4",
+            "City Council Meeting 2026-07-01 - City of Clayton.mp4",
+            "Planning Commission Meeting 2026-08-01 - City of Clayton.mp4",
+        ]
+        self.assertEqual(self._latest(CITY_COUNCIL, files), "2026-07-01")
+        self.assertEqual(self._latest(PLANNING_COMMISSION, files), "2026-08-01")
 
 
 if __name__ == "__main__":
