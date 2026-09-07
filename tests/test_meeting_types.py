@@ -126,5 +126,37 @@ class TestClassifyAndSecondType(unittest.TestCase):
         )
 
 
+class TestGeneratedSourceTypeDicts(unittest.TestCase):
+    """The SourceType-keyed template dicts are now generated from MeetingType."""
+
+    def test_city_council_entries_unchanged(self):
+        from src.types import SourceType, source_job_file_templates, type_stubs, JobType
+
+        cc = SourceType.CITY_COUNCIL_MEETING
+        self.assertEqual(type_stubs[cc], "City Council Meeting")
+        self.assertEqual(
+            source_job_file_templates[cc][JobType.DOWNLOAD],
+            "City Council Meeting {} - City of Clayton{}",
+        )
+        self.assertEqual(
+            source_job_file_templates[cc][JobType.COMPRESS],
+            "Clayton CA City Council Meeting {} - %03d{}",
+        )
+
+    def test_planning_commission_entries_generated(self):
+        from src.types import SourceType, source_job_file_templates, type_stubs, JobType
+
+        pc = SourceType.PLANNING_COMMISSION
+        self.assertEqual(type_stubs[pc], "Planning Commission Meeting")
+        self.assertEqual(
+            source_job_file_templates[pc][JobType.DOWNLOAD],
+            "Planning Commission Meeting {} - City of Clayton{}",
+        )
+        self.assertEqual(
+            source_job_file_templates[pc][JobType.COMPRESS],
+            "Clayton CA Planning Commission Meeting {} - %03d{}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
