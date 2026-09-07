@@ -34,6 +34,15 @@ EARLIEST = datetime(2026, 3, 1)
 
 CC_MTG_WIKI_YEAR_NAME_TEMPLATE = "List of {} City Council Meetings"
 
+# Combined, type-agnostic transparency page listing meetings the city posted
+# with no published materials (kept generic so other meeting types share it).
+WIKI_NO_MATERIALS_PAGE = "Meetings Without Published Materials"
+WIKI_NO_MATERIALS_INTRO = (
+    "The following meetings were posted by the City of Clayton with no published "
+    "agenda, documents, or video at the time they were scraped."
+)
+WIKI_NO_MATERIALS_EMPTY = "No meetings without published materials have been recorded."
+
 FORMAL_DATE_PATTERN = r"(?:January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}, \d{4}"
 FORMAL_DATETIME_PATTERN = r"(?:January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}, \d{4} \d{1,2}:\d{2} (?:AM|PM)"
 TIME_PATTERN = r"\d{1,2}[:_]\d{2} (?:AM|PM)"
