@@ -60,9 +60,16 @@ class TestRenderMeetingTableRow(unittest.TestCase):
 
 
 class TestRenderNoMaterialsPage(unittest.TestCase):
-    def test_lists_keys_newest_first(self):
-        body = render_no_materials_page(["2026-06-03 07_00 PM", "2026-07-01 07_00 PM"])
+    def test_lists_entries_newest_first_with_type_label(self):
+        body = render_no_materials_page(
+            [
+                ("City Council", "2026-06-03 07_00 PM"),
+                ("Planning Commission", "2026-07-01 07_00 PM"),
+            ]
+        )
         self.assertLess(body.index("July 01, 2026"), body.index("June 03, 2026"))
+        self.assertIn("July 01, 2026 07:00 PM — Planning Commission", body)
+        self.assertIn("June 03, 2026 07:00 PM — City Council", body)
 
     def test_empty_uses_placeholder(self):
         self.assertEqual(

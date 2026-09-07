@@ -13,15 +13,13 @@ import pywikibot
 from pywikibot.textlib import Section
 
 from src.constants import (
-    WIKI_UPDATED_CC_MTG_KEY,
-    DETAIL_CC_MTG_KEY,
-    NO_ASSETS_CC_MTG_KEY,
-    DOC_LINK_CC_MTG_KEY_TEMPLATE,
+    WIKI_UPDATED_KEY,
+    DETAIL_KEY,
+    NO_ASSETS_KEY,
     DATETIME_FORMAT,
     DATE_FORMAT,
 )
 from src.processors.constants import (
-    CC_MTG_WIKI_YEAR_NAME_TEMPLATE,
     WIKI_MTG_TABLE_DATA,
     WIKI_AI_SECTION,
     WIKI_MTG_SECTION_TITLE,
@@ -37,7 +35,7 @@ from src.processors.constants import (
 from src.processors.process import Processor
 from src.scrapers.models import PipelineClass
 from src.settings import TRANSCRIBED_DIR
-from src.types import JobType, SourceType, WikiMeeting
+from src.types import JobType, SourceType, WikiMeeting, MEETING_TYPE_BY_SOURCE
 from src.util import (
     get_year_string_from_string,
     get_date_or_datetime_string_from_string,
@@ -103,21 +101,30 @@ def render_meeting_table_row(
     return " || ".join(cells)
 
 
-def render_no_materials_page(keys: list[str]) -> str:
-    """Build the transparency page body from the no-asset meeting keys."""
-    if not keys:
+def render_no_materials_page(entries: list[tuple[str, str]]) -> str:
+    """Build the transparency page body from (meeting-type display, key) entries.
+
+    One combined page across all meeting types; each row is labelled with its
+    type so a City Council and a Planning Commission meeting on the same date are
+    distinguishable.
+    """
+    if not entries:
         return WIKI_NO_MATERIALS_EMPTY
     rows = "\n".join(
-        f"* {_humanize_meeting_key(k)}" for k in sorted(keys, reverse=True)
+        f"* {_humanize_meeting_key(key)} — {display}"
+        for display, key in sorted(entries, key=lambda entry: entry[1], reverse=True)
     )
     return f"{WIKI_NO_MATERIALS_INTRO}\n\n{rows}\n"
 
 
 class WikiUpdater(Processor):
-    def __init__(self) -> None:
+    def __init__(
+        self, source_type: SourceType = SourceType.CITY_COUNCIL_MEETING
+    ) -> None:
         self.job_type = JobType.UPDATE_WIKI
-        self.source_type = SourceType.CITY_COUNCIL_MEETING
-        self.redis_key = WIKI_UPDATED_CC_MTG_KEY
+        self.source_type = source_type
+        self.meeting_type = MEETING_TYPE_BY_SOURCE[source_type]
+        self.redis_key = self.meeting_type.redis_key(WIKI_UPDATED_KEY)
         self.video_backup_links: dict[str, str] = {}
         self.transcript_links: dict[str, str] = {}
         self.input_keys: list[str] = []
@@ -174,7 +181,9 @@ class WikiUpdater(Processor):
         if self.video_backup_links:
             return self.video_backup_links
 
-        b_keys = sorted(list(r.scan_iter(match="video_link.*")))
+        b_keys = sorted(
+            list(r.scan_iter(match=f"video_link.{self.meeting_type.key}.*"))
+        )
         b_values = r.mget(b_keys)
         for b_redis_key, b_value in zip(b_keys, b_values):
             if not b_value:
@@ -203,7 +212,9 @@ class WikiUpdater(Processor):
 
     def get_doc_links_for_key(self, meeting_key: str) -> dict[str, str]:
         """Durable archived document links ({label: Drive link}) for a meeting."""
-        raw = r.hgetall(DOC_LINK_CC_MTG_KEY_TEMPLATE.format(meeting_key=meeting_key))
+        raw = r.hgetall(
+            self.meeting_type.doc_link_key_template.format(meeting_key=meeting_key)
+        )
         return {
             (k.decode("utf-8") if isinstance(k, bytes) else k): (
                 v.decode("utf-8") if isinstance(v, bytes) else v
@@ -216,7 +227,7 @@ class WikiUpdater(Processor):
         if link:
             return link
 
-        res = list(r.scan_iter(match="transcript_link.*"))
+        res = list(r.scan_iter(match=f"transcript_link.{self.meeting_type.key}.*"))
         for b_redis_key in res:
             redis_key = b_redis_key.decode("utf-8")
             redis_date = redis_key.split(".")[2]
@@ -227,7 +238,9 @@ class WikiUpdater(Processor):
         return None
 
     def gather_meeting_details(self, date: str) -> WikiMeeting:
-        details_str: bytes | None = r.hget(DETAIL_CC_MTG_KEY, date)
+        details_str: bytes | None = r.hget(
+            self.meeting_type.redis_key(DETAIL_KEY), date
+        )
         if not details_str:
             raise Exception(
                 f"Could not find meeting details for {self.source_type}-- {date}"
@@ -258,7 +271,9 @@ class WikiUpdater(Processor):
 
     def _gather_docs_only_keys(self) -> list[str]:
         keys: list[str] = []
-        for _field, raw in (r.hgetall(DETAIL_CC_MTG_KEY) or {}).items():
+        for _field, raw in (
+            r.hgetall(self.meeting_type.redis_key(DETAIL_KEY)) or {}
+        ).items():
             try:
                 detail = json.loads(raw.decode("utf-8"))
             except (ValueError, AttributeError):
@@ -281,7 +296,7 @@ class WikiUpdater(Processor):
             set([get_year_string_from_string(input_date) for input_date in input_dates])
         )
         pages_to_scrape = [
-            CC_MTG_WIKI_YEAR_NAME_TEMPLATE.format(year) for year in input_years
+            self.meeting_type.wiki_year_template.format(year) for year in input_years
         ]
 
         dates = []
@@ -359,7 +374,9 @@ class WikiUpdater(Processor):
         new_section_group = self.format_wiki_section(meeting_details)
         new_section_title = self.derive_correct_date_header(date)
 
-        page = CC_MTG_WIKI_YEAR_NAME_TEMPLATE.format(get_year_string_from_string(date))
+        page = self.meeting_type.wiki_year_template.format(
+            get_year_string_from_string(date)
+        )
         current_sections = self.get_sections_from_wiki_page(page)
 
         dates = [
@@ -395,18 +412,25 @@ class WikiUpdater(Processor):
         send_to_discord_bots(f"{self.job_type.name} completed for {date}")
 
     def update_transparency_page(self) -> None:
-        """Regenerate the combined 'Meetings Without Published Materials' page
-        from the no-asset set. Idempotent: only saves when the body changes, so
-        meetings that later publish materials fall off automatically.
+        """Regenerate the single combined 'Meetings Without Published Materials'
+        page from every configured type's no-asset set. Idempotent: only saves
+        when the body changes, so meetings that later publish materials fall off
+        automatically.
         """
-        raw = r.smembers(NO_ASSETS_CC_MTG_KEY) or set()
-        keys = [k.decode("utf-8") if isinstance(k, bytes) else k for k in raw]
-        body = render_no_materials_page(keys)
+        entries: list[tuple[str, str]] = []
+        for meeting_type in MEETING_TYPE_BY_SOURCE.values():
+            raw = r.smembers(meeting_type.redis_key(NO_ASSETS_KEY)) or set()
+            for member in raw:
+                key = member.decode("utf-8") if isinstance(member, bytes) else member
+                entries.append((meeting_type.display_name, key))
+        body = render_no_materials_page(entries)
         page = pywikibot.Page(self.site, WIKI_NO_MATERIALS_PAGE)
         if page.text.strip() != body.strip():
             page.text = body
             page.save(summary="Updated meetings without published materials")
-            self.logger.info("Updated transparency page with %d meeting(s)", len(keys))
+            self.logger.info(
+                "Updated transparency page with %d meeting(s)", len(entries)
+            )
 
     def process(self) -> None:
         super().process()
