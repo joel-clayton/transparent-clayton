@@ -20,11 +20,11 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 from celery_app import r
 from src.constants import (
-    AV_SEEN_CC_MTG_KEY,
+    AV_SEEN_KEY,
     DATE_FORMAT,
     DATETIME_FORMAT,
-    DETAIL_CC_MTG_KEY,
-    NO_ASSETS_CC_MTG_KEY,
+    DETAIL_KEY,
+    NO_ASSETS_KEY,
 )
 from src.scrapers.constants import (
     CIVIC_CLERK_URL,
@@ -45,11 +45,8 @@ from src.scrapers.constants import (
 )
 from src.scrapers.alerting import AlertLevel, alert
 from src.scrapers.errors import SiteStructureError, TransientScrapeError
-from src.scrapers.models import (
-    CITY_COUNCIL_MEETING_SOURCE,
-    MeetingRecord,
-    PipelineClass,
-)
+from src.meeting_types import CITY_COUNCIL, MeetingType
+from src.scrapers.models import MeetingRecord, PipelineClass
 from src.scrapers.retry import retry_transient
 from src.scrapers.snapshot import SnapshotStore, fetch_stamp
 from src.scrapers.validate import url_resolves, url_resolves_best_effort
@@ -167,16 +164,23 @@ element_parser = {
 }
 
 
-def get_latest_downloaded_date() -> str:
+def get_latest_downloaded_date(meeting_type: MeetingType = CITY_COUNCIL) -> str:
     # A missing directory means the external volume isn't mounted (transient),
     # which is distinct from a mounted-but-empty directory (a legit "" result).
     if not os.path.isdir(DOWNLOADED_PATH):
         raise TransientScrapeError(
             f"Downloads volume not mounted or missing: {DOWNLOADED_PATH}"
         )
+    # Filter by this type's filename stub so each type has its own watermark
+    # (all types share the downloads dir, disambiguated by stub).
     filenames = os.listdir(DOWNLOADED_PATH)
     time_sorted_filenames = sorted(
-        [filename for filename in filenames if filename.endswith(".mp4")], reverse=True
+        [
+            filename
+            for filename in filenames
+            if filename.endswith(".mp4") and meeting_type.file_stub in filename
+        ],
+        reverse=True,
     )
     if not time_sorted_filenames:
         return ""
@@ -460,24 +464,24 @@ def replay_files_from_snapshot(
         driver.quit()
 
 
-def _av_seen(meeting_id: str) -> bool:
+def _av_seen(meeting_type: MeetingType, meeting_id: str) -> bool:
     """Whether this meeting's video was already handed off to the A/V pipeline."""
-    return bool(r.sismember(AV_SEEN_CC_MTG_KEY, meeting_id))
+    return bool(r.sismember(meeting_type.redis_key(AV_SEEN_KEY), meeting_id))
 
 
-def _mark_av_seen(meeting_id: str) -> None:
+def _mark_av_seen(meeting_type: MeetingType, meeting_id: str) -> None:
     """Record a meeting's video as handed off so future runs skip re-scraping it."""
-    r.sadd(AV_SEEN_CC_MTG_KEY, meeting_id)
+    r.sadd(meeting_type.redis_key(AV_SEEN_KEY), meeting_id)
 
 
-def _mark_no_assets(meeting_key: str) -> None:
+def _mark_no_assets(meeting_type: MeetingType, meeting_key: str) -> None:
     """Record a meeting as having no published materials (transparency page)."""
-    r.sadd(NO_ASSETS_CC_MTG_KEY, meeting_key)
+    r.sadd(meeting_type.redis_key(NO_ASSETS_KEY), meeting_key)
 
 
-def _clear_no_assets(meeting_key: str) -> None:
+def _clear_no_assets(meeting_type: MeetingType, meeting_key: str) -> None:
     """Drop a meeting from the no-assets set once it has published something."""
-    r.srem(NO_ASSETS_CC_MTG_KEY, meeting_key)
+    r.srem(meeting_type.redis_key(NO_ASSETS_KEY), meeting_key)
 
 
 def _warn_unresolved_docs(record: MeetingRecord, meeting_key: str) -> None:
@@ -498,12 +502,14 @@ def _warn_unresolved_docs(record: MeetingRecord, meeting_key: str) -> None:
         )
 
 
-def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meeting]:
-    """Scrape past City Council meetings from the CivicClerk portal.
+def parse_meetings_from_civic_clerk_iframe(
+    latest_date: datetime, meeting_type: MeetingType = CITY_COUNCIL
+) -> list[Meeting]:
+    """Scrape past meetings of one type from the CivicClerk portal.
 
     Returns Meetings whose date is strictly after `latest_date` and strictly
-    before now. Filters by the literal title substring "City Council" so
-    Planning Commission, Trails, etc. are excluded.
+    before now. Filters by ``meeting_type.title_match`` so only that type's
+    meetings are kept (other event types are handled on their own passes).
 
     latest_date is treated as naive local time, matching the format the rest
     of the scraper code uses. Note: CivicClerk's data-date attribute is labeled
@@ -537,7 +543,7 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
         targets: list[tuple[str, datetime, str]] = []
         for list_elem in driver.find_elements(By.CSS_SELECTOR, LISTING_SELECTOR):
             title = list_elem.get_property("innerText") or ""
-            if "City Council" not in title:
+            if meeting_type.title_match not in title:
                 continue
             data_id = list_elem.get_attribute("data-id") or ""
             data_date = list_elem.get_attribute("data-date") or ""
@@ -559,7 +565,8 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
             targets.append((data_id, meeting_dt, video_link))
 
         _civic_clerk_logger.info(
-            f"Found {len(targets)} past City Council meeting(s) after {latest_date}"
+            f"Found {len(targets)} past {meeting_type.display_name} "
+            f"meeting(s) after {latest_date}"
         )
 
         quarantined: list[str] = []
@@ -568,7 +575,7 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
             # A/V pipeline. Meetings without a handed-off video (docs-only, or
             # awaiting a video) are re-examined each run so a later-posted video
             # is still picked up.
-            if _av_seen(data_id):
+            if _av_seen(meeting_type, data_id):
                 _civic_clerk_logger.debug(
                     "Skipping meeting %s (%s); video already handed off",
                     data_id,
@@ -593,7 +600,7 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
                     minutes_and_supplemental_materials=files or None,
                     video=video_link,
                     clip_id=data_id,
-                    source_type=CITY_COUNCIL_MEETING_SOURCE,
+                    source_type=meeting_type.source_type,
                     scraped_at=now_local.isoformat(timespec="seconds"),
                     snapshot_ref=snapshot_ref,
                 )
@@ -608,14 +615,14 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
             # move on. Not persisted to detail and not marked A/V-seen, so if the
             # city later posts materials a future run reclassifies it.
             if record.pipeline_class is PipelineClass.NO_ASSETS:
-                _mark_no_assets(meeting_key)
+                _mark_no_assets(meeting_type, meeting_key)
                 _civic_clerk_logger.debug(
                     "No published materials for meeting %s (%s)", data_id, meeting_dt
                 )
                 continue
 
             # Has assets, so it must not linger on the transparency page.
-            _clear_no_assets(meeting_key)
+            _clear_no_assets(meeting_type, meeting_key)
 
             # FULL: the video must actually resolve before A/V handoff. A network
             # failure raises TransientScrapeError (retried, then bubbles up to
@@ -642,14 +649,14 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
 
             meeting = cast(Meeting, record.model_dump(mode="json"))
             r.hset(
-                DETAIL_CC_MTG_KEY,
+                meeting_type.redis_key(DETAIL_KEY),
                 mapping={meeting_key: json.dumps(meeting)},
             )
             if record.pipeline_class is PipelineClass.FULL:
                 # Only video meetings drive the A/V pipeline; mark handed off so
                 # re-runs skip re-scraping. The task routes FULL keys (only) into
-                # scraped.cc_mtg.
-                _mark_av_seen(data_id)
+                # the scraped list.
+                _mark_av_seen(meeting_type, data_id)
             # Return FULL and DOCS_ONLY meetings: both reach the wiki stage, and
             # the task filters FULL for the A/V pipeline.
             new_meetings.append(meeting)
@@ -666,12 +673,14 @@ def parse_meetings_from_civic_clerk_iframe(latest_date: datetime) -> list[Meetin
     return new_meetings
 
 
-def parse_meetings_from_url(latest_date: datetime) -> list[Meeting]:
+def parse_meetings_from_url(
+    latest_date: datetime, meeting_type: MeetingType = CITY_COUNCIL
+) -> list[Meeting]:
     if latest_date > CIVIC_CLERK_START_DATE:
         logger.info(
             f"Latest date {latest_date} is after {CIVIC_CLERK_START_DATE}, skipping Granicus workflow"
         )
-        return parse_meetings_from_civic_clerk_iframe(latest_date)
+        return parse_meetings_from_civic_clerk_iframe(latest_date, meeting_type)
     else:
         logger.info(
             f"Latest date {latest_date} is before {CIVIC_CLERK_START_DATE}, using Granicus workflow"
@@ -681,7 +690,7 @@ def parse_meetings_from_url(latest_date: datetime) -> list[Meeting]:
         try:
             switch_into_granicus_iframe(driver)
             cc_panel_elem, header_cell_values = find_meetings_panel(
-                driver, "City Council"
+                driver, meeting_type.title_match
             )
 
             # Inspect and parse table body fields
@@ -750,7 +759,7 @@ def parse_meetings_from_url(latest_date: datetime) -> list[Meeting]:
                             ),
                             video=structured_raw_data.get("Video") or "",
                             clip_id=structured_raw_data.get("ClipId") or "",
-                            source_type=CITY_COUNCIL_MEETING_SOURCE,
+                            source_type=meeting_type.source_type,
                         )
                     except ValidationError as exc:
                         logger.warning(
@@ -761,11 +770,13 @@ def parse_meetings_from_url(latest_date: datetime) -> list[Meeting]:
                         continue
                     meeting_details = cast(Meeting, record.model_dump(mode="json"))
                     r.hset(
-                        DETAIL_CC_MTG_KEY,
+                        meeting_type.redis_key(DETAIL_KEY),
                         mapping={meeting_key: json.dumps(meeting_details)},
                     )
                     new_meetings.append(meeting_details)
         finally:
             driver.quit()
-        new_meetings += parse_meetings_from_civic_clerk_iframe(latest_date)
+        new_meetings += parse_meetings_from_civic_clerk_iframe(
+            latest_date, meeting_type
+        )
     return new_meetings
