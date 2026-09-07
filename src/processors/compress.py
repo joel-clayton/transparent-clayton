@@ -12,23 +12,22 @@ from typing import List
 
 import ffmpeg
 
-from src.constants import COMPRESSED_CC_MTG_KEY
+from src.constants import COMPRESSED_KEY
 from src.processors.constants import VIDEO_SEGMENT_TIME, VIDEO_LARGE_SEGMENT_TIME
 from src.processors.process import Processor
 from src.settings import DOWNLOADED_DIR, COMPRESSED_DIR
-from src.types import JobType, SourceType
+from src.types import JobType, SourceType, MEETING_TYPE_BY_SOURCE
 from src.util import get_file_size_in_mb
-
-SRC_FILE_NAME_TEMPLATE = "City Council Meeting {} - City of Clayton.mp4"
-DST_FILE_NAME_TEMPLATE = "Clayton CA City Council Meeting {} - %03d.mp4"
 
 
 class Compressor(Processor):
-    def __init__(self) -> None:
+    def __init__(
+        self, source_type: SourceType = SourceType.CITY_COUNCIL_MEETING
+    ) -> None:
         self.input_job_type = JobType.DOWNLOAD
         self.job_type = JobType.COMPRESS
-        self.source_type = SourceType.CITY_COUNCIL_MEETING
-        self.redis_key = COMPRESSED_CC_MTG_KEY
+        self.source_type = source_type
+        self.redis_key = MEETING_TYPE_BY_SOURCE[source_type].redis_key(COMPRESSED_KEY)
         super().__init__()
 
     def gather_input_dates(self) -> List:

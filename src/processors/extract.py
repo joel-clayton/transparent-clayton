@@ -12,21 +12,20 @@ from typing import List
 
 import ffmpeg
 
-from src.constants import EXTRACTED_CC_MTG_KEY
+from src.constants import EXTRACTED_KEY
 from src.processors.process import Processor
 from src.settings import EXTRACTED_AUDIO_DIR, DOWNLOADED_DIR
-from src.types import SourceType, JobType
-
-SRC_FILE_NAME_TEMPLATE = "City Council Meeting {} - City of Clayton.mp4"
-DST_FILE_NAME_TEMPLATE = "City Council Meeting {} - City of Clayton.m4a"
+from src.types import SourceType, JobType, MEETING_TYPE_BY_SOURCE
 
 
 class Extractor(Processor):
-    def __init__(self) -> None:
+    def __init__(
+        self, source_type: SourceType = SourceType.CITY_COUNCIL_MEETING
+    ) -> None:
         self.input_job_type = JobType.DOWNLOAD
         self.job_type = JobType.EXTRACT_AUDIO
-        self.source_type = SourceType.CITY_COUNCIL_MEETING
-        self.redis_key = EXTRACTED_CC_MTG_KEY
+        self.source_type = source_type
+        self.redis_key = MEETING_TYPE_BY_SOURCE[source_type].redis_key(EXTRACTED_KEY)
         super().__init__()
 
     def gather_input_dates(self) -> List:
