@@ -1,3 +1,5 @@
+import os
+
 import redis
 from celery import Celery
 
@@ -18,7 +20,9 @@ app.conf.update(
     enable_utc=True,
 )
 
-r = redis.Redis(host="localhost", port=6379, db=0)
+# Data client for pipeline state. Its DB is overridable (REDIS_DB) so a dry run
+# can point at an isolated database without touching production keys.
+r = redis.Redis(host="localhost", port=6379, db=int(os.environ.get("REDIS_DB", "0")))
 
 if __name__ == "__main__":
     app.start()

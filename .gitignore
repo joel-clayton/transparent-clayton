@@ -13,3 +13,6 @@ pywikibot-Joelclayton*
 apicache/
 throttle.ctrl
 .claude/
+
+# e2e dry-run throwaway assets (wiped each run)
+tests/e2e_dryrun_assets/
