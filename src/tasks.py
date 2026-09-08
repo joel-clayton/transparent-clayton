@@ -6,7 +6,8 @@ from celery.exceptions import Ignore
 from celery.schedules import crontab
 
 from celery_app import app, r
-from src.constants import SCRAPED_CC_MTG_KEY, EXITED_EARLY
+from src.constants import SCRAPED_KEY, EXITED_EARLY
+from src.meeting_types import MeetingType
 from src.processors.archive_docs import DocumentArchiver
 from src.processors.compress import Compressor
 from src.processors.download import Downloader
@@ -15,46 +16,70 @@ from src.processors.transcribe import Transcriber
 from src.processors.update_wiki import WikiUpdater
 from src.scrapers.cc_meetings import get_latest_downloaded_date, parse_meetings_from_url
 from src.scrapers.alerting import AlertLevel, alert
+from src.scrapers.constants import CIVIC_CLERK_START_DATE
 from src.scrapers.errors import SiteStructureError, TransientScrapeError
 from src.scrapers.models import PipelineClass
 from src.processors.upload_transcript import TranscriptUploader
 from src.processors.upload_video import VideoUploader
+from src.types import MEETING_TYPE_BY_SOURCE, Meeting
 from src.util import get_datetime_from_string, send_to_discord_bots
 
 logger = logging.getLogger(__name__)
 
+# Fallback scrape watermark for a meeting type with no downloads yet (a brand-new
+# type has no file to derive "latest downloaded" from). CivicClerk-era start.
+NEW_TYPE_SCRAPE_START = CIVIC_CLERK_START_DATE
 
-@app.task()
-def get_cc_meeting_details_for_download() -> None:
-    try:
-        # Inside the try so an unmounted volume surfaces as a transient error
-        # (get_latest_downloaded_date raises) rather than crashing uncaught.
-        latest_date_str = get_latest_downloaded_date()
-        logger.info(f"latest date str: {latest_date_str}")
-        if not latest_date_str:
-            logger.warning(
-                "Did not find any downloaded City Council meetings in storage."
-            )
-            return
+
+def _scrape_type_for_download(meeting_type: MeetingType) -> list[Meeting]:
+    """Scrape one meeting type, publishing its FULL (video) dates to the A/V
+    worklist. Returns the meetings found (FULL + DOCS_ONLY) this run."""
+    latest_date_str = get_latest_downloaded_date(meeting_type)
+    if latest_date_str:
         latest_date = get_datetime_from_string(latest_date_str)
         if latest_date is None:
             raise Exception(
                 f"Could not parse a date from {latest_date_str!r}; skipping"
             )
-        meetings_to_process = parse_meetings_from_url(latest_date)
-        if not meetings_to_process:
-            raise Ignore(EXITED_EARLY)
-        # Only FULL (video) meetings drive the A/V pipeline; docs-only meetings
-        # are handled by the wiki/archival stages and must never be downloaded.
-        video_dates = sorted(
-            m["key"]
-            for m in meetings_to_process
-            if m.get("pipeline_class") == PipelineClass.FULL.value
-            and (parsed := get_datetime_from_string(m["key"])) is not None
-            and parsed > latest_date
+    else:
+        # No downloads yet for this type — scrape from the fallback start so it
+        # bootstraps (and catches up any backlog) rather than never running.
+        latest_date = NEW_TYPE_SCRAPE_START
+        logger.info(
+            "No downloaded %s meetings yet; scraping from %s",
+            meeting_type.display_name,
+            latest_date,
         )
-        r.set(SCRAPED_CC_MTG_KEY, json.dumps(video_dates))
-        logger.info(f"meetings_to_process: {meetings_to_process}")
+    meetings = parse_meetings_from_url(latest_date, meeting_type)
+    # Only FULL (video) meetings drive the A/V pipeline; docs-only meetings are
+    # handled by the wiki/archival stages and must never be downloaded.
+    video_dates = sorted(
+        m["key"]
+        for m in meetings
+        if m.get("pipeline_class") == PipelineClass.FULL.value
+        and (parsed := get_datetime_from_string(m["key"])) is not None
+        and parsed > latest_date
+    )
+    r.set(meeting_type.redis_key(SCRAPED_KEY), json.dumps(video_dates))
+    return meetings
+
+
+@app.task()
+def get_cc_meeting_details_for_download() -> None:
+    try:
+        # Scrape each configured meeting type into its own worklist. Inside the
+        # try so an unmounted volume (get_latest_downloaded_date raises) surfaces
+        # as a transient error rather than crashing uncaught.
+        found_any = False
+        for meeting_type in MEETING_TYPE_BY_SOURCE.values():
+            meetings = _scrape_type_for_download(meeting_type)
+            logger.info(
+                "%s meetings to process: %s", meeting_type.display_name, meetings
+            )
+            if meetings:
+                found_any = True
+        if not found_any:
+            raise Ignore(EXITED_EARLY)
         return
     except Ignore:
         # "No new meetings" (EXITED_EARLY) is the normal empty result — stay quiet.
@@ -77,52 +102,54 @@ def get_cc_meeting_details_for_download() -> None:
         raise Ignore(f"Something has gone pear-shaped: {e}")
 
 
+# Each stage runs once per configured meeting type. Processors keyed by the
+# SourceType enum take it directly; the scraper-side archiver takes a MeetingType.
 @app.task
 def download_cc_meeting_video() -> None:
-    downloader = Downloader()
-    downloader.process()
+    for source_type in MEETING_TYPE_BY_SOURCE:
+        Downloader(source_type).process()
 
 
 @app.task
 def compress_cc_meeting_video() -> None:
-    compressor = Compressor()
-    compressor.process()
+    for source_type in MEETING_TYPE_BY_SOURCE:
+        Compressor(source_type).process()
 
 
 @app.task
 def upload_cc_meeting_video() -> None:
-    video_uploader = VideoUploader()
-    video_uploader.process()
+    for source_type in MEETING_TYPE_BY_SOURCE:
+        VideoUploader(source_type).process()
 
 
 @app.task
 def extract_cc_meeting_audio() -> None:
-    extractor = Extractor()
-    extractor.process()
+    for source_type in MEETING_TYPE_BY_SOURCE:
+        Extractor(source_type).process()
 
 
 @app.task
 def transcribe_cc_meeting_audio() -> None:
-    transcriber = Transcriber()
-    transcriber.process()
+    for source_type in MEETING_TYPE_BY_SOURCE:
+        Transcriber(source_type).process()
 
 
 @app.task
 def upload_cc_meeting_transcript() -> None:
-    transcript_uploader = TranscriptUploader()
-    transcript_uploader.process()
+    for source_type in MEETING_TYPE_BY_SOURCE:
+        TranscriptUploader(source_type).process()
 
 
 @app.task
 def archive_cc_meeting_docs() -> None:
-    archiver = DocumentArchiver()
-    archiver.process()
+    for meeting_type in MEETING_TYPE_BY_SOURCE.values():
+        DocumentArchiver(meeting_type).process()
 
 
 @app.task
 def update_cc_mtg_wiki() -> None:
-    wiki_updater = WikiUpdater()
-    wiki_updater.process()
+    for source_type in MEETING_TYPE_BY_SOURCE:
+        WikiUpdater(source_type).process()
 
 
 @app.task
