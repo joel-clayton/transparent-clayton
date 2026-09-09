@@ -1,10 +1,16 @@
+import os
 from datetime import datetime
 from pathlib import Path
 
 SOURCE_URL = "https://claytonca.gov/government/city-council/"
 CIVIC_CLERK_URL = "https://claytonca.portal.civicclerk.com/"
-DOWNLOADED_PATH = Path("/Volumes/Gautam/Clayton/CC Meetings/Downloaded")
-RAW_SNAPSHOT_PATH = Path("/Volumes/Gautam/Clayton/CC Meetings/RawSnapshots")
+# Overridable storage root (shared with src.settings) so a dry run can point the
+# whole pipeline at a throwaway directory off the external volume.
+_STORAGE_ROOT = os.environ.get(
+    "PIPELINE_STORAGE_ROOT", "/Volumes/Gautam/Clayton/CC Meetings"
+)
+DOWNLOADED_PATH = Path(_STORAGE_ROOT) / "Downloaded"
+RAW_SNAPSHOT_PATH = Path(_STORAGE_ROOT) / "RawSnapshots"
 VIDEO_FILE_NAME_TEMPLATE = (
     "City Council Meeting {} - City of Clayton.mp4"  # e.g. 2024-10-02
 )
