@@ -20,6 +20,14 @@ class MeetingType:
     key: str  # short namespace slug for Redis keys + filenames, e.g. "cc_mtg"
     display_name: str  # human name, e.g. "City Council"
     title_match: str  # substring matched against a CivicClerk listing title
+    category: str = ""  # exact CivicClerk API categoryName; defaults to display_name
+
+    def __post_init__(self) -> None:
+        # Most types' API category equals their display name; only where the
+        # portal's categoryName differs (e.g. GHAD's full legal name) is it set
+        # explicitly. object.__setattr__ because the dataclass is frozen.
+        if not self.category:
+            object.__setattr__(self, "category", self.display_name)
 
     # --- identity ---
     @property
