@@ -5,7 +5,6 @@ import re
 import time
 from datetime import date, datetime
 from typing import TypedDict, Any, Callable, cast
-from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
 from selenium import webdriver
@@ -27,6 +26,7 @@ from src.constants import (
     NO_ASSETS_KEY,
 )
 from src.scrapers.constants import (
+    CIVIC_CLERK_TZ,
     CIVIC_CLERK_URL,
     CLIP_ARG_REGEX,
     DATE_INPUT_FORMAT,
@@ -44,6 +44,14 @@ from src.scrapers.constants import (
     CIVIC_CLERK_START_DATE,
 )
 from src.scrapers.alerting import AlertLevel, alert
+from src.scrapers.civic_clerk_api import (
+    event_datetime,
+    fetch_events,
+    matches_category,
+    merge_by_datetime,
+    split_documents,
+    video_url,
+)
 from src.scrapers.errors import SiteStructureError, TransientScrapeError
 from src.meeting_types import CITY_COUNCIL, MeetingType
 from src.scrapers.models import MeetingRecord, PipelineClass
@@ -249,7 +257,6 @@ def find_meetings_panel(driver: WebDriver, heading: str) -> tuple[Any, list[str]
     )
 
 
-CIVIC_CLERK_TZ = ZoneInfo("America/Los_Angeles")
 _civic_clerk_logger = logging.getLogger(f"{__name__}::civic_clerk")
 
 
@@ -505,171 +512,159 @@ def _warn_unresolved_docs(record: MeetingRecord, meeting_key: str) -> None:
 def parse_meetings_from_civic_clerk_iframe(
     latest_date: datetime, meeting_type: MeetingType = CITY_COUNCIL
 ) -> list[Meeting]:
-    """Scrape past meetings of one type from the CivicClerk portal.
+    """Fetch past meetings of one type from the CivicClerk OData API.
 
     Returns Meetings whose date is strictly after `latest_date` and strictly
-    before now. Filters by ``meeting_type.title_match`` so only that type's
-    meetings are kept (other event types are handled on their own passes).
+    before now. Filters by ``meeting_type.category`` (the exact CivicClerk
+    ``categoryName``) so only that type's meetings are kept.
 
-    latest_date is treated as naive local time, matching the format the rest
-    of the scraper code uses. Note: CivicClerk's data-date attribute is labeled
-    with a 'Z' suffix but the front-end renders it as wall-clock local time
-    (e.g. data-date "2026-05-19T19:00:00Z" displays as "7:00 PM PDT"), so we
-    strip the timezone rather than convert.
+    (The name is historical — this used to scrape the portal's DOM, which only
+    exposed *upcoming* events and so missed past meetings in a lookback range.
+    It now queries the underlying API via :mod:`src.scrapers.civic_clerk_api`;
+    retiring the leftover Selenium/DOM code is tracked in issue #28.)
+
+    latest_date is treated as naive local time, matching the format the rest of
+    the scraper uses. CivicClerk's ``startDateTime`` is labeled with a 'Z' suffix
+    but is really wall-clock local time (e.g. "2026-05-19T19:00:00Z" is 7:00 PM
+    PDT), so we strip the timezone rather than convert.
     """
-    driver = _civic_clerk_browser()
     store = SnapshotStore(RAW_SNAPSHOT_PATH)
     new_meetings: list[Meeting] = []
-    try:
-        # Fail fast (and transiently) if the snapshot volume isn't mounted,
-        # before spending time driving the browser.
-        store.ensure_ready()
-        retry_transient(
-            lambda: _load_meeting_listing(driver),
-            label="load CivicClerk meeting listing",
-            attempts=SCRAPE_RETRY_ATTEMPTS,
-            base_delay=SCRAPE_RETRY_BASE_DELAY,
-            max_delay=SCRAPE_RETRY_MAX_DELAY,
-            deadline=SCRAPE_RETRY_DEADLINE,
+    # Fail fast (and transiently) if the snapshot volume isn't mounted.
+    store.ensure_ready()
+    now_local = datetime.now(CIVIC_CLERK_TZ).replace(tzinfo=None)
+    stamp = fetch_stamp(now_local)
+
+    events = retry_transient(
+        lambda: fetch_events(latest_date, now_local),
+        label=f"fetch CivicClerk events for {meeting_type.display_name}",
+        attempts=SCRAPE_RETRY_ATTEMPTS,
+        base_delay=SCRAPE_RETRY_BASE_DELAY,
+        max_delay=SCRAPE_RETRY_MAX_DELAY,
+        deadline=SCRAPE_RETRY_DEADLINE,
+    )
+    # Snapshot the raw API response so a later parser change can be replayed.
+    _try_snapshot(
+        lambda: store.write("_events", stamp, "events.json", json.dumps(events)),
+        "events response",
+    )
+
+    # This type's events, bounded exactly (the API filter is only a narrowing),
+    # then merged to one event per meeting datetime (the portal can split a
+    # meeting's assets — or an empty duplicate — across same-time records).
+    targets = merge_by_datetime(
+        [
+            event
+            for event in events
+            if matches_category(event, meeting_type)
+            and latest_date < event_datetime(event) < now_local
+        ]
+    )
+    _civic_clerk_logger.info(
+        f"Found {len(targets)} past {meeting_type.display_name} "
+        f"meeting(s) after {latest_date}"
+    )
+
+    quarantined: list[str] = []
+    for event in targets:
+        data_id = str(event.get("id") or "")
+        meeting_dt = event_datetime(event)
+        # Idempotency: skip meetings whose video was already handed off to the
+        # A/V pipeline. Meetings without a handed-off video (docs-only, or
+        # awaiting a video) are re-examined each run so a later-posted video is
+        # still picked up.
+        if _av_seen(meeting_type, data_id):
+            _civic_clerk_logger.debug(
+                "Skipping meeting %s (%s); video already handed off",
+                data_id,
+                meeting_dt,
+            )
+            continue
+        # Capture this event's raw JSON so a broken parser can be replayed.
+        snapshot_ref = _try_snapshot(
+            lambda: store.write(data_id, stamp, "event.json", json.dumps(event)),
+            f"event {data_id}",
         )
-        now_local = datetime.now(CIVIC_CLERK_TZ).replace(tzinfo=None)
-        stamp = fetch_stamp(now_local)
-        # Snapshot the raw listing before we navigate away, so a later parser
-        # break can be replayed; element references also go stale once we leave.
-        _try_snapshot(
-            lambda: store.write_listing(stamp, driver.page_source),
-            "meeting listing",
+        meeting_key = meeting_dt.strftime(DATETIME_FORMAT)
+        video_link = video_url(event)
+        agenda_packet, supplemental = split_documents(event)
+        try:
+            record = MeetingRecord(
+                key=meeting_key,
+                duration="",
+                agenda=agenda_packet,
+                agenda_packet=agenda_packet,
+                minutes_and_supplemental_materials=supplemental or None,
+                video=video_link,
+                clip_id=data_id,
+                source_type=meeting_type.source_type,
+                scraped_at=now_local.isoformat(timespec="seconds"),
+                snapshot_ref=snapshot_ref,
+            )
+        except ValidationError as exc:
+            quarantined.append(f"{meeting_key}: failed validation ({exc})")
+            _civic_clerk_logger.debug(
+                "Quarantined meeting %s; failed validation: %s", meeting_key, exc
+            )
+            continue
+
+        # NO_ASSETS: nothing published — record for the transparency page and
+        # move on. Not persisted to detail and not marked A/V-seen, so if the
+        # city later posts materials a future run reclassifies it.
+        if record.pipeline_class is PipelineClass.NO_ASSETS:
+            _mark_no_assets(meeting_type, meeting_key)
+            _civic_clerk_logger.debug(
+                "No published materials for meeting %s (%s)", data_id, meeting_dt
+            )
+            continue
+
+        # Has assets, so it must not linger on the transparency page.
+        _clear_no_assets(meeting_type, meeting_key)
+
+        # FULL: the video must actually resolve before A/V handoff. A network
+        # failure raises TransientScrapeError (retried, then bubbles up to
+        # alert); a real error status quarantines just this record.
+        if record.pipeline_class is PipelineClass.FULL:
+            video_ok = retry_transient(
+                lambda: url_resolves(record.video),
+                label=f"resolve video URL for {meeting_key}",
+                attempts=SCRAPE_RETRY_ATTEMPTS,
+                base_delay=SCRAPE_RETRY_BASE_DELAY,
+                max_delay=SCRAPE_RETRY_MAX_DELAY,
+                deadline=SCRAPE_RETRY_DEADLINE,
+            )
+            if not video_ok:
+                quarantined.append(f"{meeting_key}: video URL not reachable")
+                _civic_clerk_logger.debug(
+                    "Quarantined meeting %s; video URL returned an error: %s",
+                    meeting_key,
+                    record.video,
+                )
+                continue
+
+        _warn_unresolved_docs(record, meeting_key)
+
+        meeting = cast(Meeting, record.model_dump(mode="json"))
+        r.hset(
+            meeting_type.redis_key(DETAIL_KEY),
+            mapping={meeting_key: json.dumps(meeting)},
         )
-        targets: list[tuple[str, datetime, str]] = []
-        for list_elem in driver.find_elements(By.CSS_SELECTOR, LISTING_SELECTOR):
-            title = list_elem.get_property("innerText") or ""
-            if meeting_type.title_match not in title:
-                continue
-            data_id = list_elem.get_attribute("data-id") or ""
-            data_date = list_elem.get_attribute("data-date") or ""
-            if not (data_id and data_date):
-                continue
-            meeting_dt = datetime.fromisoformat(
-                data_date.replace("Z", "+00:00")
-            ).replace(tzinfo=None)
-            if meeting_dt <= latest_date or meeting_dt >= now_local:
-                continue
-            video_div = list_elem.find_element(By.XPATH, "following-sibling::*")
-            link_elems = video_div.find_elements(
-                By.CSS_SELECTOR, "[aria-label='Go To Event Media']"
-            )
-            if link_elems:
-                video_link = link_elems[0].get_property("href")
-            else:
-                video_link = ""
-            targets.append((data_id, meeting_dt, video_link))
+        if record.pipeline_class is PipelineClass.FULL:
+            # Only video meetings drive the A/V pipeline; mark handed off so
+            # re-runs skip re-scraping. The task routes FULL keys (only) into
+            # the scraped list.
+            _mark_av_seen(meeting_type, data_id)
+        # Return FULL and DOCS_ONLY meetings: both reach the wiki stage, and
+        # the task filters FULL for the A/V pipeline.
+        new_meetings.append(meeting)
 
-        _civic_clerk_logger.info(
-            f"Found {len(targets)} past {meeting_type.display_name} "
-            f"meeting(s) after {latest_date}"
+    if quarantined:
+        # One batched summary instead of per-record noise on every run.
+        alert(
+            AlertLevel.WARNING,
+            f"{len(quarantined)} CivicClerk meeting(s) skipped/quarantined "
+            "this run:\n- " + "\n- ".join(quarantined),
         )
-
-        quarantined: list[str] = []
-        for data_id, meeting_dt, video_link in targets:
-            # Idempotency: skip meetings whose video was already handed off to the
-            # A/V pipeline. Meetings without a handed-off video (docs-only, or
-            # awaiting a video) are re-examined each run so a later-posted video
-            # is still picked up.
-            if _av_seen(meeting_type, data_id):
-                _civic_clerk_logger.debug(
-                    "Skipping meeting %s (%s); video already handed off",
-                    data_id,
-                    meeting_dt,
-                )
-                continue
-            files = _scrape_civic_clerk_meeting_files(driver, data_id)
-            # The driver is still on the files page; capture it before parsing
-            # decisions so a broken parser can be replayed against this exact DOM.
-            snapshot_ref = _try_snapshot(
-                lambda: store.write(data_id, stamp, "files.html", driver.page_source),
-                f"files page for meeting {data_id}",
-            )
-            meeting_key = meeting_dt.strftime(DATETIME_FORMAT)
-            agenda_packet = files.pop("Agenda Packet", "")
-            try:
-                record = MeetingRecord(
-                    key=meeting_key,
-                    duration="",
-                    agenda=agenda_packet,
-                    agenda_packet=agenda_packet,
-                    minutes_and_supplemental_materials=files or None,
-                    video=video_link,
-                    clip_id=data_id,
-                    source_type=meeting_type.source_type,
-                    scraped_at=now_local.isoformat(timespec="seconds"),
-                    snapshot_ref=snapshot_ref,
-                )
-            except ValidationError as exc:
-                quarantined.append(f"{meeting_key}: failed validation ({exc})")
-                _civic_clerk_logger.debug(
-                    "Quarantined meeting %s; failed validation: %s", meeting_key, exc
-                )
-                continue
-
-            # NO_ASSETS: nothing published — record for the transparency page and
-            # move on. Not persisted to detail and not marked A/V-seen, so if the
-            # city later posts materials a future run reclassifies it.
-            if record.pipeline_class is PipelineClass.NO_ASSETS:
-                _mark_no_assets(meeting_type, meeting_key)
-                _civic_clerk_logger.debug(
-                    "No published materials for meeting %s (%s)", data_id, meeting_dt
-                )
-                continue
-
-            # Has assets, so it must not linger on the transparency page.
-            _clear_no_assets(meeting_type, meeting_key)
-
-            # FULL: the video must actually resolve before A/V handoff. A network
-            # failure raises TransientScrapeError (retried, then bubbles up to
-            # alert); a real error status quarantines just this record.
-            if record.pipeline_class is PipelineClass.FULL:
-                video_ok = retry_transient(
-                    lambda: url_resolves(record.video),
-                    label=f"resolve video URL for {meeting_key}",
-                    attempts=SCRAPE_RETRY_ATTEMPTS,
-                    base_delay=SCRAPE_RETRY_BASE_DELAY,
-                    max_delay=SCRAPE_RETRY_MAX_DELAY,
-                    deadline=SCRAPE_RETRY_DEADLINE,
-                )
-                if not video_ok:
-                    quarantined.append(f"{meeting_key}: video URL not reachable")
-                    _civic_clerk_logger.debug(
-                        "Quarantined meeting %s; video URL returned an error: %s",
-                        meeting_key,
-                        record.video,
-                    )
-                    continue
-
-            _warn_unresolved_docs(record, meeting_key)
-
-            meeting = cast(Meeting, record.model_dump(mode="json"))
-            r.hset(
-                meeting_type.redis_key(DETAIL_KEY),
-                mapping={meeting_key: json.dumps(meeting)},
-            )
-            if record.pipeline_class is PipelineClass.FULL:
-                # Only video meetings drive the A/V pipeline; mark handed off so
-                # re-runs skip re-scraping. The task routes FULL keys (only) into
-                # the scraped list.
-                _mark_av_seen(meeting_type, data_id)
-            # Return FULL and DOCS_ONLY meetings: both reach the wiki stage, and
-            # the task filters FULL for the A/V pipeline.
-            new_meetings.append(meeting)
-
-        if quarantined:
-            # One batched summary instead of per-record noise on every run.
-            alert(
-                AlertLevel.WARNING,
-                f"{len(quarantined)} CivicClerk meeting(s) skipped/quarantined "
-                "this run:\n- " + "\n- ".join(quarantined),
-            )
-    finally:
-        driver.quit()
     return new_meetings
 
 

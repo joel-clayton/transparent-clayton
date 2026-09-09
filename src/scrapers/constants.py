@@ -1,9 +1,32 @@
 import os
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+# CivicClerk timestamps are labeled 'Z' but render as wall-clock local time, so
+# "now" and the lookback watermark are compared as naive local datetimes.
+CIVIC_CLERK_TZ = ZoneInfo("America/Los_Angeles")
 
 SOURCE_URL = "https://claytonca.gov/government/city-council/"
 CIVIC_CLERK_URL = "https://claytonca.portal.civicclerk.com/"
+# The portal SPA is backed by a public, no-auth OData API. Querying it with a
+# date range returns every event (all types, all assets); the SPA's own default
+# view only requests upcoming events, which is why DOM scraping missed the past.
+CIVIC_CLERK_API_URL = "https://claytonca.api.civicclerk.com/v1/"
+CIVIC_CLERK_EVENTS_ENDPOINT = CIVIC_CLERK_API_URL + "Events"
+# A published document's stable stream URL, by numeric fileId (from an event's
+# publishedFiles[]). Unlike the old scraped blob URLs, this does not expire.
+CIVIC_CLERK_FILE_STREAM_TEMPLATE = (
+    CIVIC_CLERK_API_URL
+    + "Meetings/GetMeetingFileStream(fileId={file_id},plainText=false)"
+)
+# Video CDN base. An event's mediaStreamPath ("CLAYTONCA/<guid>.mp4") maps to a
+# playable MP4 at this base, lowercased.
+CIVIC_CLERK_MEDIA_BASE = "https://cpmedia.azureedge.net/"
+# Per-request timeout and a safety cap on pagination (the API pages ~15/response
+# via @odata.nextLink); the cap bounds a runaway follow loop.
+CIVIC_CLERK_API_TIMEOUT = 30.0  # seconds
+CIVIC_CLERK_API_MAX_PAGES = 400
 # Overridable storage root (shared with src.settings) so a dry run can point the
 # whole pipeline at a throwaway directory off the external volume.
 _STORAGE_ROOT = os.environ.get(

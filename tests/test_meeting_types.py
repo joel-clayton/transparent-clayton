@@ -166,5 +166,47 @@ class TestGeneratedSourceTypeDicts(unittest.TestCase):
         )
 
 
+class TestConfiguredTypesCoverEveryCategory(unittest.TestCase):
+    """All CivicClerk categories the city posts are configured, and each type's
+    namespace-defining fields are unique (a collision would silently merge two
+    types' Redis keys and download watermarks)."""
+
+    # The exact categoryName of every body observed in the portal.
+    EXPECTED_CATEGORIES = {
+        "City Council",
+        "Planning Commission",
+        "Budget and Audit Committee",
+        "City Sponsored Special Events Committee",
+        "Financial Sustainability Committee",
+        "Trails and Landscaping Committee",
+        "Oakhurst Geological Hazard Abatement District",
+        "General",
+    }
+
+    def test_registry_categories_match_the_portal(self):
+        from src.types import MEETING_TYPE_BY_SOURCE
+
+        categories = {t.category for t in MEETING_TYPE_BY_SOURCE.values()}
+        self.assertEqual(categories, self.EXPECTED_CATEGORIES)
+
+    def test_keys_and_file_stubs_are_unique(self):
+        from src.types import MEETING_TYPE_BY_SOURCE
+
+        types = list(MEETING_TYPE_BY_SOURCE.values())
+        keys = [t.key for t in types]
+        stubs = [t.file_stub for t in types]
+        self.assertEqual(len(keys), len(set(keys)))
+        self.assertEqual(len(stubs), len(set(stubs)))
+
+    def test_category_defaults_to_display_name_but_ghad_overrides(self):
+        # A type whose portal category equals its display name needn't set it.
+        self.assertEqual(mt.BUDGET_AND_AUDIT.category, "Budget and Audit Committee")
+        # GHAD's display name is its common short name; category is explicit.
+        self.assertEqual(mt.GHAD.display_name, "GHAD")
+        self.assertEqual(
+            mt.GHAD.category, "Oakhurst Geological Hazard Abatement District"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

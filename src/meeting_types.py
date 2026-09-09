@@ -20,6 +20,14 @@ class MeetingType:
     key: str  # short namespace slug for Redis keys + filenames, e.g. "cc_mtg"
     display_name: str  # human name, e.g. "City Council"
     title_match: str  # substring matched against a CivicClerk listing title
+    category: str = ""  # exact CivicClerk API categoryName; defaults to display_name
+
+    def __post_init__(self) -> None:
+        # Most types' API category equals their display name; only where the
+        # portal's categoryName differs (e.g. GHAD's full legal name) is it set
+        # explicitly. object.__setattr__ because the dataclass is frozen.
+        if not self.category:
+            object.__setattr__(self, "category", self.display_name)
 
     # --- identity ---
     @property
@@ -111,8 +119,54 @@ PLANNING_COMMISSION = MeetingType(
     title_match="Planning Commission",
 )
 
+# The remaining bodies the city posts to CivicClerk. Each ``title_match`` and
+# ``category`` is the exact portal ``categoryName`` so the API scraper routes by
+# an exact match. GHAD keeps its short common name (matching its ``eventName``)
+# as the display name for readable files/wiki pages, so its ``category`` — the
+# portal's full legal name — is given explicitly.
+BUDGET_AND_AUDIT = MeetingType(
+    key="bac_mtg",
+    display_name="Budget and Audit Committee",
+    title_match="Budget and Audit Committee",
+)
+CITY_SPONSORED_SPECIAL_EVENTS = MeetingType(
+    key="csse_mtg",
+    display_name="City Sponsored Special Events Committee",
+    title_match="City Sponsored Special Events Committee",
+)
+FINANCIAL_SUSTAINABILITY = MeetingType(
+    key="fsc_mtg",
+    display_name="Financial Sustainability Committee",
+    title_match="Financial Sustainability Committee",
+)
+TRAILS_AND_LANDSCAPING = MeetingType(
+    key="tlc_mtg",
+    display_name="Trails and Landscaping Committee",
+    title_match="Trails and Landscaping Committee",
+)
+GHAD = MeetingType(
+    key="ghad_mtg",
+    display_name="GHAD",
+    title_match="Oakhurst Geological Hazard Abatement District",
+    category="Oakhurst Geological Hazard Abatement District",
+)
+GENERAL = MeetingType(
+    key="gen_mtg",
+    display_name="General",
+    title_match="General",
+)
+
 # Order matters for classification: the first matching type wins.
-MEETING_TYPES: list[MeetingType] = [CITY_COUNCIL, PLANNING_COMMISSION]
+MEETING_TYPES: list[MeetingType] = [
+    CITY_COUNCIL,
+    PLANNING_COMMISSION,
+    BUDGET_AND_AUDIT,
+    CITY_SPONSORED_SPECIAL_EVENTS,
+    FINANCIAL_SUSTAINABILITY,
+    TRAILS_AND_LANDSCAPING,
+    GHAD,
+    GENERAL,
+]
 
 
 def classify(title: str) -> MeetingType | None:

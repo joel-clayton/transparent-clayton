@@ -11,7 +11,17 @@ from src.constants import (
     VIDEO_UPLOADED_CC_MTG_KEY,
     CC_MTG_PARENT_FOLDER_ID,
 )
-from src.meeting_types import CITY_COUNCIL, PLANNING_COMMISSION, MeetingType
+from src.meeting_types import (
+    BUDGET_AND_AUDIT,
+    CITY_COUNCIL,
+    CITY_SPONSORED_SPECIAL_EVENTS,
+    FINANCIAL_SUSTAINABILITY,
+    GENERAL,
+    GHAD,
+    PLANNING_COMMISSION,
+    TRAILS_AND_LANDSCAPING,
+    MeetingType,
+)
 from src.settings import (
     COMPRESSED_DIR,
     DOWNLOADED_DIR,
@@ -24,13 +34,26 @@ class SourceType(Enum):
     CITY_COUNCIL_MEETING = 1
     BUDGET_AND_AUDIT_MEETING = 2
     PLANNING_COMMISSION = 3
+    CITY_SPONSORED_SPECIAL_EVENTS = 4
+    FINANCIAL_SUSTAINABILITY = 5
+    TRAILS_AND_LANDSCAPING = 6
+    GHAD = 7
+    GENERAL = 8
 
 
 # Bridge the enum (used as a dict key across the pipeline) to the MeetingType
-# config that is the single source of every per-type string.
+# config that is the single source of every per-type string. Every configured
+# CivicClerk category the city posts is routed here; the pipeline iterates these
+# and scrapes/classifies each type on its own pass.
 MEETING_TYPE_BY_SOURCE: dict[SourceType, MeetingType] = {
     SourceType.CITY_COUNCIL_MEETING: CITY_COUNCIL,
     SourceType.PLANNING_COMMISSION: PLANNING_COMMISSION,
+    SourceType.BUDGET_AND_AUDIT_MEETING: BUDGET_AND_AUDIT,
+    SourceType.CITY_SPONSORED_SPECIAL_EVENTS: CITY_SPONSORED_SPECIAL_EVENTS,
+    SourceType.FINANCIAL_SUSTAINABILITY: FINANCIAL_SUSTAINABILITY,
+    SourceType.TRAILS_AND_LANDSCAPING: TRAILS_AND_LANDSCAPING,
+    SourceType.GHAD: GHAD,
+    SourceType.GENERAL: GENERAL,
 }
 
 
