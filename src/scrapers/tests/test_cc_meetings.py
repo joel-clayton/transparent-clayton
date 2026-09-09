@@ -107,6 +107,26 @@ class TestRedisTrackHelpers(unittest.TestCase):
             r.srem.assert_called_once_with(NO_ASSETS_CC_MTG_KEY, key)
 
 
+class TestParseMeetingsFromUrlRouting(unittest.TestCase):
+    def test_cutover_watermark_uses_api_not_granicus(self):
+        # A new meeting type's fallback watermark is exactly the CivicClerk
+        # cutover; it must route to the API, never open a (Granicus) browser.
+        with (
+            mock.patch.object(
+                cc_meetings,
+                "parse_meetings_from_civic_clerk_iframe",
+                return_value=["from-api"],
+            ) as api,
+            mock.patch.object(cc_meetings, "browser") as browser,
+        ):
+            result = cc_meetings.parse_meetings_from_url(
+                cc_meetings.CIVIC_CLERK_START_DATE, CITY_COUNCIL
+            )
+        self.assertEqual(result, ["from-api"])
+        api.assert_called_once()
+        browser.assert_not_called()
+
+
 class TestGetLatestDownloadedDate(unittest.TestCase):
     def _latest(self, meeting_type, filenames):
         with (
