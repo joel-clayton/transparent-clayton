@@ -671,9 +671,16 @@ def parse_meetings_from_civic_clerk_iframe(
 def parse_meetings_from_url(
     latest_date: datetime, meeting_type: MeetingType = CITY_COUNCIL
 ) -> list[Meeting]:
-    if latest_date > CIVIC_CLERK_START_DATE:
+    # >= so a watermark exactly at the CivicClerk cutover uses the API, not
+    # Granicus. This matters for a brand-new meeting type: its fallback watermark
+    # is NEW_TYPE_SCRAPE_START == CIVIC_CLERK_START_DATE, and such types have no
+    # Granicus history — routing them to the (Selenium) Granicus path would
+    # scrape the wrong source and fail. Granicus is reached only for a watermark
+    # strictly before the cutover (genuine pre-CivicClerk backfill).
+    if latest_date >= CIVIC_CLERK_START_DATE:
         logger.info(
-            f"Latest date {latest_date} is after {CIVIC_CLERK_START_DATE}, skipping Granicus workflow"
+            f"Latest date {latest_date} is on or after {CIVIC_CLERK_START_DATE}, "
+            "skipping Granicus workflow"
         )
         return parse_meetings_from_civic_clerk_iframe(latest_date, meeting_type)
     else:
