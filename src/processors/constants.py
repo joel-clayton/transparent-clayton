@@ -57,6 +57,8 @@ WIKI_MTG_TABLE_OPEN = """
 """
 WIKI_MTG_TABLE_DATA = "\n| {table_data}"
 WIKI_MTG_TABLE_CLOSE = "\n|}\n"
+# Shown in place of the asset table when the city cancelled the meeting.
+WIKI_MTG_CANCELLED = "\n'''Cancelled'''\n"
 
 WIKI_AI_SECTION_TITLE = "=== AI summary ==="
 WIKI_AI_SECTION = """

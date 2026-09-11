@@ -1,10 +1,26 @@
 import unittest
 
+from src.processors.constants import WIKI_MTG_CANCELLED
 from src.processors.update_wiki import (
+    WikiUpdater,
     _humanize_meeting_key,
     render_meeting_table_row,
     render_no_materials_page,
 )
+
+
+class TestFormatCancelledSection(unittest.TestCase):
+    def test_cancelled_meeting_renders_cancelled_not_a_table(self):
+        # Bypass __init__ (which authenticates to the wiki); the cancelled branch
+        # needs only input_keys and returns before any Redis/wiki access.
+        updater = WikiUpdater.__new__(WikiUpdater)
+        updater.input_keys = []
+        sections = updater.format_wiki_section(
+            {"key": "2026-08-11 07_00 PM", "cancelled": True}
+        )
+        self.assertEqual(len(sections), 1)  # no AI-summary section
+        self.assertEqual(sections[0].content, WIKI_MTG_CANCELLED)
+        self.assertNotIn("wikitable", sections[0].content)
 
 
 class TestRenderMeetingTableRow(unittest.TestCase):

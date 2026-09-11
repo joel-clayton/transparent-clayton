@@ -122,6 +122,7 @@ class Meeting(TypedDict):
     agenda_packet: str
     clip_id: str
     source_type: str
+    cancelled: bool
 
 
 class WikiMeeting(Meeting):

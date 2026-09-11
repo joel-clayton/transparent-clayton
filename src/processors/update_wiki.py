@@ -25,6 +25,7 @@ from src.processors.constants import (
     WIKI_MTG_SECTION_TITLE,
     WIKI_MTG_TABLE_OPEN,
     WIKI_MTG_TABLE_CLOSE,
+    WIKI_MTG_CANCELLED,
     WIKI_NO_MATERIALS_PAGE,
     WIKI_NO_MATERIALS_INTRO,
     WIKI_NO_MATERIALS_EMPTY,
@@ -331,13 +332,18 @@ class WikiUpdater(Processor):
             raise Exception(
                 f"key missing from meeting_details object {meeting_details}"
             )
+        title = WIKI_MTG_SECTION_TITLE.format(
+            meeting_key=self.derive_correct_date_header(key)
+        )
+        # A cancelled meeting reads simply "Cancelled" instead of an asset table
+        # (there are no proceedings, only the city's cancellation notice), and
+        # gets no AI-summary section.
+        if meeting_details.get("cancelled"):
+            return [Section(title=title, content=WIKI_MTG_CANCELLED)]
         table_data = render_meeting_table_row(
             meeting_details,
             self.get_video_backup_links_for_key(key),
             doc_links=self.get_doc_links_for_key(key),
-        )
-        title = WIKI_MTG_SECTION_TITLE.format(
-            meeting_key=self.derive_correct_date_header(key)
         )
         content = " ".join(
             [

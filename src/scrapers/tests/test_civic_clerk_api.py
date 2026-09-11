@@ -99,6 +99,18 @@ class TestClassificationHelpers(unittest.TestCase):
         self.assertTrue(api.matches_category(cc, CITY_COUNCIL))
         self.assertFalse(api.matches_category(cc, PLANNING_COMMISSION))
 
+    def test_is_cancelled_from_agenda_name_prefix(self):
+        # Spelling and case vary across the portal's cancellation markers.
+        for agenda_name in (
+            "CANCELED - Planning Commission Meeting",
+            "Canceled - Planning Commission Meeting",
+            "Cancelled - City Council",
+        ):
+            self.assertTrue(api.is_cancelled(_event(agendaName=agenda_name)))
+        # A normal or missing agendaName is not cancelled.
+        self.assertFalse(api.is_cancelled(_event(agendaName="City Council 070726")))
+        self.assertFalse(api.is_cancelled(_event()))
+
     def test_event_datetime_strips_the_z_as_wall_clock_local(self):
         self.assertEqual(
             api.event_datetime(_event(startDateTime="2026-07-07T19:00:00Z")),
