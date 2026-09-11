@@ -10,17 +10,35 @@ from src.processors.update_wiki import (
 
 
 class TestFormatCancelledSection(unittest.TestCase):
-    def test_cancelled_meeting_renders_cancelled_not_a_table(self):
+    def _updater(self):
         # Bypass __init__ (which authenticates to the wiki); the cancelled branch
-        # needs only input_keys and returns before any Redis/wiki access.
+        # needs only input_keys, and we stub the durable-link lookup so no Redis.
         updater = WikiUpdater.__new__(WikiUpdater)
         updater.input_keys = []
-        sections = updater.format_wiki_section(
-            {"key": "2026-08-11 07_00 PM", "cancelled": True}
+        updater.get_doc_links_for_key = lambda key: {}
+        return updater
+
+    def test_cancelled_meeting_links_notice_and_omits_table(self):
+        sections = self._updater().format_wiki_section(
+            {
+                "key": "2026-08-11 07_00 PM",
+                "cancelled": True,
+                "minutes_and_supplemental_materials": {
+                    "Notice of Cancelation": "https://example.com/notice.pdf"
+                },
+            }
         )
         self.assertEqual(len(sections), 1)  # no AI-summary section
+        content = sections[0].content
+        self.assertIn("Cancelled", content)
+        self.assertIn("[https://example.com/notice.pdf Notice of Cancelation]", content)
+        self.assertNotIn("wikitable", content)
+
+    def test_cancelled_meeting_without_a_notice_shows_bare_marker(self):
+        sections = self._updater().format_wiki_section(
+            {"key": "2026-08-11 07_00 PM", "cancelled": True}
+        )
         self.assertEqual(sections[0].content, WIKI_MTG_CANCELLED)
-        self.assertNotIn("wikitable", sections[0].content)
 
 
 class TestRenderMeetingTableRow(unittest.TestCase):
