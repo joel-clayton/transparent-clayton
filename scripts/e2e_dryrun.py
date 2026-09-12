@@ -83,13 +83,22 @@ class DryRunWikiUpdater(WikiUpdater):
             print(f"{section.title}{section.content}")
 
     def update_transparency_page(self) -> None:
-        entries: list[tuple[str, str]] = []
-        for meeting_type in MEETING_TYPE_BY_SOURCE.values():
-            for member in r.smembers(meeting_type.redis_key(NO_ASSETS_KEY)) or set():
-                key = member.decode("utf-8") if isinstance(member, bytes) else member
-                entries.append((meeting_type.display_name, key))
-        print(f"\n===== WIKI PAGE (would save): {WIKI_NO_MATERIALS_PAGE} =====")
-        print(render_no_materials_page(entries))
+        # No-op per type: the transparency page is a single combined page, so it
+        # is printed once after all types are processed (see _print_transparency
+        # in main) rather than redundantly on every type's pass.
+        pass
+
+
+def _print_transparency_page() -> None:
+    """Print the single combined transparency page once, aggregating every
+    configured type's no-asset set."""
+    entries: list[tuple[str, str]] = []
+    for meeting_type in MEETING_TYPE_BY_SOURCE.values():
+        for member in r.smembers(meeting_type.redis_key(NO_ASSETS_KEY)) or set():
+            key = member.decode("utf-8") if isinstance(member, bytes) else member
+            entries.append((meeting_type.display_name, key))
+    print(f"\n===== WIKI PAGE (would save): {WIKI_NO_MATERIALS_PAGE} =====")
+    print(render_no_materials_page(entries))
 
 
 def _write_dummy(path: str, content: bytes = b"dry-run placeholder\n") -> None:
@@ -190,6 +199,9 @@ def main() -> None:
             _mock_doc_archive(meeting_type, date, meeting)
 
         DryRunWikiUpdater(source_type).process()
+
+    # The transparency page is combined across all types, so print it once.
+    _print_transparency_page()
 
     print("\nDry run complete. No uploads made; wiki not modified.")
 

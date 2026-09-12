@@ -1,10 +1,44 @@
 import unittest
 
+from src.processors.constants import WIKI_MTG_CANCELLED
 from src.processors.update_wiki import (
+    WikiUpdater,
     _humanize_meeting_key,
     render_meeting_table_row,
     render_no_materials_page,
 )
+
+
+class TestFormatCancelledSection(unittest.TestCase):
+    def _updater(self):
+        # Bypass __init__ (which authenticates to the wiki); the cancelled branch
+        # needs only input_keys, and we stub the durable-link lookup so no Redis.
+        updater = WikiUpdater.__new__(WikiUpdater)
+        updater.input_keys = []
+        updater.get_doc_links_for_key = lambda key: {}
+        return updater
+
+    def test_cancelled_meeting_links_notice_and_omits_table(self):
+        sections = self._updater().format_wiki_section(
+            {
+                "key": "2026-08-11 07_00 PM",
+                "cancelled": True,
+                "minutes_and_supplemental_materials": {
+                    "Notice of Cancelation": "https://example.com/notice.pdf"
+                },
+            }
+        )
+        self.assertEqual(len(sections), 1)  # no AI-summary section
+        content = sections[0].content
+        self.assertIn("Cancelled", content)
+        self.assertIn("[https://example.com/notice.pdf Notice of Cancelation]", content)
+        self.assertNotIn("wikitable", content)
+
+    def test_cancelled_meeting_without_a_notice_shows_bare_marker(self):
+        sections = self._updater().format_wiki_section(
+            {"key": "2026-08-11 07_00 PM", "cancelled": True}
+        )
+        self.assertEqual(sections[0].content, WIKI_MTG_CANCELLED)
 
 
 class TestRenderMeetingTableRow(unittest.TestCase):

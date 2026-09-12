@@ -47,6 +47,7 @@ from src.scrapers.alerting import AlertLevel, alert
 from src.scrapers.civic_clerk_api import (
     event_datetime,
     fetch_events,
+    is_cancelled,
     matches_category,
     merge_by_datetime,
     split_documents,
@@ -598,6 +599,7 @@ def parse_meetings_from_civic_clerk_iframe(
                 video=video_link,
                 clip_id=data_id,
                 source_type=meeting_type.source_type,
+                cancelled=is_cancelled(event),
                 scraped_at=now_local.isoformat(timespec="seconds"),
                 snapshot_ref=snapshot_ref,
             )

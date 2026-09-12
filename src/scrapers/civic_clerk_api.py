@@ -109,6 +109,17 @@ def matches_category(event: dict[str, Any], meeting_type: MeetingType) -> bool:
     return (event.get("categoryName") or "") == meeting_type.category
 
 
+def is_cancelled(event: dict[str, Any]) -> bool:
+    """Whether the city marked this meeting cancelled.
+
+    The portal signals a cancellation by prefixing the ``agendaName`` with
+    "CANCELED"/"Canceled" (spelling and case vary), e.g. "CANCELED - Planning
+    Commission Meeting". A cancelled meeting still publishes a cancellation
+    notice, so it otherwise looks like a docs-only meeting.
+    """
+    return (event.get("agendaName") or "").strip().lower().startswith("cancel")
+
+
 def video_url(event: dict[str, Any]) -> str:
     """The playable MP4 URL for an on-demand event, or ``""`` if none.
 
