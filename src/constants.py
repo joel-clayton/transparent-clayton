@@ -13,6 +13,7 @@ COMPLETED_KEY = "completed"
 AV_SEEN_KEY = "av_seen"  # video handed off to the A/V pipeline
 DOCS_ARCHIVED_KEY = "docs_archived"  # documents downloaded + archived
 NO_ASSETS_KEY = "no_assets"  # meetings the city posted with no published materials
+NO_AUDIO_KEY = "no_audio"  # video has no spoken audio -> recorded, not transcribed
 
 CC_MTG_KEY = "cc_mtg"
 

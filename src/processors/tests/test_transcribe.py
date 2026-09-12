@@ -1,8 +1,20 @@
 import unittest
 from unittest.mock import patch
 
-from src.processors.transcribe import Transcriber
+from src.processors.transcribe import Transcriber, _is_no_audio_error
 from src.processors.tests._helpers import TempDirTestCase
+
+
+class TestNoAudioDetection(unittest.TestCase):
+    def test_recognizes_no_spoken_audio_errors(self):
+        self.assertTrue(
+            _is_no_audio_error(
+                "language_detection cannot be performed on files with no spoken audio."
+            )
+        )
+        self.assertTrue(_is_no_audio_error("The file does not contain audio."))
+        # A genuine failure must still be treated as an error (raised upstream).
+        self.assertFalse(_is_no_audio_error("Upstream service unavailable"))
 
 
 class TestTranscriberGatherDates(TempDirTestCase):
@@ -23,8 +35,30 @@ class TestTranscriberGatherDates(TempDirTestCase):
         self.touch(
             "City Council Meeting 2026-05-08 - City of Clayton.txt", self.output_tmp
         )
-        with patch("src.processors.transcribe.TRANSCRIBED_DIR", self.output_tmp):
+        with (
+            patch("src.processors.transcribe.TRANSCRIBED_DIR", self.output_tmp),
+            patch.object(self.transcriber, "_no_audio_dates", return_value=set()),
+        ):
             self.assertEqual(self.transcriber.gather_output_dates(), ["2026-05-08"])
+
+    def test_gather_output_counts_no_audio_dates_as_done(self):
+        # A recorded no-spoken-audio meeting has no transcript file but must be
+        # treated as done, or it would be retried (and re-fail) on every run.
+        self.touch(
+            "City Council Meeting 2026-05-08 - City of Clayton.txt", self.output_tmp
+        )
+        with (
+            patch("src.processors.transcribe.TRANSCRIBED_DIR", self.output_tmp),
+            patch.object(
+                self.transcriber,
+                "_no_audio_dates",
+                return_value={"2026-06-01 07_00 PM"},
+            ),
+        ):
+            self.assertEqual(
+                self.transcriber.gather_output_dates(),
+                ["2026-05-08", "2026-06-01 07_00 PM"],
+            )
 
     def test_handles_mixed_date_and_datetime(self):
         self.touch(

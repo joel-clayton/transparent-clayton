@@ -16,6 +16,7 @@ from src.constants import (
     WIKI_UPDATED_KEY,
     DETAIL_KEY,
     NO_ASSETS_KEY,
+    NO_AUDIO_KEY,
     DATETIME_FORMAT,
     DATE_FORMAT,
 )
@@ -265,10 +266,24 @@ class WikiUpdater(Processor):
     def gather_input_dates(self) -> List:
         """Meetings eligible for a year-page entry: video meetings (via their
         transcript files) plus docs-only meetings (from detail), so a docs-only
-        meeting gets an entry even though it has no transcript.
+        meeting gets an entry even though it has no transcript. No-spoken-audio
+        video meetings are included too, listed video-only (no transcript).
         """
         transcribed = self.gather_dates(TRANSCRIBED_DIR)
-        return sorted(set(transcribed) | set(self._gather_docs_only_keys()))
+        return sorted(
+            set(transcribed)
+            | set(self._gather_docs_only_keys())
+            | set(self._gather_no_audio_keys())
+        )
+
+    def _gather_no_audio_keys(self) -> list[str]:
+        """Meeting keys recorded as having no spoken audio (a video with no
+        speech). They still have a video, so they get a video-only year-page
+        entry rather than being dropped for lacking a transcript."""
+        return [
+            m.decode("utf-8") if isinstance(m, bytes) else m
+            for m in (r.smembers(self.meeting_type.redis_key(NO_AUDIO_KEY)) or set())
+        ]
 
     def _gather_docs_only_keys(self) -> list[str]:
         keys: list[str] = []

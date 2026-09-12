@@ -4,7 +4,8 @@ from typing import List
 
 import requests
 
-from src.constants import TRANSCRIPT_UPLOADED_KEY
+from celery_app import r
+from src.constants import NO_AUDIO_KEY, TRANSCRIPT_UPLOADED_KEY
 from src.processors.process import Processor
 from src.settings import EXTRACTED_AUDIO_DIR, TRANSCRIBED_DIR
 from src.types import SourceType, JobType, MEETING_TYPE_BY_SOURCE
@@ -12,6 +13,16 @@ from src.secrets import ASSEMBLY_AI_AUTH_KEY
 
 base_url = "https://api.assemblyai.com"
 headers = {"authorization": ASSEMBLY_AI_AUTH_KEY}
+
+# AssemblyAI errors that mean "this recording has nothing to transcribe" rather
+# than a transient failure — a silent/no-speech video (some GHAD/committee and
+# "General" recordings). We record these and move on instead of blocking.
+NO_AUDIO_ERROR_MARKERS = ("no spoken audio", "does not contain audio", "no audio")
+
+
+def _is_no_audio_error(message: str) -> bool:
+    lowered = (message or "").lower()
+    return any(marker in lowered for marker in NO_AUDIO_ERROR_MARKERS)
 
 
 class Transcriber(Processor):
@@ -21,16 +32,24 @@ class Transcriber(Processor):
         self.input_job_type = JobType.EXTRACT_AUDIO
         self.job_type = JobType.TRANSCRIBE_AUDIO
         self.source_type = source_type
-        self.redis_key = MEETING_TYPE_BY_SOURCE[source_type].redis_key(
-            TRANSCRIPT_UPLOADED_KEY
-        )
+        self.meeting_type = MEETING_TYPE_BY_SOURCE[source_type]
+        self.redis_key = self.meeting_type.redis_key(TRANSCRIPT_UPLOADED_KEY)
         super().__init__()
+
+    def _no_audio_dates(self) -> set[str]:
+        """Meeting keys recorded as having no spoken audio (never re-attempted)."""
+        return {
+            m.decode("utf-8") if isinstance(m, bytes) else m
+            for m in (r.smembers(self.meeting_type.redis_key(NO_AUDIO_KEY)) or set())
+        }
 
     def gather_input_dates(self) -> List:
         return self.gather_dates(EXTRACTED_AUDIO_DIR)
 
     def gather_output_dates(self) -> List:
-        return self.gather_dates(TRANSCRIBED_DIR)
+        # A no-spoken-audio meeting produces no transcript file; treat it as
+        # done (via the recorded set) so it isn't retried on every run.
+        return sorted(set(self.gather_dates(TRANSCRIBED_DIR)) | self._no_audio_dates())
 
     def process_for_date(self, date: str) -> None:
         dt = self.extract_datetime_object(date)
@@ -80,9 +99,17 @@ class Transcriber(Processor):
                 break
 
             elif transcription_result["status"] == "error":
-                raise RuntimeError(
-                    f"Transcription failed: {transcription_result['error']}"
-                )
+                error = transcription_result["error"]
+                # A recording with no speech isn't a pipeline failure: record it
+                # so it's never retried and downstream can still list the video,
+                # and stop blocking every later meeting in the batch.
+                if _is_no_audio_error(error):
+                    r.sadd(self.meeting_type.redis_key(NO_AUDIO_KEY), date)
+                    self.logger.warning(
+                        "No spoken audio for %s; recording as untranscribed", date
+                    )
+                    return None
+                raise RuntimeError(f"Transcription failed: {error}")
 
             else:
                 time.sleep(30)
