@@ -55,6 +55,10 @@ class Processor:
             f
             for f in listdir(dir_path)
             if path.isfile(os.path.join(dir_path, f))
+            # Skip macOS AppleDouble sidecars ("._Name...") that live alongside
+            # real files on the external volume; they match the stub/date regex
+            # but aren't media and would be treated as phantom meetings.
+            if not f.startswith("._")
             if file_name_stub in f
         ]
         dates = []
