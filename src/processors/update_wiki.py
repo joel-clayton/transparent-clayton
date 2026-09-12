@@ -27,6 +27,9 @@ from src.processors.constants import (
     WIKI_MTG_TABLE_OPEN,
     WIKI_MTG_TABLE_CLOSE,
     WIKI_MTG_CANCELLED,
+    WIKI_NO_AUDIO_INTRO,
+    WIKI_NO_AUDIO_NOTE,
+    WIKI_NO_AUDIO_SECTION_TITLE,
     WIKI_NO_MATERIALS_PAGE,
     WIKI_NO_MATERIALS_INTRO,
     WIKI_NO_MATERIALS_EMPTY,
@@ -103,20 +106,37 @@ def render_meeting_table_row(
     return " || ".join(cells)
 
 
-def render_no_materials_page(entries: list[tuple[str, str]]) -> str:
+def _no_materials_rows(entries: list[tuple[str, str]]) -> str:
+    return "\n".join(
+        f"* {_humanize_meeting_key(key)} — {display}"
+        for display, key in sorted(entries, key=lambda entry: entry[1], reverse=True)
+    )
+
+
+def render_no_materials_page(
+    entries: list[tuple[str, str]],
+    no_audio_entries: list[tuple[str, str]] | None = None,
+) -> str:
     """Build the transparency page body from (meeting-type display, key) entries.
 
     One combined page across all meeting types; each row is labelled with its
     type so a City Council and a Planning Commission meeting on the same date are
-    distinguishable.
+    distinguishable. ``entries`` are meetings with no published materials at all;
+    ``no_audio_entries`` are meetings published with video but no usable audio,
+    rendered in their own section.
     """
-    if not entries:
+    no_audio_entries = no_audio_entries or []
+    if not entries and not no_audio_entries:
         return WIKI_NO_MATERIALS_EMPTY
-    rows = "\n".join(
-        f"* {_humanize_meeting_key(key)} — {display}"
-        for display, key in sorted(entries, key=lambda entry: entry[1], reverse=True)
-    )
-    return f"{WIKI_NO_MATERIALS_INTRO}\n\n{rows}\n"
+    blocks: list[str] = []
+    if entries:
+        blocks.append(f"{WIKI_NO_MATERIALS_INTRO}\n\n{_no_materials_rows(entries)}")
+    if no_audio_entries:
+        blocks.append(
+            f"{WIKI_NO_AUDIO_SECTION_TITLE}\n{WIKI_NO_AUDIO_INTRO}\n\n"
+            f"{_no_materials_rows(no_audio_entries)}"
+        )
+    return "\n\n".join(blocks) + "\n"
 
 
 class WikiUpdater(Processor):
@@ -131,6 +151,7 @@ class WikiUpdater(Processor):
         self.transcript_links: dict[str, str] = {}
         self.input_keys: list[str] = []
         self.output_keys: list[str] = []
+        self._no_audio_cache: set[str] | None = None
         super().__init__()
         self.site = self.authenticate()
 
@@ -277,13 +298,19 @@ class WikiUpdater(Processor):
         )
 
     def _gather_no_audio_keys(self) -> list[str]:
-        """Meeting keys recorded as having no spoken audio (a video with no
-        speech). They still have a video, so they get a video-only year-page
-        entry rather than being dropped for lacking a transcript."""
+        """Meeting keys recorded as having no usable audio (a video that yielded
+        no transcript). They still have a video, so they get a video-only
+        year-page entry (with a note) rather than being dropped."""
         return [
             m.decode("utf-8") if isinstance(m, bytes) else m
             for m in (r.smembers(self.meeting_type.redis_key(NO_AUDIO_KEY)) or set())
         ]
+
+    def _no_audio_key_set(self) -> set[str]:
+        """Memoized set of this type's no-usable-audio meeting keys."""
+        if self._no_audio_cache is None:
+            self._no_audio_cache = set(self._gather_no_audio_keys())
+        return self._no_audio_cache
 
     def _gather_docs_only_keys(self) -> list[str]:
         keys: list[str] = []
@@ -374,6 +401,11 @@ class WikiUpdater(Processor):
                 WIKI_MTG_TABLE_CLOSE,
             ]
         )
+        # A no-usable-audio meeting keeps its video row but gets a note
+        # explaining the missing transcript (and no AI-summary section follows,
+        # since it has no transcript link).
+        if key in self._no_audio_key_set():
+            content += WIKI_NO_AUDIO_NOTE
         sections = [Section(title=title, content=content)]
 
         # Only meetings with a transcript get an AI-summary section.
@@ -446,12 +478,15 @@ class WikiUpdater(Processor):
         automatically.
         """
         entries: list[tuple[str, str]] = []
+        no_audio_entries: list[tuple[str, str]] = []
         for meeting_type in MEETING_TYPE_BY_SOURCE.values():
-            raw = r.smembers(meeting_type.redis_key(NO_ASSETS_KEY)) or set()
-            for member in raw:
+            for member in r.smembers(meeting_type.redis_key(NO_ASSETS_KEY)) or set():
                 key = member.decode("utf-8") if isinstance(member, bytes) else member
                 entries.append((meeting_type.display_name, key))
-        body = render_no_materials_page(entries)
+            for member in r.smembers(meeting_type.redis_key(NO_AUDIO_KEY)) or set():
+                key = member.decode("utf-8") if isinstance(member, bytes) else member
+                no_audio_entries.append((meeting_type.display_name, key))
+        body = render_no_materials_page(entries, no_audio_entries)
         page = pywikibot.Page(self.site, WIKI_NO_MATERIALS_PAGE)
         if page.text.strip() != body.strip():
             page.text = body

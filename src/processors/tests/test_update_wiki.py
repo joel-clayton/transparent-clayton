@@ -41,6 +41,22 @@ class TestFormatCancelledSection(unittest.TestCase):
         self.assertEqual(sections[0].content, WIKI_MTG_CANCELLED)
 
 
+class TestFormatNoAudioSection(unittest.TestCase):
+    def test_no_audio_meeting_keeps_video_row_adds_note_no_ai(self):
+        updater = WikiUpdater.__new__(WikiUpdater)
+        updater.input_keys = []
+        updater._no_audio_cache = {"2026-08-26 06_00 PM"}
+        updater.get_video_backup_links_for_key = lambda key: ["https://yt/x"]
+        updater.get_doc_links_for_key = lambda key: {}
+        sections = updater.format_wiki_section(
+            {"key": "2026-08-26 06_00 PM", "video": "https://cpmedia/x.mp4"}
+        )
+        self.assertEqual(len(sections), 1)  # no AI-summary section (no transcript)
+        content = sections[0].content
+        self.assertIn("wikitable", content)  # video row is kept
+        self.assertIn("no usable audio", content)  # explanatory note appended
+
+
 class TestRenderMeetingTableRow(unittest.TestCase):
     def test_full_meeting_includes_present_cells_and_backups(self):
         row = render_meeting_table_row(
@@ -110,6 +126,22 @@ class TestRenderNoMaterialsPage(unittest.TestCase):
             render_no_materials_page([]),
             "No meetings without published materials have been recorded.",
         )
+
+    def test_renders_no_audio_section_alongside_no_materials(self):
+        body = render_no_materials_page(
+            [("City Council", "2026-06-03 07_00 PM")],
+            no_audio_entries=[("General", "2026-08-26 06_00 PM")],
+        )
+        self.assertIn("Meetings Without Usable Audio", body)
+        self.assertIn("August 26, 2026 06:00 PM — General", body)
+        self.assertIn("June 03, 2026 07:00 PM — City Council", body)
+
+    def test_no_audio_only_still_renders_that_section(self):
+        body = render_no_materials_page(
+            [], no_audio_entries=[("GHAD", "2026-07-07 06_30 PM")]
+        )
+        self.assertIn("Meetings Without Usable Audio", body)
+        self.assertIn("July 07, 2026 06:30 PM — GHAD", body)
 
 
 class TestHumanizeMeetingKey(unittest.TestCase):

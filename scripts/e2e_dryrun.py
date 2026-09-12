@@ -38,7 +38,7 @@ os.environ.setdefault("PIPELINE_STORAGE_ROOT", DEFAULT_ASSET_ROOT)
 os.environ.setdefault("REDIS_DB", "15")
 
 from celery_app import r  # noqa: E402
-from src.constants import NO_ASSETS_KEY  # noqa: E402
+from src.constants import NO_ASSETS_KEY, NO_AUDIO_KEY  # noqa: E402
 from src.meeting_types import MeetingType  # noqa: E402
 from src.processors import update_wiki  # noqa: E402
 from src.processors.archive_docs import docs_to_archive  # noqa: E402
@@ -91,14 +91,18 @@ class DryRunWikiUpdater(WikiUpdater):
 
 def _print_transparency_page() -> None:
     """Print the single combined transparency page once, aggregating every
-    configured type's no-asset set."""
+    configured type's no-asset and no-usable-audio sets."""
     entries: list[tuple[str, str]] = []
+    no_audio_entries: list[tuple[str, str]] = []
     for meeting_type in MEETING_TYPE_BY_SOURCE.values():
         for member in r.smembers(meeting_type.redis_key(NO_ASSETS_KEY)) or set():
             key = member.decode("utf-8") if isinstance(member, bytes) else member
             entries.append((meeting_type.display_name, key))
+        for member in r.smembers(meeting_type.redis_key(NO_AUDIO_KEY)) or set():
+            key = member.decode("utf-8") if isinstance(member, bytes) else member
+            no_audio_entries.append((meeting_type.display_name, key))
     print(f"\n===== WIKI PAGE (would save): {WIKI_NO_MATERIALS_PAGE} =====")
-    print(render_no_materials_page(entries))
+    print(render_no_materials_page(entries, no_audio_entries))
 
 
 def _write_dummy(path: str, content: bytes = b"dry-run placeholder\n") -> None:

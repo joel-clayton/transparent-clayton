@@ -42,6 +42,17 @@ WIKI_NO_MATERIALS_INTRO = (
     "agenda, documents, or video at the time they were scraped."
 )
 WIKI_NO_MATERIALS_EMPTY = "No meetings without published materials have been recorded."
+# Shown on a meeting's own year-page entry when its recording has no usable audio.
+WIKI_NO_AUDIO_NOTE = (
+    "\n''No transcript is available: the recording published by the City for this "
+    "meeting contains no usable audio.''\n"
+)
+# Second section of the transparency page: meetings with video but no usable audio.
+WIKI_NO_AUDIO_SECTION_TITLE = "== Meetings Without Usable Audio =="
+WIKI_NO_AUDIO_INTRO = (
+    "The following meetings were published by the City of Clayton with video but "
+    "no usable audio, so no transcript could be produced."
+)
 
 FORMAL_DATE_PATTERN = r"(?:January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}, \d{4}"
 FORMAL_DATETIME_PATTERN = r"(?:January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}, \d{4} \d{1,2}:\d{2} (?:AM|PM)"
