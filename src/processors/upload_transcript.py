@@ -130,10 +130,25 @@ class TranscriptUploader(Processor):
                             body=file_metadata,
                             media_body=media,
                             supportsAllDrives=True,
+                            fields="id, webViewLink",
                         )
                         .execute()
                     )
                     file_id = file.get("id")
+
+                # Record the transcript link now, under THIS meeting type's
+                # namespace. Previously links were only written when a later
+                # gather_output listed the shared Drive folder, which (because
+                # all types share one folder) filed them under whichever type
+                # happened to run next — losing them for the uploading type.
+                link = file.get("webViewLink")
+                if link:
+                    r.set(
+                        self.meeting_type.transcript_link_key_template.format(
+                            meeting_key=date
+                        ),
+                        link,
+                    )
 
                 for email in SHARE_LIST:
                     user_permission = {
@@ -193,6 +208,11 @@ class TranscriptUploader(Processor):
         dates = []
         for file in files:
             name = file.get("name")
+            # All meeting types currently share one Drive folder, so filter to
+            # this type's transcripts by filename prefix — otherwise every type
+            # would claim every file and file its link under the wrong namespace.
+            if self.meeting_type.file_stub not in (name or ""):
+                continue
             link = file.get("webViewLink")
             datetime_match = re.search(DATETIME_OUTPUT_PATTERN, name)
             if datetime_match:
