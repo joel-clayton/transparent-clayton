@@ -6,7 +6,12 @@ from src.processors.upload_transcript import TranscriptUploader
 
 
 def _make_uploader():
-    return make_uploader(TranscriptUploader, auth_return=MagicMock())
+    # Stub the per-type Drive folder lookup so construction makes no Drive call.
+    with patch(
+        "src.processors.upload_transcript.find_or_create_type_folder",
+        return_value="type_parent",
+    ):
+        return make_uploader(TranscriptUploader, auth_return=MagicMock())
 
 
 class TestGetYearFromDate(unittest.TestCase):

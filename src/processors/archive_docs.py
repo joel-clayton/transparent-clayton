@@ -11,8 +11,9 @@ uploader's Drive client/token, so archival shares one Drive consent with
 transcripts.
 
 Runs unattended only once the OAuth consent screen is published (see
-``google_auth``). Needs a Drive parent folder — ``DOCS_DRIVE_PARENT_ID``
-(env-overridable), defaulting to the existing City Council meetings folder.
+``google_auth``). Per-meeting document folders are created under the meeting
+type's own folder (e.g. "GHAD Meetings") in the shared Source Material parent;
+setting ``DOCS_DRIVE_PARENT_ID`` overrides that with a fixed folder.
 """
 
 import io
@@ -27,11 +28,11 @@ from googleapiclient.http import MediaIoBaseUpload
 
 from celery_app import r
 from src.constants import (
-    CC_MTG_PARENT_FOLDER_ID,
     DETAIL_KEY,
     DOCS_ARCHIVED_KEY,
 )
 from src.meeting_types import CITY_COUNCIL, MeetingType
+from src.processors.drive_folders import find_or_create_type_folder
 from src.processors.google_auth import load_credentials
 from src.processors.upload_transcript import (
     DESKTOP_APP_CLIENT_SECRET,
@@ -42,7 +43,6 @@ from src.scrapers.models import PipelineClass
 
 logger = logging.getLogger(__name__)
 
-DOCS_DRIVE_PARENT_ID = os.environ.get("DOCS_DRIVE_PARENT_ID") or CC_MTG_PARENT_FOLDER_ID
 DOC_DOWNLOAD_TIMEOUT = 30  # seconds
 _ARCHIVABLE = {PipelineClass.FULL.value, PipelineClass.DOCS_ONLY.value}
 
@@ -74,6 +74,12 @@ class DocumentArchiver:
             token_path=DRIVE_TOKEN_FILE,
         )
         self.service = build("drive", "v3", credentials=credentials)
+        # Per-meeting document folders live under this type's own folder (e.g.
+        # "GHAD Meetings") in the shared Source Material parent. An explicit
+        # DOCS_DRIVE_PARENT_ID still overrides, for one-off relocations.
+        self.docs_parent_id = os.environ.get(
+            "DOCS_DRIVE_PARENT_ID"
+        ) or find_or_create_type_folder(self.service, self.meeting_type)
 
     def process(self) -> None:
         for meeting_key, detail in self._unarchived_meetings():
@@ -162,7 +168,7 @@ class DocumentArchiver:
                 body={
                     "name": name,
                     "mimeType": "application/vnd.google-apps.folder",
-                    "parents": [DOCS_DRIVE_PARENT_ID],
+                    "parents": [self.docs_parent_id],
                 },
                 fields="id",
                 supportsAllDrives=True,
@@ -173,7 +179,7 @@ class DocumentArchiver:
 
     def _find_folder(self, name: str) -> str | None:
         query = (
-            f"name = '{name}' and '{DOCS_DRIVE_PARENT_ID}' in parents and "
+            f"name = '{name}' and '{self.docs_parent_id}' in parents and "
             "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
         )
         results = (

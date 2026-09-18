@@ -107,6 +107,13 @@ class MeetingType:
     def playlist_name_template(self) -> str:
         return f"{{}} {self.display_name} Meetings"
 
+    # --- Google Drive ---
+    @property
+    def drive_folder_name(self) -> str:
+        """This type's folder under the shared Source Material parent, holding
+        its transcript year folders and archived-document folders."""
+        return f"{self.display_name} Meetings"
+
 
 # The City Council key is the pre-existing abbreviation, kept so all current
 # Redis keys and filenames are unchanged. New types follow the same shape.
