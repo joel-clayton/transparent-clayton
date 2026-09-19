@@ -6,7 +6,12 @@ from src.processors.upload_transcript import TranscriptUploader
 
 
 def _make_uploader():
-    return make_uploader(TranscriptUploader, auth_return=MagicMock())
+    # Stub the per-type Drive folder lookup so construction makes no Drive call.
+    with patch(
+        "src.processors.upload_transcript.find_or_create_type_folder",
+        return_value="type_parent",
+    ):
+        return make_uploader(TranscriptUploader, auth_return=MagicMock())
 
 
 class TestGetYearFromDate(unittest.TestCase):
@@ -92,6 +97,24 @@ class TestRetrieveAndStoreFilesInFolder(unittest.TestCase):
                     "https://drive/datetime",
                 ),
             ],
+        )
+
+    def test_skips_files_belonging_to_another_meeting_type(self):
+        # The shared Drive folder holds every type's transcripts; a City Council
+        # uploader must ignore a General meeting's file rather than file its link
+        # under cc_mtg.
+        self._stub_drive_response(
+            [
+                ("City Council Meeting 2026-05-08", "https://drive/cc"),
+                ("General Meeting 2026-05-26 07:00 PM", "https://drive/gen"),
+            ]
+        )
+        self.assertEqual(
+            self.uploader.retrieve_and_store_files_in_folder("folder_id"),
+            ["2026-05-08"],
+        )
+        self.mock_r.set.assert_called_once_with(
+            "transcript_link.cc_mtg.2026-05-08", "https://drive/cc"
         )
 
     def test_skips_files_with_no_parseable_date(self):

@@ -1,4 +1,7 @@
 import unittest
+from unittest.mock import MagicMock, patch
+
+from pywikibot.textlib import Section
 
 from src.processors.constants import WIKI_MTG_CANCELLED
 from src.processors.update_wiki import (
@@ -7,6 +10,29 @@ from src.processors.update_wiki import (
     render_meeting_table_row,
     render_no_materials_page,
 )
+
+
+class TestUpdatePageSectionsCreatesPage(unittest.TestCase):
+    def test_saves_even_when_page_does_not_exist(self):
+        updater = WikiUpdater.__new__(WikiUpdater)
+        updater.site = MagicMock()
+        page = MagicMock()
+        page.exists.return_value = False  # a brand-new year page
+        with patch("src.processors.update_wiki.pywikibot.Page", return_value=page):
+            updater.update_page_sections_for_page(
+                "List of 2026 GHAD Meetings",
+                [Section(title="== July 07, 2026 ==", content="\nbody\n")],
+                "2026-07-07 06_30 PM",
+            )
+        page.save.assert_called_once()  # created, not silently skipped
+
+    def test_no_save_when_there_are_no_sections(self):
+        updater = WikiUpdater.__new__(WikiUpdater)
+        updater.site = MagicMock()
+        page = MagicMock()
+        with patch("src.processors.update_wiki.pywikibot.Page", return_value=page):
+            updater.update_page_sections_for_page("Any Page", [], "2026-07-07")
+        page.save.assert_not_called()
 
 
 class TestFormatCancelledSection(unittest.TestCase):

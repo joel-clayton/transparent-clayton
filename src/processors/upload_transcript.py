@@ -15,10 +15,11 @@ from src.constants import (
     DATETIME_OUTPUT_PATTERN,
 )
 from src.processors.constants import EARLIEST
+from src.processors.drive_folders import find_or_create_type_folder
 from src.processors.google_auth import load_credentials
 from src.processors.process import Processor
 from src.settings import TRANSCRIBED_DIR
-from src.types import JobType, SourceType, job_drive_parent_id, MEETING_TYPE_BY_SOURCE
+from src.types import JobType, SourceType, MEETING_TYPE_BY_SOURCE
 from src.util import get_year_string_from_string, send_to_discord_bots
 
 # If modifying these scopes, delete the cached token (DRIVE_TOKEN_FILE) to force
@@ -34,8 +35,6 @@ DESKTOP_APP_CLIENT_SECRET = "/Users/gautam/dev/client_secret_721413148557-p0c4gq
 DRIVE_TOKEN_FILE = os.environ.get("DRIVE_TOKEN_FILE") or os.path.join(
     os.path.dirname(DESKTOP_APP_CLIENT_SECRET), "drive_token.json"
 )
-TRANSCRIPTS_PARENT_ID = "1MR8u-c-eFDXSPef1tHFFknivWjJ5tp79"
-TRANSCRIPT_FILE_TEMPLATE = "City Council Meeting {}"
 SHARE_LIST = ["grahamjordan2596@gmail.com"]
 
 
@@ -48,6 +47,11 @@ class TranscriptUploader(Processor):
         self.meeting_type = MEETING_TYPE_BY_SOURCE[source_type]
         self.redis_key = self.meeting_type.redis_key(TRANSCRIPT_UPLOADED_KEY)
         self.service = self.authenticate()
+        # This type's Drive folder (e.g. "Planning Commission Meetings") under
+        # the shared Source Material parent; year folders are made inside it.
+        self.type_parent_id = find_or_create_type_folder(
+            self.service, self.meeting_type
+        )
         super().__init__()
 
     def share_file(self, file_id: str, email: str) -> dict:
@@ -71,8 +75,8 @@ class TranscriptUploader(Processor):
         )
 
     def find_folder_id(self, folder_name: str) -> str | None:
-        """Search for a folder by name and return its ID."""
-        parent_id = job_drive_parent_id.get(self.job_type)
+        """Search for a year folder by name under this type's parent folder."""
+        parent_id = self.type_parent_id
         # Define the search query
         query = f"name = '{folder_name}' and '{parent_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
 
@@ -130,10 +134,25 @@ class TranscriptUploader(Processor):
                             body=file_metadata,
                             media_body=media,
                             supportsAllDrives=True,
+                            fields="id, webViewLink",
                         )
                         .execute()
                     )
                     file_id = file.get("id")
+
+                # Record the transcript link now, under THIS meeting type's
+                # namespace. Previously links were only written when a later
+                # gather_output listed the shared Drive folder, which (because
+                # all types share one folder) filed them under whichever type
+                # happened to run next — losing them for the uploading type.
+                link = file.get("webViewLink")
+                if link:
+                    r.set(
+                        self.meeting_type.transcript_link_key_template.format(
+                            meeting_key=date
+                        ),
+                        link,
+                    )
 
                 for email in SHARE_LIST:
                     user_permission = {
@@ -193,6 +212,11 @@ class TranscriptUploader(Processor):
         dates = []
         for file in files:
             name = file.get("name")
+            # All meeting types currently share one Drive folder, so filter to
+            # this type's transcripts by filename prefix — otherwise every type
+            # would claim every file and file its link under the wrong namespace.
+            if self.meeting_type.file_stub not in (name or ""):
+                continue
             link = file.get("webViewLink")
             datetime_match = re.search(DATETIME_OUTPUT_PATTERN, name)
             if datetime_match:
@@ -222,7 +246,7 @@ class TranscriptUploader(Processor):
         folder_metadata = {
             "name": name,
             "mimeType": "application/vnd.google-apps.folder",
-            "parents": [TRANSCRIPTS_PARENT_ID],
+            "parents": [self.type_parent_id],
         }
         folder = (
             self.service.files().create(body=folder_metadata, fields="id").execute()

@@ -9,7 +9,6 @@ from src.constants import (
     SCRAPED_CC_MTG_KEY,
     TRANSCRIPT_UPLOADED_CC_MTG_KEY,
     VIDEO_UPLOADED_CC_MTG_KEY,
-    CC_MTG_PARENT_FOLDER_ID,
 )
 from src.meeting_types import (
     BUDGET_AND_AUDIT,
@@ -109,8 +108,6 @@ job_redis_keys = {
     JobType.UPLOAD_TRANSCRIPT: TRANSCRIPT_UPLOADED_CC_MTG_KEY,
     JobType.UPLOAD_VIDEO: VIDEO_UPLOADED_CC_MTG_KEY,
 }
-
-job_drive_parent_id = {JobType.UPLOAD_TRANSCRIPT: CC_MTG_PARENT_FOLDER_ID}
 
 
 class Meeting(TypedDict):

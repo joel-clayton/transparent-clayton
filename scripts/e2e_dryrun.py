@@ -27,6 +27,7 @@ import shutil
 import sys
 from datetime import datetime
 from typing import Mapping
+from urllib.parse import quote
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _REPO_ROOT not in sys.path:
@@ -58,6 +59,16 @@ from src.types import MEETING_TYPE_BY_SOURCE  # noqa: E402
 DUMMY_VIDEO_URL = "https://youtu.be/DRYRUNvideo"
 DUMMY_DRIVE_URL = "https://drive.google.com/file/d/DRYRUN/view"
 
+# Base of the wiki, so the dry run can print the exact page URL it would publish
+# to. Falls back to just the page title if WIKI_URL isn't configured.
+_WIKI_BASE = os.environ.get("WIKI_URL", "").rstrip("/")
+
+
+def _wiki_url(page_name: str) -> str:
+    if not _WIKI_BASE:
+        return page_name
+    return f"{_WIKI_BASE}/wiki/{quote(page_name.replace(' ', '_'))}"
+
 
 def _silence_discord() -> None:
     def _noop(*_args: object, **_kwargs: object) -> None:
@@ -78,7 +89,10 @@ class DryRunWikiUpdater(WikiUpdater):
     def update_page_sections_for_page(
         self, page_name: str, sections: list, date: str
     ) -> None:
-        print(f"\n===== WIKI PAGE (would save): {page_name} =====")
+        print(
+            f"\n===== WIKI PAGE: would update '{page_name}' "
+            f"and publish to {_wiki_url(page_name)} ====="
+        )
         for section in sections:
             print(f"{section.title}{section.content}")
 
@@ -101,7 +115,10 @@ def _print_transparency_page() -> None:
         for member in r.smembers(meeting_type.redis_key(NO_AUDIO_KEY)) or set():
             key = member.decode("utf-8") if isinstance(member, bytes) else member
             no_audio_entries.append((meeting_type.display_name, key))
-    print(f"\n===== WIKI PAGE (would save): {WIKI_NO_MATERIALS_PAGE} =====")
+    print(
+        f"\n===== WIKI PAGE: would update '{WIKI_NO_MATERIALS_PAGE}' "
+        f"and publish to {_wiki_url(WIKI_NO_MATERIALS_PAGE)} ====="
+    )
     print(render_no_materials_page(entries, no_audio_entries))
 
 

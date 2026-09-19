@@ -424,10 +424,15 @@ class WikiUpdater(Processor):
     def update_page_sections_for_page(
         self, page_name: str, sections: List[Section], date: str
     ) -> None:
+        # Save whenever there are sections — including for a page that does not
+        # exist yet, which creates it. The previous ``if page.exists()`` guard
+        # silently skipped every new meeting type's year page (only pages that
+        # already existed, e.g. City Council, were ever saved).
+        if not sections:
+            return
         page = pywikibot.Page(self.site, page_name)
-        if page.exists():
-            page.text = "".join(f"{s.title}{s.content}" for s in sections)
-            page.save(summary=f"Added new meeting: {date}")
+        page.text = "".join(f"{s.title}{s.content}" for s in sections)
+        page.save(summary=f"Added new meeting: {date}")
 
     def process_for_date(self, date: str) -> None:
         meeting_details = self.gather_meeting_details(date)
