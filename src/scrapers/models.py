@@ -61,6 +61,7 @@ class MeetingRecord(BaseModel):
     minutes_and_supplemental_materials: dict[str, str] | None = None
     duration: str = ""  # always "" on CivicClerk; retained for Granicus/compat
     cancelled: bool = False  # city marked the meeting cancelled (see agendaName)
+    name: str = ""  # the event's own name (e.g. "Town Hall"); shown for General
 
     # --- additive metadata (ignored by downstream consumers) ---
     scraped_at: str | None = None

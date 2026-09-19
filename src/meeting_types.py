@@ -21,6 +21,11 @@ class MeetingType:
     display_name: str  # human name, e.g. "City Council"
     title_match: str  # substring matched against a CivicClerk listing title
     category: str = ""  # exact CivicClerk API categoryName; defaults to display_name
+    # Show each meeting's own event name above its wiki table. Meaningful only
+    # where meetings under one category are distinct events (e.g. "General"
+    # holds Town Halls, emergency plans, etc.); a single body's meetings don't
+    # need it, so it defaults off.
+    list_meeting_name: bool = False
 
     def __post_init__(self) -> None:
         # Most types' API category equals their display name; only where the
@@ -161,6 +166,7 @@ GENERAL = MeetingType(
     key="gen_mtg",
     display_name="General",
     title_match="General",
+    list_meeting_name=True,
 )
 
 # Order matters for classification: the first matching type wins.
