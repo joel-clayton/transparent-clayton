@@ -120,6 +120,7 @@ class Meeting(TypedDict):
     clip_id: str
     source_type: str
     cancelled: bool
+    name: str
 
 
 class WikiMeeting(Meeting):

@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 
 from pywikibot.textlib import Section
 
+from src.meeting_types import CITY_COUNCIL
 from src.processors.constants import WIKI_MTG_CANCELLED
 from src.processors.update_wiki import (
     WikiUpdater,
@@ -40,6 +41,7 @@ class TestFormatCancelledSection(unittest.TestCase):
         # Bypass __init__ (which authenticates to the wiki); the cancelled branch
         # needs only input_keys, and we stub the durable-link lookup so no Redis.
         updater = WikiUpdater.__new__(WikiUpdater)
+        updater.meeting_type = CITY_COUNCIL
         updater.input_keys = []
         updater.get_doc_links_for_key = lambda key: {}
         return updater
@@ -70,6 +72,7 @@ class TestFormatCancelledSection(unittest.TestCase):
 class TestFormatNoAudioSection(unittest.TestCase):
     def test_no_audio_meeting_keeps_video_row_adds_note_no_ai(self):
         updater = WikiUpdater.__new__(WikiUpdater)
+        updater.meeting_type = CITY_COUNCIL
         updater.input_keys = []
         updater._no_audio_cache = {"2026-08-26 06_00 PM"}
         updater.get_video_backup_links_for_key = lambda key: ["https://yt/x"]
@@ -81,6 +84,43 @@ class TestFormatNoAudioSection(unittest.TestCase):
         content = sections[0].content
         self.assertIn("wikitable", content)  # video row is kept
         self.assertIn("no usable audio", content)  # explanatory note appended
+
+
+class TestGeneralMeetingNameHeading(unittest.TestCase):
+    def _updater(self, meeting_type):
+        u = WikiUpdater.__new__(WikiUpdater)
+        u.meeting_type = meeting_type
+        u.input_keys = []
+        u._no_audio_cache = set()
+        u.get_video_backup_links_for_key = lambda key: []
+        u.get_doc_links_for_key = lambda key: {}
+        return u
+
+    def test_general_shows_event_name_above_table(self):
+        from src.meeting_types import GENERAL
+
+        sections = self._updater(GENERAL).format_wiki_section(
+            {
+                "key": "2026-08-26 06_00 PM",
+                "name": "Town Hall",
+                "video": "https://x/v.mp4",
+            }
+        )
+        content = sections[0].content
+        self.assertIn("'''Town Hall'''", content)
+        self.assertLess(content.index("Town Hall"), content.index("wikitable"))
+
+    def test_other_types_do_not_show_the_name(self):
+        from src.meeting_types import CITY_COUNCIL
+
+        sections = self._updater(CITY_COUNCIL).format_wiki_section(
+            {
+                "key": "2026-08-18 07_00 PM",
+                "name": "Regular Meeting",
+                "video": "https://x/v.mp4",
+            }
+        )
+        self.assertNotIn("Regular Meeting", sections[0].content)
 
 
 class TestRenderMeetingTableRow(unittest.TestCase):

@@ -377,6 +377,14 @@ class WikiUpdater(Processor):
         title = WIKI_MTG_SECTION_TITLE.format(
             meeting_key=self.derive_correct_date_header(key)
         )
+        # For types that hold distinct events (General: Town Halls, etc.), show
+        # the meeting's own name under the date heading, above whatever follows.
+        name = meeting_details.get("name") or ""
+        name_prefix = (
+            f"\n'''{name}'''\n"
+            if (self.meeting_type.list_meeting_name and name)
+            else ""
+        )
         # A cancelled meeting reads "Cancelled" instead of an asset table (there
         # were no proceedings), and gets no AI-summary section. The city's
         # cancellation notice is still linked when one was published.
@@ -388,13 +396,13 @@ class WikiUpdater(Processor):
             )
             marker = WIKI_MTG_CANCELLED.strip()
             body = f"{marker} — {notice_links}" if notice_links else marker
-            return [Section(title=title, content=f"\n{body}\n")]
+            return [Section(title=title, content=f"{name_prefix}\n{body}\n")]
         table_data = render_meeting_table_row(
             meeting_details,
             self.get_video_backup_links_for_key(key),
             doc_links=self.get_doc_links_for_key(key),
         )
-        content = " ".join(
+        content = name_prefix + " ".join(
             [
                 WIKI_MTG_TABLE_OPEN,
                 WIKI_MTG_TABLE_DATA.format(table_data=table_data),

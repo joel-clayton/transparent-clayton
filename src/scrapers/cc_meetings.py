@@ -600,6 +600,7 @@ def parse_meetings_from_civic_clerk_iframe(
                 clip_id=data_id,
                 source_type=meeting_type.source_type,
                 cancelled=is_cancelled(event),
+                name=str(event.get("eventName") or ""),
                 scraped_at=now_local.isoformat(timespec="seconds"),
                 snapshot_ref=snapshot_ref,
             )
