@@ -3,7 +3,7 @@ from datetime import datetime
 
 import requests
 
-from src.meeting_types import CITY_COUNCIL, PLANNING_COMMISSION
+from src.meeting_types import CITY_COUNCIL, GENERAL, PLANNING_COMMISSION
 from src.scrapers import civic_clerk_api as api
 from src.scrapers.errors import TransientScrapeError
 
@@ -98,6 +98,28 @@ class TestClassificationHelpers(unittest.TestCase):
         cc = _event(categoryName="City Council")
         self.assertTrue(api.matches_category(cc, CITY_COUNCIL))
         self.assertFalse(api.matches_category(cc, PLANNING_COMMISSION))
+
+    def test_catchall_event_named_exactly_like_a_type_reroutes(self):
+        # A "General" event named exactly "Planning Commission" belongs to
+        # Planning Commission, not General.
+        event = _event(categoryName="General", eventName="Planning Commission")
+        self.assertTrue(api.matches_category(event, PLANNING_COMMISSION))
+        self.assertFalse(api.matches_category(event, GENERAL))
+
+    def test_catchall_event_keeps_general_without_exact_name_match(self):
+        # Its own name, and a near-but-inexact match, both stay in General.
+        town_hall = _event(categoryName="General", eventName="Town Hall")
+        inexact = _event(
+            categoryName="General", eventName="Special Planning Commission Meeting"
+        )
+        for event in (town_hall, inexact):
+            self.assertTrue(api.matches_category(event, GENERAL))
+            self.assertFalse(api.matches_category(event, PLANNING_COMMISSION))
+
+    def test_explicitly_categorized_event_is_not_rerouted(self):
+        # A real Planning Commission-category event is unaffected by the reroute.
+        event = _event(categoryName="Planning Commission", eventName="Anything")
+        self.assertTrue(api.matches_category(event, PLANNING_COMMISSION))
 
     def test_is_cancelled_from_agenda_name_prefix(self):
         # Spelling and case vary across the portal's cancellation markers.
