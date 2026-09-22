@@ -8,9 +8,44 @@ from src.processors.constants import WIKI_MTG_CANCELLED
 from src.processors.update_wiki import (
     WikiUpdater,
     _humanize_meeting_key,
+    insert_sections_in_date_order,
     render_meeting_table_row,
     render_no_materials_page,
 )
+
+
+class TestInsertSectionsInDateOrder(unittest.TestCase):
+    def _sec(self, title):
+        return Section(title=f"== {title} ==", content="\nbody\n")
+
+    def _order(self, current_titles, new_title, new_key):
+        current = [self._sec(t) for t in current_titles]
+        result = insert_sections_in_date_order(current, [self._sec(new_title)], new_key)
+        return [s.title.strip("= ").strip() for s in result]
+
+    def test_older_date_lands_in_chronological_slot(self):
+        # The regression: re-adding an older date must not jump to the top.
+        order = self._order(
+            ["September 15, 2026", "July 28, 2026", "June 02, 2026"],
+            "August 18, 2026",
+            "2026-08-18",
+        )
+        self.assertEqual(
+            order,
+            ["September 15, 2026", "August 18, 2026", "July 28, 2026", "June 02, 2026"],
+        )
+
+    def test_newest_date_goes_to_top(self):
+        order = self._order(
+            ["July 28, 2026", "June 02, 2026"], "September 15, 2026", "2026-09-15"
+        )
+        self.assertEqual(order[0], "September 15, 2026")
+
+    def test_oldest_date_goes_to_bottom(self):
+        order = self._order(
+            ["September 15, 2026", "July 28, 2026"], "January 6, 2026", "2026-01-06"
+        )
+        self.assertEqual(order[-1], "January 6, 2026")
 
 
 class TestUpdatePageSectionsCreatesPage(unittest.TestCase):
