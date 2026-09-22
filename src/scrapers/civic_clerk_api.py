@@ -25,7 +25,7 @@ from typing import Any
 
 import requests
 
-from src.meeting_types import MeetingType
+from src.meeting_types import GENERAL, MEETING_TYPES, MeetingType
 from src.scrapers.constants import (
     CIVIC_CLERK_API_MAX_PAGES,
     CIVIC_CLERK_API_TIMEOUT,
@@ -41,6 +41,33 @@ logger = logging.getLogger(__name__)
 # format the range bounds the same way and compare as naive local time.
 API_DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 AGENDA_PACKET_TYPE = "Agenda Packet"
+
+# The city files uncategorized meetings under a catch-all category ("General"),
+# sometimes putting another body's meeting there (e.g. a "Planning Commission"
+# event categorized "General"). A catch-all event whose eventName EXACTLY names
+# another configured type is rerouted to it. Exact (not fuzzy) match, so
+# "Special Planning Commission Meeting" stays in the catch-all.
+CATCHALL_CATEGORY = GENERAL.category
+_REROUTE_NAME_TO_CATEGORY: dict[str, str] = {
+    identifier: mt.category
+    for mt in MEETING_TYPES
+    if mt.category != CATCHALL_CATEGORY
+    for identifier in {mt.display_name, mt.category}
+}
+
+
+def effective_category(event: dict[str, Any]) -> str:
+    """The category an event routes to.
+
+    Normally the raw ``categoryName``, but a catch-all event whose ``eventName``
+    exactly names another configured type is rerouted to that type's category.
+    """
+    category = event.get("categoryName") or ""
+    if category == CATCHALL_CATEGORY:
+        name = (event.get("eventName") or "").strip()
+        if name in _REROUTE_NAME_TO_CATEGORY:
+            return _REROUTE_NAME_TO_CATEGORY[name]
+    return category
 
 
 def _range_filter(start: datetime, end: datetime) -> str:
@@ -105,8 +132,9 @@ def event_datetime(event: dict[str, Any]) -> datetime:
 
 
 def matches_category(event: dict[str, Any], meeting_type: MeetingType) -> bool:
-    """Whether ``event`` belongs to ``meeting_type`` (exact categoryName match)."""
-    return (event.get("categoryName") or "") == meeting_type.category
+    """Whether ``event`` belongs to ``meeting_type``, honoring the catch-all
+    reroute (see :func:`effective_category`)."""
+    return effective_category(event) == meeting_type.category
 
 
 def is_cancelled(event: dict[str, Any]) -> bool:
