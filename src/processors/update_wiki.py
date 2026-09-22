@@ -139,6 +139,46 @@ def render_no_materials_page(
     return "\n\n".join(blocks) + "\n"
 
 
+def insert_sections_in_date_order(
+    current_sections: List[Section],
+    new_section_group: List[Section],
+    new_section_key: str,
+) -> List[Section]:
+    """Insert ``new_section_group`` into ``current_sections`` in descending date
+    order (newest first).
+
+    ``new_section_key`` and the existing section titles are compared as the same
+    internal date string (``get_date_or_datetime_string_from_string``), so a
+    re-added older date lands in its chronological slot rather than at the top.
+    """
+    dates = [
+        get_date_or_datetime_string_from_string(s.title)
+        for s in current_sections
+        if get_date_or_datetime_string_from_string(s.title)
+    ]
+    dates.append(new_section_key)
+    dates = sorted(dates, reverse=True)
+
+    # If the new date is the oldest, it goes at the end; otherwise it goes just
+    # before the next-oldest date's section.
+    if dates.index(new_section_key) + 1 == len(dates):
+        return current_sections + new_section_group
+    next_date = dates[dates.index(new_section_key) + 1]
+    first_index = next(
+        (
+            i
+            for i, x in enumerate(current_sections)
+            if get_date_or_datetime_string_from_string(x.title) == next_date
+        ),
+        None,
+    )
+    return (
+        current_sections[:first_index]
+        + new_section_group
+        + current_sections[first_index:]
+    )
+
+
 class WikiUpdater(Processor):
     def __init__(
         self, source_type: SourceType = SourceType.CITY_COUNCIL_MEETING
@@ -446,38 +486,18 @@ class WikiUpdater(Processor):
         meeting_details = self.gather_meeting_details(date)
         new_section_group = self.format_wiki_section(meeting_details)
         new_section_title = self.derive_correct_date_header(date)
+        # Compare in the same (internal) date format the existing section titles
+        # normalize to; otherwise the natural-format header sorts above every ISO
+        # date and the entry is always inserted at the top (see the helper).
+        new_section_key = get_date_or_datetime_string_from_string(new_section_title)
 
         page = self.meeting_type.wiki_year_template.format(
             get_year_string_from_string(date)
         )
         current_sections = self.get_sections_from_wiki_page(page)
-
-        dates = [
-            get_date_or_datetime_string_from_string(s.title)
-            for s in current_sections
-            if get_date_or_datetime_string_from_string(s.title)
-        ]
-        dates.append(new_section_title)
-        dates = sorted(dates, reverse=True)
-
-        # Find the correct index for ordering sections by date
-        if dates.index(new_section_title) + 1 == len(dates):
-            new_page_sections = current_sections + new_section_group
-        else:
-            next_date = dates[dates.index(new_section_title) + 1]
-
-            def contains_date(x: str) -> bool:
-                return get_date_or_datetime_string_from_string(x) == next_date
-
-            first_index = next(
-                (i for i, x in enumerate(current_sections) if contains_date(x.title)),
-                None,
-            )
-            new_page_sections = (
-                current_sections[:first_index]
-                + new_section_group
-                + current_sections[first_index:]
-            )
+        new_page_sections = insert_sections_in_date_order(
+            current_sections, new_section_group, new_section_key
+        )
 
         if new_page_sections:
             self.update_page_sections_for_page(page, new_page_sections, date)
