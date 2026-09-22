@@ -121,15 +121,22 @@ class TestClassificationHelpers(unittest.TestCase):
         event = _event(categoryName="Planning Commission", eventName="Anything")
         self.assertTrue(api.matches_category(event, PLANNING_COMMISSION))
 
-    def test_is_cancelled_from_agenda_name_prefix(self):
-        # Spelling and case vary across the portal's cancellation markers.
-        for agenda_name in (
-            "CANCELED - Planning Commission Meeting",
-            "Canceled - Planning Commission Meeting",
-            "Cancelled - City Council",
-        ):
-            self.assertTrue(api.is_cancelled(_event(agendaName=agenda_name)))
-        # A normal or missing agendaName is not cancelled.
+    def test_is_cancelled_matches_marker_anywhere_in_either_field(self):
+        # Spelling, case, position (prefix or suffix), and field all vary.
+        self.assertTrue(
+            api.is_cancelled(
+                _event(agendaName="CANCELED - Planning Commission Meeting")
+            )
+        )
+        self.assertTrue(
+            api.is_cancelled(
+                _event(agendaName="Planning Commission Meeting - Canceled")
+            )
+        )
+        self.assertTrue(
+            api.is_cancelled(_event(eventName="Canceled - Planning Commission Meeting"))
+        )
+        # A normal or missing name is not cancelled.
         self.assertFalse(api.is_cancelled(_event(agendaName="City Council 070726")))
         self.assertFalse(api.is_cancelled(_event()))
 
