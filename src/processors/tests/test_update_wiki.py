@@ -9,9 +9,32 @@ from src.processors.update_wiki import (
     WikiUpdater,
     _humanize_meeting_key,
     insert_sections_in_date_order,
+    remove_section_by_date,
     render_meeting_table_row,
     render_no_materials_page,
 )
+
+
+class TestRemoveSectionByDate(unittest.TestCase):
+    PAGE = (
+        "== September 15, 2026 ==\n{| a |}\n\n"
+        "== August 18, 2026 ==\n{| b |}\n=== AI summary ===\nstuff\n\n"
+        "== July 28, 2026 ==\n{| c |}\n"
+    )
+
+    def test_removes_target_section_and_its_subsection(self):
+        new_text, removed = remove_section_by_date(self.PAGE, "2026-08-18 07_00 PM")
+        self.assertTrue(removed)
+        self.assertNotIn("August 18, 2026", new_text)
+        self.assertNotIn("AI summary", new_text)  # the subsection went too
+        # The neighbours are untouched.
+        self.assertIn("September 15, 2026", new_text)
+        self.assertIn("July 28, 2026", new_text)
+
+    def test_no_match_returns_text_unchanged(self):
+        new_text, removed = remove_section_by_date(self.PAGE, "2026-01-06 07_00 PM")
+        self.assertFalse(removed)
+        self.assertEqual(new_text, self.PAGE)
 
 
 class TestInsertSectionsInDateOrder(unittest.TestCase):

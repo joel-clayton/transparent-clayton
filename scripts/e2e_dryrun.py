@@ -86,6 +86,9 @@ class DryRunWikiUpdater(WikiUpdater):
     def get_sections_from_wiki_page(self, page_name: str) -> list:
         return []  # treat every year page as empty, so all entries render
 
+    def _refresh_upgraded_meetings(self) -> None:
+        pass  # no live wiki to refresh in a dry run
+
     def update_page_sections_for_page(
         self, page_name: str, sections: list, date: str
     ) -> None:

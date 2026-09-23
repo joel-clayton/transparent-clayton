@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import datetime, timedelta
 
 from celery import chain
 from celery.exceptions import Ignore
@@ -16,7 +17,11 @@ from src.processors.transcribe import Transcriber
 from src.processors.update_wiki import WikiUpdater
 from src.scrapers.cc_meetings import get_latest_downloaded_date, parse_meetings_from_url
 from src.scrapers.alerting import AlertLevel, alert
-from src.scrapers.constants import CIVIC_CLERK_START_DATE
+from src.scrapers.constants import (
+    CIVIC_CLERK_START_DATE,
+    CIVIC_CLERK_TZ,
+    RECHECK_WINDOW_DAYS,
+)
 from src.scrapers.errors import SiteStructureError, TransientScrapeError
 from src.scrapers.models import PipelineClass
 from src.processors.upload_transcript import TranscriptUploader
@@ -50,6 +55,14 @@ def _scrape_type_for_download(meeting_type: MeetingType) -> list[Meeting]:
             meeting_type.display_name,
             latest_date,
         )
+    # Always reconsider at least the last RECHECK_WINDOW_DAYS, even if the
+    # watermark is more recent, so late-posted assets on an already-passed
+    # meeting are still picked up (the watermark only advances on downloaded
+    # video, and can move past a docs-only meeting before its video appears).
+    recheck_floor = datetime.now(CIVIC_CLERK_TZ).replace(tzinfo=None) - timedelta(
+        days=RECHECK_WINDOW_DAYS
+    )
+    latest_date = min(latest_date, recheck_floor)
     meetings = parse_meetings_from_url(latest_date, meeting_type)
     # Only FULL (video) meetings drive the A/V pipeline; docs-only meetings are
     # handled by the wiki/archival stages and must never be downloaded.

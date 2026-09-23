@@ -2,6 +2,7 @@ import atexit
 from datetime import datetime
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -14,6 +15,7 @@ from pywikibot.textlib import Section
 
 from src.constants import (
     WIKI_UPDATED_KEY,
+    WIKI_REFRESH_KEY,
     DETAIL_KEY,
     NO_ASSETS_KEY,
     NO_AUDIO_KEY,
@@ -45,6 +47,7 @@ from src.util import (
     get_year_string_from_string,
     get_date_or_datetime_string_from_string,
     get_date_string_from_string,
+    get_datetime_string_from_string,
     send_to_discord_bots,
 )
 
@@ -111,6 +114,35 @@ def _no_materials_rows(entries: list[tuple[str, str]]) -> str:
         f"* {_humanize_meeting_key(key)} — {display}"
         for display, key in sorted(entries, key=lambda entry: entry[1], reverse=True)
     )
+
+
+def remove_section_by_date(text: str, meeting_key: str) -> tuple[str, bool]:
+    """Remove the level-2 date section (and its subsections) for ``meeting_key``
+    from wiki page ``text``. Returns ``(new_text, removed?)``.
+
+    Matches the section whose heading date equals ``meeting_key`` — as either the
+    date-only or the date+time normalization, since the heading may carry a time
+    only when there were same-day meetings.
+    """
+    forms = {
+        f
+        for f in (
+            get_date_string_from_string(meeting_key),
+            get_datetime_string_from_string(meeting_key),
+        )
+        if f
+    }
+    for match in re.finditer(r"(?m)^==\s*([^=].*?)\s*==\s*$", text):
+        header = match.group(1)
+        if get_date_or_datetime_string_from_string(header) in forms:
+            pattern = re.compile(
+                r"^==\s*" + re.escape(header) + r"\s*==.*?(?=^==[^=]|\Z)",
+                re.S | re.M,
+            )
+            new_text, count = pattern.subn("", text, count=1)
+            if count:
+                return new_text, True
+    return text, False
 
 
 def render_no_materials_page(
@@ -528,6 +560,31 @@ class WikiUpdater(Processor):
                 "Updated transparency page with %d meeting(s)", len(entries)
             )
 
+    def _refresh_upgraded_meetings(self) -> None:
+        """Remove the wiki entry for any meeting flagged as upgraded (its assets
+        grew, e.g. a video posted late) so the normal pass re-adds it with its
+        current assets. The wiki otherwise never re-renders an existing entry.
+        """
+        refresh_key = self.meeting_type.redis_key(WIKI_REFRESH_KEY)
+        for member in list(r.smembers(refresh_key) or set()):
+            meeting_key = (
+                member.decode("utf-8") if isinstance(member, bytes) else member
+            )
+            page_name = self.meeting_type.wiki_year_template.format(
+                get_year_string_from_string(meeting_key)
+            )
+            page = pywikibot.Page(self.site, page_name)
+            if page.exists():
+                new_text, removed = remove_section_by_date(page.text, meeting_key)
+                if removed:
+                    page.text = new_text
+                    page.save(summary=f"Refreshing {meeting_key} (assets updated)")
+                    self.logger.info("Cleared %s for refresh", meeting_key)
+            # Clear the flag regardless: the normal pass re-adds it, and a stale
+            # flag must not cause repeated churn on every run.
+            r.srem(refresh_key, member)
+
     def process(self) -> None:
+        self._refresh_upgraded_meetings()
         super().process()
         self.update_transparency_page()
