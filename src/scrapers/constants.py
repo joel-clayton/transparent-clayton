@@ -52,6 +52,10 @@ COMPRESSION_PATTERN = "City of Clayton"
 
 DEFAULT_ONE_WEEK_SECONDS_EXPIRATION = 60 * 60 * 24 * 7
 CIVIC_CLERK_START_DATE = datetime(2026, 5, 10)
+# Always re-scrape at least this many days back, even when the download watermark
+# is more recent, so a meeting whose assets are posted late (after a newer
+# meeting's video advanced the watermark past it) is still reconciled.
+RECHECK_WINDOW_DAYS = 30
 
 # Fault-tolerance knobs for unattended (cron-driven) scraping.
 PAGE_LOAD_TIMEOUT = 45  # seconds; caps a hung driver.get so cron can't stall

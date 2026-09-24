@@ -24,6 +24,7 @@ from src.constants import (
     DATETIME_FORMAT,
     DETAIL_KEY,
     NO_ASSETS_KEY,
+    WIKI_REFRESH_KEY,
 )
 from src.scrapers.constants import (
     CIVIC_CLERK_TZ,
@@ -587,6 +588,18 @@ def parse_meetings_from_civic_clerk_iframe(
             f"event {data_id}",
         )
         meeting_key = meeting_dt.strftime(DATETIME_FORMAT)
+        # The class we last recorded for this meeting, to detect an asset upgrade
+        # (e.g. docs-only -> full when a video is posted late) whose wiki entry
+        # then needs refreshing.
+        prior_detail = r.hget(meeting_type.redis_key(DETAIL_KEY), meeting_key)
+        prior_class = None
+        if prior_detail:
+            try:
+                prior_class = json.loads(prior_detail.decode("utf-8")).get(
+                    "pipeline_class"
+                )
+            except (ValueError, AttributeError):
+                prior_class = None
         video_link = video_url(event)
         agenda_packet, supplemental = split_documents(event)
         try:
@@ -657,6 +670,11 @@ def parse_meetings_from_civic_clerk_iframe(
             # re-runs skip re-scraping. The task routes FULL keys (only) into
             # the scraped list.
             _mark_av_seen(meeting_type, data_id)
+            # A meeting already rendered as docs-only that now has a video is an
+            # in-place upgrade; flag it so the wiki refreshes its entry (the wiki
+            # won't otherwise re-render a meeting that's already on the page).
+            if prior_class == PipelineClass.DOCS_ONLY.value:
+                r.sadd(meeting_type.redis_key(WIKI_REFRESH_KEY), meeting_key)
         # Return FULL and DOCS_ONLY meetings: both reach the wiki stage, and
         # the task filters FULL for the A/V pipeline.
         new_meetings.append(meeting)
