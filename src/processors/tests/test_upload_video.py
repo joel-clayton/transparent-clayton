@@ -1,10 +1,58 @@
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from src.processors.tests._helpers import TempDirTestCase, make_uploader
 from src.processors.upload_video import VideoUploader
 from src.util import get_part_num_from_string
+
+
+def _item(title, vid):
+    return {"snippet": {"title": title, "resourceId": {"videoId": vid}}}
+
+
+class TestGetRecentVideoTitlesPaginates(unittest.TestCase):
+    """The idempotency check must see EVERY uploaded video (across all pages),
+    or once the channel exceeds one page the pipeline re-uploads duplicates."""
+
+    def test_follows_all_pages_and_filters_links_to_this_type(self):
+        uploader = make_uploader(VideoUploader)  # defaults to City Council
+        page1 = {
+            "items": [
+                _item("Clayton CA City Council Meeting 2026-06-16 07:00 PM", "cc1"),
+                _item(
+                    "Clayton CA Planning Commission Meeting 2026-05-26 07:00 PM", "pc"
+                ),
+            ]
+        }
+        page2 = {
+            "items": [
+                _item("Clayton CA City Council Meeting 2026-07-07 07:00 PM", "cc2"),
+            ]
+        }
+        req1, req2 = MagicMock(), MagicMock()
+        req1.execute.return_value = page1
+        req2.execute.return_value = page2
+        pi = MagicMock()
+        pi.list.return_value = req1
+        pi.list_next.side_effect = [req2, None]  # page2, then stop
+        uploader.service = MagicMock()
+        uploader.service.playlistItems.return_value = pi
+
+        with patch.object(uploader, "update_video_links_in_redis") as upd:
+            titles = uploader.get_recent_video_titles("UPLOADS")
+
+        # Titles from BOTH pages are returned (nothing scrolls off).
+        self.assertEqual(len(titles), 3)
+        self.assertIn("Clayton CA City Council Meeting 2026-07-07 07:00 PM", titles)
+        # Only this type's titles get their links recorded (no cross-type write).
+        recorded = upd.call_args.args[0]  # {title: video_id} for this type only
+        self.assertEqual(len(recorded), 2)
+        self.assertIn("Clayton CA City Council Meeting 2026-06-16 07:00 PM", recorded)
+        self.assertIn("Clayton CA City Council Meeting 2026-07-07 07:00 PM", recorded)
+        self.assertNotIn(
+            "Clayton CA Planning Commission Meeting 2026-05-26 07:00 PM", recorded
+        )
 
 
 class TestGetPartNumFromString(unittest.TestCase):
