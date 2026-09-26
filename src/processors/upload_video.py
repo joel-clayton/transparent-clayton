@@ -12,7 +12,7 @@ import httplib2
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
-from src.processors.google_auth import load_credentials
+from src.processors.helpers.google_auth import load_credentials
 
 from celery_app import r
 from src.constants import (

@@ -32,8 +32,8 @@ from src.constants import (
     DOCS_ARCHIVED_KEY,
 )
 from src.meeting_types import CITY_COUNCIL, MeetingType
-from src.processors.drive_folders import find_or_create_type_folder
-from src.processors.google_auth import load_credentials
+from src.processors.helpers.drive_folders import find_or_create_type_folder
+from src.processors.helpers.google_auth import load_credentials
 from src.processors.upload_transcript import (
     DESKTOP_APP_CLIENT_SECRET,
     DRIVE_TOKEN_FILE,

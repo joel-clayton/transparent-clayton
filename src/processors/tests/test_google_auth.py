@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-import src.processors.google_auth as ga
+import src.processors.helpers.google_auth as ga
 
 
 class TestLoadCredentials(unittest.TestCase):
