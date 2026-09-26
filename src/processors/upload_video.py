@@ -70,7 +70,8 @@ SCOPES = ["https://www.googleapis.com/auth/youtube"]
 API_SERVICE_NAME = "youtube"
 API_VERSION = "v3"
 
-RESULT_COUNT = 30
+RESULT_COUNT = 50  # page size for the uploads list (see get_recent_video_titles)
+MAX_UPLOADS_PAGES = 200  # safety cap on pagination (~10k videos at 50/page)
 
 
 class PlaylistInfo(TypedDict):
@@ -310,24 +311,35 @@ class VideoUploader(Processor):
     def get_recent_video_titles(
         self, uploads_playlist_id: List, result_count: int = RESULT_COUNT
     ) -> List:
-        # Retrieve the list of videos uploaded to the authenticated user's channel.
-        playlistitems_list_request = self.service.playlistItems().list(
+        # Page through the ENTIRE uploads list, not just the most recent page:
+        # the idempotency check must see every already-uploaded video, or once
+        # the channel exceeds one page the pipeline re-uploads (duplicating)
+        # anything that has scrolled off. ``result_count`` is the page size.
+        self.logger.debug("Videos in list %s" % uploads_playlist_id)
+        video_titles = []
+        video_ids = {}
+        request = self.service.playlistItems().list(
             playlistId=uploads_playlist_id,
             part="snippet",
             maxResults=result_count,
         )
-        self.logger.debug("Videos in list %s" % uploads_playlist_id)
-
-        playlistitems_list_response = playlistitems_list_request.execute()
-
-        video_titles = []
-        video_ids = {}
-        for playlist_item in playlistitems_list_response["items"]:
-            title = playlist_item["snippet"]["title"]
-            video_titles.append(title)
-            video_id = playlist_item["snippet"]["resourceId"]["videoId"]
-            video_ids[title] = video_id
-        self.update_video_links_in_redis(video_ids)
+        pages = 0
+        while request is not None and pages < MAX_UPLOADS_PAGES:
+            response = request.execute()
+            for playlist_item in response["items"]:
+                title = playlist_item["snippet"]["title"]
+                video_titles.append(title)
+                video_ids[title] = playlist_item["snippet"]["resourceId"]["videoId"]
+            request = self.service.playlistItems().list_next(request, response)
+            pages += 1
+        # Only record links for THIS type's videos; the uploads list spans every
+        # type, and attributing another type's video here would misfile its link.
+        typed_ids = {
+            title: vid
+            for title, vid in video_ids.items()
+            if self.meeting_type.compressed_title_prefix in title
+        }
+        self.update_video_links_in_redis(typed_ids)
         return video_titles
 
     def get_output_title_from_input(self, filepath: str) -> str:
