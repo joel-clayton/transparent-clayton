@@ -87,6 +87,7 @@ from src.types import MEETING_TYPE_BY_SOURCE, SourceType  # noqa: E402
 from src.util import (  # noqa: E402
     get_date_or_datetime_string_from_string,
     get_part_num_from_string,
+    get_year_string_from_string,
 )
 
 # Stage directories keyed by a short label for the report.
@@ -297,8 +298,11 @@ def find_mismatches(
         m = report.rows[key]
 
         if not _has_presence(m):
-            if m.link_parts:  # dead/misfiled pointer with no meeting behind it
-                orphan_links += 1
+            # Count individual dead pointers (parts), matching what reconcile
+            # deletes — a live-pointing misfiling is harmless and left alone.
+            orphan_links += sum(
+                1 for vid in m.link_parts.values() if vid not in channel_ids
+            )
             continue
 
         dt = _key_datetime(key)
@@ -342,26 +346,42 @@ def find_mismatches(
     return lines, orphan_links, historical
 
 
+def _affected_real_meetings(
+    report: TypeReport, channel_ids: set[str], include_historical: bool
+) -> set[str]:
+    """Meeting keys that genuinely exist in this type (detail/disk) and have a
+    stale or missing video_link — the real broken wiki backups worth re-rendering.
+
+    Honors the EARLIEST floor: a pre-pipeline meeting must NOT be flagged for
+    re-render, because WikiUpdater removes a flagged section unconditionally and
+    then declines to re-add anything older than EARLIEST — which would silently
+    drop that meeting's row from the wiki.
+    """
+    affected: set[str] = set()
+    for key, m in report.rows.items():
+        if not _has_presence(m):
+            continue
+        dt = _key_datetime(key)
+        if not include_historical and dt is not None and dt < EARLIEST:
+            continue
+        has_stale = any(v not in channel_ids for v in m.link_parts.values())
+        has_missing = bool(set(m.yt_parts) - set(m.link_parts))
+        if has_stale or has_missing:
+            affected.add(key)
+    return affected
+
+
 def reconcile_type(
     source_type: SourceType,
     report: TypeReport,
     channel_ids: set[str],
+    include_historical: bool,
 ) -> list[str]:
     """Fix what can be fixed by driving existing workflows. Returns action log."""
     actions: list[str] = []
     mt = report.meeting_type
 
-    # Meetings that genuinely exist in this type and have a stale/missing link:
-    # these are the real broken wiki backups worth re-rendering.
-    affected = {
-        key
-        for key, m in report.rows.items()
-        if _has_presence(m)
-        and (
-            any(v not in channel_ids for v in m.link_parts.values())
-            or (set(m.yt_parts) - set(m.link_parts))
-        )
-    }
+    affected = _affected_real_meetings(report, channel_ids, include_historical)
     # Any dead pointer at all (real or orphan contamination) is deletable.
     has_dead = any(
         v not in channel_ids
@@ -404,6 +424,66 @@ def reconcile_type(
     return actions
 
 
+@dataclass
+class Plan:
+    """What ``--reconcile`` would change, aggregated for the dry-run summary."""
+
+    repoint: int = 0  # pointers that would be re-aimed at a surviving video
+    clear_real: int = 0  # dead pointers on real meetings with no surviving video
+    clear_orphan: int = 0  # orphan contamination pointers with no meeting behind them
+    wiki_keys: set[str] = field(default_factory=set)  # real meetings to re-render
+    pages: set[str] = field(default_factory=set)  # wiki pages those meetings live on
+
+    def merge(self, other: "Plan") -> None:
+        self.repoint += other.repoint
+        self.clear_real += other.clear_real
+        self.clear_orphan += other.clear_orphan
+        self.wiki_keys |= other.wiki_keys
+        self.pages |= other.pages
+
+    @property
+    def total_deletes(self) -> int:
+        return self.clear_real + self.clear_orphan
+
+    @property
+    def any_changes(self) -> bool:
+        return bool(self.repoint or self.total_deletes or self.wiki_keys)
+
+
+def plan_for_report(
+    report: TypeReport, channel_ids: set[str], include_historical: bool
+) -> Plan:
+    """Compute what --reconcile would do for one type (no side effects)."""
+    plan = Plan()
+    mt = report.meeting_type
+    for key, m in report.rows.items():
+        if _has_presence(m):
+            dt = _key_datetime(key)
+            historical = not include_historical and dt is not None and dt < EARLIEST
+            touched = False
+            for part, vid in m.link_parts.items():
+                if vid in channel_ids:
+                    continue
+                if part in m.yt_parts:  # a surviving upload to re-aim at
+                    plan.repoint += 1
+                else:  # nothing live to point at -> the pointer is removed
+                    plan.clear_real += 1
+                touched = True
+            for _ in set(m.yt_parts) - set(m.link_parts):  # uploaded, never linked
+                plan.repoint += 1
+                touched = True
+            if touched and not historical:
+                plan.wiki_keys.add(key)
+                plan.pages.add(
+                    mt.wiki_year_template.format(get_year_string_from_string(key))
+                )
+        else:
+            for vid in m.link_parts.values():
+                if vid not in channel_ids:
+                    plan.clear_orphan += 1
+    return plan
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -431,11 +511,32 @@ def main() -> None:
     disk_by_stub, unrecognized = _disk_index()
     compressed_parts = _compressed_parts_by_stub()
 
-    print(f"channel has {len(channel_ids)} live video(s)\n")
+    mode = "RECONCILE (writes to Redis)" if args.reconcile else "AUDIT (read-only)"
+    print(f"Reconciliation report — mode: {mode}")
+    print(
+        f"Cross-checking {len(channel_ids)} live channel video(s) against the files "
+        "on disk and the pointers in Redis, per meeting type.\n"
+    )
+    print(
+        "What the findings mean:\n"
+        "  STALE_VIDEO_LINK   Redis points a meeting's 'Video Backup' at a video "
+        "that is no longer on the channel — the wiki link is broken.\n"
+        "  MISSING_VIDEO_LINK a video is uploaded but no Redis pointer references "
+        "it, so the wiki shows no backup link for that part.\n"
+        "  MISSING_UPLOAD     a compressed video part is on disk but was never "
+        "uploaded to YouTube.\n"
+        "  NO_DETAIL          the meeting has files/uploads but no Redis 'detail' "
+        "record (usually an older meeting already on the wiki; informational).\n"
+        "  TRANSCRIPT_NO_LINK a transcript file exists on disk but no transcript "
+        "link is recorded in Redis.\n"
+        "  ORPHAN_LINK        a dead pointer with no matching meeting in this type — "
+        "leftover cross-type contamination; never shown on the wiki.\n"
+    )
 
     total_issue_meetings = 0
     total_orphan_links = 0
     total_historical = 0
+    total_plan = Plan()
     for source_type, meeting_type in MEETING_TYPE_BY_SOURCE.items():
         if args.type_key and meeting_type.key != args.type_key:
             continue
@@ -451,6 +552,7 @@ def main() -> None:
         )
         total_orphan_links += orphan_links
         total_historical += historical
+        total_plan.merge(plan_for_report(report, channel_ids, args.include_historical))
         header = f"=== {meeting_type.display_name} ({meeting_type.key}) ==="
         if lines or orphan_links:
             total_issue_meetings += len(lines)
@@ -463,33 +565,102 @@ def main() -> None:
                     "meeting in this type (contamination; cleanup only, not on wiki)"
                 )
             if args.reconcile:
-                for action in reconcile_type(source_type, report, channel_ids):
+                for action in reconcile_type(
+                    source_type, report, channel_ids, args.include_historical
+                ):
                     print(f"    -> {action}")
             print()
 
     unrecognized_total = sum(unrecognized.values())
     if unrecognized_total:
         print(
-            f"note: {unrecognized_total} file(s) under the stage dirs were skipped "
-            "(no recognized date or type stub — e.g. legacy pre-pipeline names): "
+            f"Note: {unrecognized_total} file(s) under the stage directories were "
+            "left out because their names carry no recognized date or meeting-type "
+            "stub (e.g. legacy pre-pipeline names): "
             + ", ".join(f"{stage}={n}" for stage, n in sorted(unrecognized.items()))
+            + ".\n"
         )
 
     if total_historical:
         print(
-            f"note: {total_historical} pre-pipeline meeting(s) older than "
-            f"{EARLIEST:%Y-%m-%d} skipped; pass --all to include them."
+            f"Note: {total_historical} pre-pipeline meeting(s) dated before "
+            f"{EARLIEST:%Y-%m-%d} were skipped (they predate the automated pipeline "
+            "and are left untouched). Pass --all to include them.\n"
         )
 
     if not total_issue_meetings and not total_orphan_links:
-        print("No mismatches found. Disk, YouTube, and Redis agree.")
-    elif not args.reconcile:
         print(
-            f"\n{total_issue_meetings} meeting(s) with real mismatches, "
-            f"{total_orphan_links} orphan pointer(s). "
-            "Re-run with --reconcile to repoint links, clear dead pointers, "
-            "and flag wiki re-render."
+            "Everything agrees — disk, YouTube, and Redis are consistent. Nothing to do."
         )
+        return
+
+    print(
+        f"Summary: {total_issue_meetings} meeting(s) flagged with findings above "
+        "(some, like NO_DETAIL, are informational only), plus "
+        f"{total_orphan_links} orphan contamination pointer(s). The actionable "
+        "subset is spelled out next.\n"
+    )
+    _print_planned_changes(total_plan, applied=args.reconcile)
+
+
+def _print_planned_changes(plan: Plan, applied: bool) -> None:
+    """Describe, in prose, exactly what --reconcile changes — and what it never
+    touches — separating internal Redis writes from the one outward-facing effect."""
+    verb = "Applied" if applied else "Would apply"
+    lead = (
+        "The changes below have been written to Redis"
+        if applied
+        else "Running again with --reconcile would make the following changes"
+    )
+    print(f"{lead}:\n")
+
+    print("  Redis (internal pipeline state — not visible to anyone directly):")
+    if plan.repoint:
+        print(
+            f"    • {verb.lower()}: re-aim {plan.repoint} video-backup pointer(s) at "
+            "the surviving re-uploaded video(s), via the uploader's own "
+            "get_recent_video_titles workflow."
+        )
+    if plan.clear_real:
+        print(
+            f"    • {verb.lower()}: remove {plan.clear_real} pointer(s) on real "
+            "meetings whose video is gone with no surviving copy to point at."
+        )
+    if plan.clear_orphan:
+        print(
+            f"    • {verb.lower()}: remove {plan.clear_orphan} orphan pointer(s) "
+            "left by past cross-type contamination (no meeting behind them)."
+        )
+    if not (plan.repoint or plan.total_deletes):
+        print("    • (no pointer changes)")
+
+    print("\n  Public wiki (the ONLY outward-facing change):")
+    if plan.wiki_keys:
+        pages = ", ".join(f'"{p}"' for p in sorted(plan.pages))
+        tail = (
+            "have been flagged; the next WikiUpdater run will rewrite them"
+            if applied
+            else "would be flagged so the next WikiUpdater run rewrites them"
+        )
+        print(
+            f"    • {len(plan.wiki_keys)} meeting row(s) {tail}. Their broken "
+            "'Video Backup' links get repointed to the surviving video or removed. "
+            f"Affected page(s): {pages}."
+        )
+        print(
+            "    • Note: this script only sets a Redis flag; the actual wiki edit "
+            "happens on the next scheduled (or manually triggered) WikiUpdater run, "
+            "not right now."
+        )
+    else:
+        print("    • None — no wiki rows are re-rendered.")
+
+    print(
+        "\n  Never touched: YouTube (no uploads/deletes), Google Drive, and the "
+        "files on disk. This tool only reads those; it writes to Redis alone.\n"
+    )
+    if not applied:
+        print("Re-run with --reconcile to apply the Redis changes above.")
 
 
 if __name__ == "__main__":
