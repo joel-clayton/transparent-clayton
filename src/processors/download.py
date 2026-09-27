@@ -10,6 +10,7 @@ import requests
 from celery_app import r
 from src.constants import DETAIL_KEY, SCRAPED_KEY, DOWNLOADED_KEY
 from src.processors.process import Processor
+from src.scrapers.alerting import AlertLevel, alert
 from src.settings import DOWNLOADED_DIR
 from src.types import JobType, SourceType, MEETING_TYPE_BY_SOURCE
 
@@ -55,62 +56,75 @@ class Downloader(Processor):
         if not meetings_to_download:
             return None
 
+        failures: List[str] = []
         for date in meetings_to_download:
-            details_str: bytes | None = r.hget(
-                self.meeting_type.redis_key(DETAIL_KEY), date
+            try:
+                outfile = self.construct_filepath_for_date(date)
+                if os.path.exists(outfile):
+                    self.logger.info(
+                        "Found outfile, skipping download...",
+                        extra={date: date, outfile: outfile},
+                    )
+                    continue
+                self._download_one(date, outfile)
+                # Mark done only after a successful download; a raise leaves the
+                # date unmarked so the next run retries it.
+                r.hset(self.redis_key, date, 1)
+                self.log_complete_for_date(date=date)
+            except Exception as exc:
+                # One meeting's failure (e.g. a Granicus 404 or unresolved media
+                # URL) must not abort the rest of the batch — previously this
+                # re-raised, blocking every meeting behind it. Log, collect, and
+                # continue; a batched alert is sent below.
+                self.logger.error("Failed %s for %s: %s", self.job_type.name, date, exc)
+                failures.append(f"{date}: {exc}")
+
+        if failures:
+            alert(
+                AlertLevel.ACTIONABLE,
+                f"{len(failures)} {self.job_type.name} meeting(s) failed this run:"
+                "\n- " + "\n- ".join(failures),
             )
-            details = {}
-            if not details_str:
-                raise Exception(
-                    f"Could not parse meeting details from Redis for {date}"
-                )
-            details = json.loads(details_str.decode("utf-8"))
-            outfile = self.construct_filepath_for_date(date)
-            if os.path.exists(outfile):
-                self.logger.info(
-                    "Found outfile, skipping download...",
-                    extra={date: date, outfile: outfile},
-                )
-                continue
-
-            # CivicClerk stores a direct media URL in `video` (progressive MP4
-            # on cpmedia.azureedge.net). Granicus stores a player-page URL
-            # there and requires resolving the HLS playlist via clip_id.
-            video = details.get("video") or ""
-            if "youtube" in video:
-                self.logger.error("Trying youtube-dl method")
-                from yt_dlp import YoutubeDL
-
-                opts = {
-                    **YTDL_OPTS,
-                    "outtmpl": os.path.join(
-                        DOWNLOADED_DIR, self.meeting_type.file_template_yt_dlp
-                    ).format(date),
-                }
-                try:
-                    with YoutubeDL(opts) as ydl:
-                        ydl.download([video])
-                except Exception as ex:
-                    print(f"yt error: {ex}")
-
-            elif video.endswith((".mp4", ".m3u8")):
-                self.logger.debug("Trying civicclerk method")
-                self.get_media_stream(video, outfile)
-            else:
-                self.logger.debug("Trying granicus method")
-                clip_id = details.get("clip_id")
-                if not clip_id:
-                    raise Exception("No Clip ID found in City Council Meeting details")
-                media_url = self.get_m3u_url(clip_id)
-                if not media_url:
-                    raise Exception(f"Unable to find media url for date {date}")
-                self.get_media_stream(media_url, outfile)
-
-            outfile = outfile.replace(":", "\\:")
-            r.hset(self.redis_key, date, 1)
-            self.log_complete_for_date(date=date)
-
         return None
+
+    def _download_one(self, date: str, outfile: str) -> None:
+        details_str: bytes | None = r.hget(
+            self.meeting_type.redis_key(DETAIL_KEY), date
+        )
+        if not details_str:
+            raise Exception(f"Could not parse meeting details from Redis for {date}")
+        details = json.loads(details_str.decode("utf-8"))
+
+        # CivicClerk stores a direct media URL in `video` (progressive MP4 on
+        # cpmedia.azureedge.net). Granicus stores a player-page URL there and
+        # requires resolving the HLS playlist via clip_id.
+        video = details.get("video") or ""
+        if "youtube" in video:
+            self.logger.info("Trying youtube-dl method")
+            from yt_dlp import YoutubeDL
+
+            opts = {
+                **YTDL_OPTS,
+                "outtmpl": os.path.join(
+                    DOWNLOADED_DIR, self.meeting_type.file_template_yt_dlp
+                ).format(date),
+            }
+            # Let yt-dlp errors propagate so a failed download is treated as a
+            # failure (not swallowed and then marked complete).
+            with YoutubeDL(opts) as ydl:
+                ydl.download([video])
+        elif video.endswith((".mp4", ".m3u8")):
+            self.logger.debug("Trying civicclerk method")
+            self.get_media_stream(video, outfile)
+        else:
+            self.logger.debug("Trying granicus method")
+            clip_id = details.get("clip_id")
+            if not clip_id:
+                raise Exception("No Clip ID found in City Council Meeting details")
+            media_url = self.get_m3u_url(clip_id)
+            if not media_url:
+                raise Exception(f"Unable to find media url for date {date}")
+            self.get_media_stream(media_url, outfile)
 
     def get_m3u_url(self, clip_id: str) -> str:
         response = requests.get(PLAYER_URL.format(clip_id=clip_id))
