@@ -191,5 +191,45 @@ class TestGetMostRecentMissingDates(unittest.TestCase):
             )
 
 
+class TestProcessContinuesOnError(unittest.TestCase):
+    DATES = ["2026-05-08", "2026-05-15", "2026-05-22"]
+
+    def _run(self, failing):
+        processor = _StubProcessor()
+        processed: list[str] = []
+
+        def process_for_date(d):
+            processed.append(d)
+            if d in failing:
+                raise RuntimeError(f"boom {d}")
+
+        with (
+            patch.object(
+                processor, "get_most_recent_missing_dates", return_value=self.DATES
+            ),
+            patch.object(processor, "process_for_date", side_effect=process_for_date),
+            patch("src.processors.process.r") as mock_r,
+            patch("src.processors.process.alert") as mock_alert,
+        ):
+            processor.process()
+        marked = [call.args[1] for call in mock_r.hset.call_args_list]
+        return processed, marked, mock_alert
+
+    def test_one_failure_does_not_block_the_rest(self):
+        processed, marked, mock_alert = self._run(failing={"2026-05-15"})
+        # every meeting was attempted even though the middle one raised
+        self.assertEqual(processed, self.DATES)
+        # only the successful dates were marked done (failure retried next run)
+        self.assertEqual(marked, ["2026-05-08", "2026-05-22"])
+        # exactly one batched alert names the failure
+        mock_alert.assert_called_once()
+        self.assertIn("2026-05-15", mock_alert.call_args.args[1])
+
+    def test_no_alert_when_all_succeed(self):
+        processed, marked, mock_alert = self._run(failing=set())
+        self.assertEqual(marked, self.DATES)
+        mock_alert.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -167,5 +167,31 @@ class TestGetMostRecentMissingDates(unittest.TestCase):
         self.assertEqual(len(missing), 2)
 
 
+class TestProcessForDateFailsLoudly(unittest.TestCase):
+    """A failed upload must NOT be reported as completed (TRA-123): it used to
+    swallow the HttpError and fall through to log_complete + a 'completed'
+    Discord message, so a date that hit YouTube's daily limit was marked done
+    and silently skipped."""
+
+    def test_http_error_raises_and_does_not_report_completed(self):
+        from googleapiclient.errors import HttpError
+
+        uploader = make_uploader(VideoUploader)
+        uploader.service = MagicMock()  # truthy: skip re-auth
+        uploader.playlists = ["existing"]  # truthy: skip get_playlists()
+        date = "/vol/Clayton CA City Council Meeting 2026-05-08 07_00 PM - 000.mp4"
+        err = HttpError(MagicMock(status=403), b"dailyLimitExceeded")
+
+        with (
+            patch("src.processors.upload_video.get_file_size_in_mb", return_value=999),
+            patch("src.processors.upload_video.send_to_discord_bots") as discord,
+            patch.object(uploader, "get_publish_datetime", return_value=""),
+            patch.object(uploader, "initialize_upload", side_effect=err),
+        ):
+            with self.assertRaises(Exception):
+                uploader.process_for_date(date)
+            discord.assert_not_called()  # never falsely reports "completed"
+
+
 if __name__ == "__main__":
     unittest.main()
