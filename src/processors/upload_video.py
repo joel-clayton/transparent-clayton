@@ -23,7 +23,7 @@ from src.constants import (
     VIDEO_LINK_TEMPLATE,
 )
 from src.processors.process import Processor
-from src.settings import COMPRESSED_DIR
+from src.settings import COMPRESSED_DIR, YOUTUBE_CLIENT_SECRET_FILE
 from src.types import JobType, SourceType, type_stubs, Meeting, MEETING_TYPE_BY_SOURCE
 from src.processors.constants import (
     PUBLIC_VIDEO_STATUS,
@@ -58,7 +58,9 @@ VALID_PRIVACY_STATUSES = ("public", "private", "unlisted")
 
 DESCRIPTION = "Unedited video from claytonca.gov"
 KEYWORDS = "news, politics"
-CLIENT_SECRETS_FILE = "/Users/gautam/dev/client_secret.json"
+# Per-machine OAuth client-secret path; overridable via YOUTUBE_CLIENT_SECRET_FILE
+# (see src.settings). Name kept for importers (reconcile.py, tests).
+CLIENT_SECRETS_FILE = YOUTUBE_CLIENT_SECRET_FILE
 # Cached OAuth token so uploads run headless after a one-time consent.
 YOUTUBE_TOKEN_FILE = os.environ.get("YOUTUBE_TOKEN_FILE") or os.path.join(
     os.path.dirname(CLIENT_SECRETS_FILE), "youtube_token.json"

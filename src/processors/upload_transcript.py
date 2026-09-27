@@ -18,7 +18,11 @@ from src.processors.constants import EARLIEST
 from src.processors.helpers.drive_folders import find_or_create_type_folder
 from src.processors.helpers.google_auth import load_credentials
 from src.processors.process import Processor
-from src.settings import TRANSCRIBED_DIR
+from src.settings import (
+    DRIVE_CLIENT_SECRET_FILE,
+    TRANSCRIBED_DIR,
+    TRANSCRIPT_SHARE_LIST,
+)
 from src.types import JobType, SourceType, MEETING_TYPE_BY_SOURCE
 from src.util import get_year_string_from_string, send_to_discord_bots
 
@@ -30,12 +34,14 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
     "https://www.googleapis.com/auth/drive.file",
 ]
-DESKTOP_APP_CLIENT_SECRET = "/Users/gautam/dev/client_secret_721413148557-p0c4gqeha85bo7astbjc9c29hp3a30b6.apps.googleusercontent.com.json"
+# Per-machine OAuth client-secret path; overridable via DRIVE_CLIENT_SECRET_FILE
+# (see src.settings). Name kept for importers (archive_docs.py).
+DESKTOP_APP_CLIENT_SECRET = DRIVE_CLIENT_SECRET_FILE
 # Cached OAuth token so Drive uploads run headless after a one-time consent.
 DRIVE_TOKEN_FILE = os.environ.get("DRIVE_TOKEN_FILE") or os.path.join(
     os.path.dirname(DESKTOP_APP_CLIENT_SECRET), "drive_token.json"
 )
-SHARE_LIST = ["grahamjordan2596@gmail.com"]
+SHARE_LIST = TRANSCRIPT_SHARE_LIST
 
 
 class TranscriptUploader(Processor):

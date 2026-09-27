@@ -1,13 +1,19 @@
-import os
-
 import redis
 from celery import Celery
+
+from src.settings import (
+    REDIS_BACKEND_URL,
+    REDIS_BROKER_URL,
+    REDIS_HOST,
+    REDIS_PORT,
+    REDIS_STATE_DB,
+)
 
 # Define the app instance
 app = Celery(
     "transparent_clayton",
-    broker="redis://localhost:6379/0",
-    backend="redis://localhost:6379/1",
+    broker=REDIS_BROKER_URL,
+    backend=REDIS_BACKEND_URL,
     include=["src.tasks"],  # Modules to import when workers start
 )
 
@@ -21,8 +27,9 @@ app.conf.update(
 )
 
 # Data client for pipeline state. Its DB is overridable (REDIS_DB) so a dry run
-# can point at an isolated database without touching production keys.
-r = redis.Redis(host="localhost", port=6379, db=int(os.environ.get("REDIS_DB", "0")))
+# can point at an isolated database without touching production keys; host/port
+# come from the same settings surface as the broker/backend.
+r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_STATE_DB)
 
 if __name__ == "__main__":
     app.start()
