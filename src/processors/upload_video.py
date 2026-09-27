@@ -447,15 +447,20 @@ class VideoUploader(Processor):
         try:
             self.logger.info(f"Uploading video for {dt}")
             video_id = self.initialize_upload(options)
+            if not video_id:
+                raise Exception("No Video ID returned")
             year_str = datetime.strftime(dt, "%Y")
             playlist_id = self.get_playlist_for_year(year_str)
             self.add_video_to_playlist(playlist_id, video_id)
-            if not video_id:
-                raise Exception("No Video ID returned")
         except HttpError as e:
-            self.logger.error(
-                "An HTTP error %d occurred:\n%s" % (e.resp.status, e.content)
-            )
+            # Do NOT report success on a failed upload (e.g. hitting YouTube's
+            # daily upload limit). Previously the error was swallowed here and the
+            # code fell through to "completed", so the date was marked done and
+            # silently skipped. Raise instead: the stage records the failure,
+            # alerts, and leaves the date unmarked so the next run retries it.
+            raise Exception(
+                f"YouTube upload failed for {date}: HTTP {e.resp.status} {e.content!r}"
+            ) from e
 
         self.log_complete_for_date(date=date)
         send_to_discord_bots(f"{self.job_type.name} completed for {date}")

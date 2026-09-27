@@ -16,6 +16,7 @@ from src.types import (
     type_stubs,
     source_job_file_templates,
 )
+from src.scrapers.alerting import AlertLevel, alert
 from src.util import get_datetime_string_from_string, get_date_string_from_string
 
 
@@ -121,6 +122,7 @@ class Processor:
     def process(self) -> None:
         missing_dates: List[str] = self.get_most_recent_missing_dates()
         self.logger.debug(f"Missing dates for job {self.job_type}: {missing_dates}")
+        failures: List[str] = []
         for missing_date in missing_dates:
             try:
                 datetime_str = get_datetime_string_from_string(missing_date)
@@ -133,11 +135,23 @@ class Processor:
                 if dt < EARLIEST:
                     continue
                 self.process_for_date(missing_date)
+                # Mark done only after process_for_date succeeds; a raise below
+                # leaves the date unmarked so the next run retries it.
                 r.hset(self.redis_key, missing_date, 1)
             except Exception as e:
-                raise Exception(
-                    f"Could not parse missing date for job {self.job_type}: {e}"
+                # One meeting's failure must not abort the rest of the batch
+                # (previously this re-raised, blocking every meeting behind it).
+                # Log it, collect it, and continue; a batched alert is sent below.
+                self.logger.error(
+                    "Failed %s for %s: %s", self.job_type.name, missing_date, e
                 )
+                failures.append(f"{missing_date}: {e}")
 
+        if failures:
+            alert(
+                AlertLevel.ACTIONABLE,
+                f"{len(failures)} {self.job_type.name} meeting(s) failed this run:"
+                "\n- " + "\n- ".join(failures),
+            )
         self.clean_up()
         self.logger.info(f"{self.job_type} is Done")
