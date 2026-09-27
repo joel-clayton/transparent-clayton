@@ -93,6 +93,44 @@ class TestUpdatePageSectionsCreatesPage(unittest.TestCase):
             updater.update_page_sections_for_page("Any Page", [], "2026-07-07")
         page.save.assert_not_called()
 
+    def _write(self, sections):
+        updater = WikiUpdater.__new__(WikiUpdater)
+        updater.site = MagicMock()
+        page = MagicMock()
+        with patch("src.processors.update_wiki.pywikibot.Page", return_value=page):
+            updater.update_page_sections_for_page("P", sections, "d")
+        return page.text
+
+    def test_every_heading_starts_on_its_own_line(self):
+        # A prior section whose content has no trailing newline must not glue the
+        # next "== date ==" onto its last line, or MediaWiki won't parse it as a
+        # heading (the bug that re-appended the same meeting every run).
+        sections = [
+            Section(title="== June 09, 2026 ==", content="\n{| a |}"),
+            Section(title="=== AI summary ===", content="\nfull transcript here.]"),
+            Section(title="== May 26, 2026 ==", content="\n{| b |}"),
+        ]
+        text = self._write(sections)
+        for heading in (
+            "== June 09, 2026 ==",
+            "=== AI summary ===",
+            "== May 26, 2026 ==",
+        ):
+            self.assertRegex(text, r"(?m)^" + heading.replace("(", r"\(") + r"$")
+
+    def test_no_runaway_blank_lines(self):
+        # Sections already carrying trailing blank lines must normalize to a
+        # single blank line between them, not accumulate more each save (which
+        # would make the page differ — and re-save — on every run).
+        sections = [
+            Section(title="== June 09, 2026 ==", content="\n{| a |}\n\n"),
+            Section(title="== May 26, 2026 ==", content="\n{| b |}\n\n\n"),
+        ]
+        text = self._write(sections)
+        self.assertNotIn("\n\n\n", text)
+        self.assertTrue(text.endswith("\n"))
+        self.assertFalse(text.endswith("\n\n"))
+
 
 class TestFormatCancelledSection(unittest.TestCase):
     def _updater(self):

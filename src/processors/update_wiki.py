@@ -511,7 +511,15 @@ class WikiUpdater(Processor):
         if not sections:
             return
         page = pywikibot.Page(self.site, page_name)
-        page.text = "".join(f"{s.title}{s.content}" for s in sections)
+        # Separate sections with a blank line so every heading starts on its own
+        # line. A freshly rendered section's content does not end in a newline, so
+        # a plain "".join glued the next "== date ==" onto the previous line —
+        # which MediaWiki then does not parse as a heading, so the meeting is
+        # never seen as present and gets re-appended every run (duplicating it).
+        # strip()+join keeps this idempotent (re-saving yields identical text).
+        page.text = (
+            "\n\n".join(f"{s.title}{s.content}".strip("\n") for s in sections) + "\n"
+        )
         page.save(summary=f"Added new meeting: {date}")
 
     def process_for_date(self, date: str) -> None:
