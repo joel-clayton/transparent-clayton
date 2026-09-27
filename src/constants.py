@@ -53,7 +53,9 @@ PART_NUMBER_TITLE_PATTERN = r"part [0-9]*"
 CC_MTG_FILE_FORMAT = "City Council Meeting %Y-%m-%d - City of Clayton{}"
 CC_MTG_FILE_STUB = "City Council Meeting"
 
-CC_MTG_PARENT_FOLDER_ID = "1MR8u-c-eFDXSPef1tHFFknivWjJ5tp79"
+# Re-exported from the central settings surface (env-overridable). Kept here so
+# any importer of src.constants keeps finding the name.
+from src.settings import CC_MTG_PARENT_FOLDER_ID  # noqa: E402,F401
 
 EXITED_EARLY = "Exited early with no meetings"
 """

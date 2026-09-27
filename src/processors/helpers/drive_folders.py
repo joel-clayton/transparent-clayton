@@ -7,15 +7,15 @@ before their folder existed (Budget and Audit, Trails and Landscaping) get their
 folder made on demand. Resolved ids are cached per (parent, name).
 """
 
-import os
 from typing import Any
 
 from src.meeting_types import MeetingType
 
-# Shared parent ("Source Material") holding one folder per meeting type.
-SOURCE_MATERIAL_PARENT_ID = os.environ.get(
-    "SOURCE_MATERIAL_PARENT_ID", "177gAQr7VqjlKNoqH-TbBkkQfoXG9yLGn"
-)
+# Shared parent ("Source Material") holding one folder per meeting type. Sourced
+# from the central settings surface (env-overridable via SOURCE_MATERIAL_PARENT_ID);
+# re-exported here so existing importers keep the name.
+from src.settings import SOURCE_MATERIAL_PARENT_ID
+
 _FOLDER_MIME = "application/vnd.google-apps.folder"
 _cache: dict[tuple[str, str], str] = {}
 
