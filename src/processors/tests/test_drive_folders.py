@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import MagicMock
 
 from src.meeting_types import CITY_COUNCIL
-from src.processors import drive_folders
+from src.processors.helpers import drive_folders
 
 
 class TestFindOrCreateTypeFolder(unittest.TestCase):

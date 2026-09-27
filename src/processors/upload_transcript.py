@@ -15,8 +15,8 @@ from src.constants import (
     DATETIME_OUTPUT_PATTERN,
 )
 from src.processors.constants import EARLIEST
-from src.processors.drive_folders import find_or_create_type_folder
-from src.processors.google_auth import load_credentials
+from src.processors.helpers.drive_folders import find_or_create_type_folder
+from src.processors.helpers.google_auth import load_credentials
 from src.processors.process import Processor
 from src.settings import TRANSCRIBED_DIR
 from src.types import JobType, SourceType, MEETING_TYPE_BY_SOURCE
