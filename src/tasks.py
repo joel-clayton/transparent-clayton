@@ -203,9 +203,17 @@ workflow = chain(
 )
 
 
+# Expire a queued run just under the hourly interval: if beat keeps enqueuing
+# while no worker is consuming (e.g. the worker is down), each run self-drops
+# instead of piling up in the Redis broker and then thrashing on startup — we
+# once accumulated ~265 stale runs this way. 55 min < the 60 min cadence, so a
+# run that hasn't started by the next tick is discarded rather than stacked.
+WORKFLOW_EXPIRES_SECONDS = 55 * 60
+
 app.conf.beat_schedule = {
     "cc-meeting-workflow": {
         "task": "src.tasks.cc_meeting_workflow",
         "schedule": crontab(hour="*,8-18", minute=0),
+        "options": {"expires": WORKFLOW_EXPIRES_SECONDS},
     },
 }
