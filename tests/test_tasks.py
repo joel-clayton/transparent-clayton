@@ -3,7 +3,28 @@ import unittest
 from unittest import mock
 
 import src.tasks as tasks
+from src import settings
 from src.meeting_types import CITY_COUNCIL, PLANNING_COMMISSION
+
+ALWAYS_ON = {
+    "src.tasks.get_cc_meeting_details_for_download",
+    "src.tasks.download_cc_meeting_video",
+    "src.tasks.compress_cc_meeting_video",
+    "src.tasks.extract_cc_meeting_audio",
+    "src.tasks.transcribe_cc_meeting_audio",
+    "src.tasks.notify_success",
+}
+PUBLISHING = {
+    "src.tasks.upload_cc_meeting_video",
+    "src.tasks.upload_cc_meeting_transcript",
+    "src.tasks.archive_cc_meeting_docs",
+    "src.tasks.update_cc_mtg_wiki",
+}
+
+
+def _stage_names(disabled):
+    with mock.patch.object(settings, "DISABLED_PUBLISHERS", set(disabled)):
+        return [sig.name for sig in tasks.build_workflow().tasks]
 
 
 def _meetings():
@@ -47,6 +68,43 @@ class TestScrapeTypeForDownload(unittest.TestCase):
         self.assertEqual(parse.call_args.args[0], tasks.NEW_TYPE_SCRAPE_START)
         self.assertIs(parse.call_args.args[1], PLANNING_COMMISSION)
         self.assertEqual(r.set.call_args.args[0], "scraped.pc_mtg")
+
+
+class TestBuildWorkflow(unittest.TestCase):
+    def test_default_includes_every_stage_in_order(self):
+        names = _stage_names(disabled=set())
+        self.assertEqual(
+            names,
+            [
+                "src.tasks.get_cc_meeting_details_for_download",
+                "src.tasks.download_cc_meeting_video",
+                "src.tasks.compress_cc_meeting_video",
+                "src.tasks.upload_cc_meeting_video",
+                "src.tasks.extract_cc_meeting_audio",
+                "src.tasks.transcribe_cc_meeting_audio",
+                "src.tasks.upload_cc_meeting_transcript",
+                "src.tasks.archive_cc_meeting_docs",
+                "src.tasks.update_cc_mtg_wiki",
+                "src.tasks.notify_success",
+            ],
+        )
+
+    def test_disabling_youtube_drops_only_the_video_upload(self):
+        names = set(_stage_names(disabled={"youtube"}))
+        self.assertNotIn("src.tasks.upload_cc_meeting_video", names)
+        self.assertIn("src.tasks.upload_cc_meeting_transcript", names)
+        self.assertIn("src.tasks.update_cc_mtg_wiki", names)
+
+    def test_disabling_google_docs_drops_transcript_and_documents(self):
+        names = set(_stage_names(disabled={"google_docs"}))
+        self.assertNotIn("src.tasks.upload_cc_meeting_transcript", names)
+        self.assertNotIn("src.tasks.archive_cc_meeting_docs", names)
+        self.assertIn("src.tasks.upload_cc_meeting_video", names)
+
+    def test_disk_only_drops_all_publishing_stages(self):
+        names = set(_stage_names(disabled={"all"}))
+        self.assertEqual(names & PUBLISHING, set())
+        self.assertEqual(names, ALWAYS_ON)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 import json
 import logging
 from datetime import datetime, timedelta
+from typing import Any
 
 from celery import chain
 from celery.exceptions import Ignore
@@ -13,7 +14,7 @@ from src.processors.compress import Compressor
 from src.processors.download import Downloader
 from src.processors.extract import Extractor
 from src.processors.transcribe import Transcriber
-from src.publishers import run_publisher
+from src.publishers import PUBLISHERS, run_publisher
 from src.scrapers.cc_meetings import get_latest_downloaded_date, parse_meetings_from_url
 from src.scrapers.alerting import AlertLevel, alert
 from src.scrapers.constants import (
@@ -182,18 +183,42 @@ def log_error(request: object, exc: BaseException, traceback: object) -> None:
     logger.info("No new meetings to process, exiting")
 
 
-workflow = chain(
-    get_cc_meeting_details_for_download.si().on_error(log_error.s()),
-    download_cc_meeting_video.si().on_error(log_error.s()),
-    compress_cc_meeting_video.si().on_error(log_error.s()),
-    upload_cc_meeting_video.si().on_error(log_error.s()),
-    extract_cc_meeting_audio.si().on_error(log_error.s()),
-    transcribe_cc_meeting_audio.si().on_error(log_error.s()),
-    upload_cc_meeting_transcript.si().on_error(log_error.s()),
-    archive_cc_meeting_docs.si().on_error(log_error.s()),
-    update_cc_mtg_wiki.si().on_error(log_error.s()),
-    notify_success.si().on_error(log_error.s()),
-)
+# The pipeline stages in order. A publishing stage carries the name of the
+# publisher it dispatches to; it is included in the chain only when that
+# destination is enabled. The non-publishing stages (scrape/download/compress/
+# extract/transcribe) and notify always run — disabling every destination yields
+# a disk-only pipeline that still produces every artifact locally.
+_STAGES: list[tuple[Any, str | None]] = [
+    (get_cc_meeting_details_for_download, None),
+    (download_cc_meeting_video, None),
+    (compress_cc_meeting_video, None),
+    (upload_cc_meeting_video, "upload_video"),
+    (extract_cc_meeting_audio, None),
+    (transcribe_cc_meeting_audio, None),
+    (upload_cc_meeting_transcript, "upload_transcript"),
+    (archive_cc_meeting_docs, "archive_docs"),
+    (update_cc_mtg_wiki, "update_wiki"),
+    (notify_success, None),
+]
+
+
+def build_workflow() -> chain:
+    """Assemble the workflow chain from the enabled stages.
+
+    A publishing stage is dropped when its destination is disabled (see
+    DISABLED_PUBLISHERS), so a chain built with everything disabled is the
+    disk-only pipeline. Built once at import; a config change takes effect on the
+    next process start.
+    """
+    steps = [
+        task.si().on_error(log_error.s())
+        for task, publisher_name in _STAGES
+        if publisher_name is None or PUBLISHERS[publisher_name].is_enabled()
+    ]
+    return chain(*steps)
+
+
+workflow = build_workflow()
 
 
 # Expire a queued run just under the hourly interval: if beat keeps enqueuing

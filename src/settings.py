@@ -86,10 +86,17 @@ TRANSCRIPT_SHARE_LIST = [
 
 
 # --- publishing destinations -------------------------------------------------
-# Output destinations to turn OFF, comma-separated (e.g. "youtube,wiki"); empty
-# means every destination is enabled. The pipeline dispatches publishers through
-# a registry (src.publishers) that consults this. TRA-133 will expand this into a
-# fuller per-destination configuration surface.
+# Output destinations to turn OFF, comma-separated; empty means every destination
+# is enabled (today's behavior). Valid names are the publisher destinations:
+# "youtube", "google_docs", "wiki". The special token "all" turns every remote
+# destination off for a disk-only install (assets are still produced on disk).
+# Examples:
+#   DISABLED_PUBLISHERS=""              -> publish to all (default)
+#   DISABLED_PUBLISHERS="wiki"          -> everything except the wiki
+#   DISABLED_PUBLISHERS="youtube,wiki"  -> only Google Docs
+#   DISABLED_PUBLISHERS="all"           -> disk-only, no remote publishing
+# The pipeline builds its workflow chain from the enabled destinations and the
+# registry (src.publishers) consults this for each stage.
 DISABLED_PUBLISHERS = {
     name.strip()
     for name in os.environ.get("DISABLED_PUBLISHERS", "").split(",")

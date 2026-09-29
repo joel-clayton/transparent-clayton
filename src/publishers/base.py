@@ -19,11 +19,13 @@ from src.meeting_types import MeetingType
 def is_destination_enabled(destination: str) -> bool:
     """Whether a publishing destination is turned on.
 
-    Defaults to enabled; a destination named in ``DISABLED_PUBLISHERS`` (settings)
-    is skipped. TRA-133 will grow this into a fuller per-destination config
-    surface — for now it is the single switch the registry consults.
+    Every destination defaults to enabled. A destination is off when it is named
+    in ``DISABLED_PUBLISHERS`` (settings), or when that set contains the special
+    token ``"all"`` — the disk-only install, where nothing is published remotely
+    and every artifact simply lives on disk.
     """
-    return destination not in settings.DISABLED_PUBLISHERS
+    disabled = settings.DISABLED_PUBLISHERS
+    return "all" not in disabled and destination not in disabled
 
 
 class Publisher(ABC):
