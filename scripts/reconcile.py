@@ -77,6 +77,7 @@ from src.processors.upload_video import (  # noqa: E402
     YOUTUBE_TOKEN_FILE,
     VideoUploader,
 )
+from src.publishers import is_destination_enabled  # noqa: E402
 from src.settings import (  # noqa: E402
     COMPRESSED_DIR,
     DOWNLOADED_DIR,
@@ -273,6 +274,51 @@ def build_type_report(
     return TypeReport(meeting_type=meeting_type, rows=rows)
 
 
+@dataclass
+class Scope:
+    """Which publishing destinations reconcile checks and acts on.
+
+    A destination that is disabled in the pipeline config (DISABLED_PUBLISHERS) is
+    out of scope: its findings are not reported and its reconcile actions are not
+    taken, so a disk-only or wiki-less install shows no spurious mismatches.
+    """
+
+    youtube: bool
+    google_docs: bool
+    wiki: bool
+
+    @classmethod
+    def from_config(cls) -> "Scope":
+        return cls(
+            youtube=is_destination_enabled("youtube"),
+            google_docs=is_destination_enabled("google_docs"),
+            wiki=is_destination_enabled("wiki"),
+        )
+
+    def summary(self) -> str:
+        on = [
+            label
+            for label, enabled in (
+                ("youtube", self.youtube),
+                ("google_docs", self.google_docs),
+                ("wiki", self.wiki),
+            )
+            if enabled
+        ]
+        off = [
+            label
+            for label, enabled in (
+                ("youtube", self.youtube),
+                ("google_docs", self.google_docs),
+                ("wiki", self.wiki),
+            )
+            if not enabled
+        ]
+        return (
+            f"in scope: {', '.join(on) or 'none'}; disabled: {', '.join(off) or 'none'}"
+        )
+
+
 def _has_presence(m: MeetingRow) -> bool:
     """The meeting actually exists in this type: it has a detail record or files
     on disk. A row with only link/upload entries and no presence is contamination
@@ -281,15 +327,16 @@ def _has_presence(m: MeetingRow) -> bool:
 
 
 def find_mismatches(
-    report: TypeReport, channel_ids: set[str], include_historical: bool
+    report: TypeReport, channel_ids: set[str], include_historical: bool, scope: Scope
 ) -> tuple[list[str], int, int]:
     """Return (actionable mismatch lines, orphan-link count, historical-skipped).
 
-    Actionable lines cover meetings that genuinely exist in this type. Orphan
-    links — dead ``video_link`` pointers with no matching meeting — are counted
-    separately: they never render on a wiki page, so they're cleanup, not
-    breakage. Meetings older than the pipeline floor (EARLIEST) are pre-pipeline
-    archives and are skipped (counted) unless ``include_historical``.
+    Only checks for destinations in ``scope`` are reported: with YouTube disabled
+    the video/upload findings vanish, and with Google Docs disabled the transcript
+    finding does. Orphan links (dead ``video_link`` pointers with no matching
+    meeting) are a YouTube concern and counted only when YouTube is in scope.
+    Meetings older than the pipeline floor (EARLIEST) are pre-pipeline archives and
+    are skipped (counted) unless ``include_historical``.
     """
     lines: list[str] = []
     orphan_links = 0
@@ -300,9 +347,10 @@ def find_mismatches(
         if not _has_presence(m):
             # Count individual dead pointers (parts), matching what reconcile
             # deletes — a live-pointing misfiling is harmless and left alone.
-            orphan_links += sum(
-                1 for vid in m.link_parts.values() if vid not in channel_ids
-            )
+            if scope.youtube:
+                orphan_links += sum(
+                    1 for vid in m.link_parts.values() if vid not in channel_ids
+                )
             continue
 
         dt = _key_datetime(key)
@@ -312,33 +360,41 @@ def find_mismatches(
 
         issues: list[str] = []
 
-        # STALE_VIDEO_LINK: a pointer to a video no longer on the channel — this
-        # is what breaks the wiki "Video Backup" links.
-        stale = {p: v for p, v in m.link_parts.items() if v not in channel_ids}
-        if stale:
-            issues.append(
-                "STALE_VIDEO_LINK "
-                + ", ".join(f"part {p}->{v}" for p, v in sorted(stale.items()))
-            )
+        if scope.youtube:
+            # STALE_VIDEO_LINK: a pointer to a video no longer on the channel —
+            # this is what breaks the wiki "Video Backup" links.
+            stale = {p: v for p, v in m.link_parts.items() if v not in channel_ids}
+            if stale:
+                issues.append(
+                    "STALE_VIDEO_LINK "
+                    + ", ".join(f"part {p}->{v}" for p, v in sorted(stale.items()))
+                )
 
-        # MISSING_VIDEO_LINK: a live upload with no pointer to it.
-        missing_link = sorted(set(m.yt_parts) - set(m.link_parts))
-        if missing_link:
-            issues.append(
-                "MISSING_VIDEO_LINK parts " + ", ".join(map(str, missing_link))
-            )
+            # MISSING_VIDEO_LINK: a live upload with no pointer to it.
+            missing_link = sorted(set(m.yt_parts) - set(m.link_parts))
+            if missing_link:
+                issues.append(
+                    "MISSING_VIDEO_LINK parts " + ", ".join(map(str, missing_link))
+                )
 
-        # MISSING_UPLOAD: a compressed part on disk that isn't on YouTube.
-        missing_upload = sorted(m.disk_parts - set(m.yt_parts))
-        if missing_upload:
-            issues.append("MISSING_UPLOAD parts " + ", ".join(map(str, missing_upload)))
+            # MISSING_UPLOAD: a compressed part on disk that isn't on YouTube.
+            missing_upload = sorted(m.disk_parts - set(m.yt_parts))
+            if missing_upload:
+                issues.append(
+                    "MISSING_UPLOAD parts " + ", ".join(map(str, missing_upload))
+                )
 
-        # NO_DETAIL: on disk or YouTube but not in the detail hash.
+        # NO_DETAIL: on disk or YouTube but not in the detail hash (not tied to a
+        # single destination).
         if not m.has_detail and (m.on_disk or m.yt_parts):
             issues.append("NO_DETAIL (on disk/youtube but not in Redis detail)")
 
         # TRANSCRIPT_NO_LINK: a transcript file with no transcript_link pointer.
-        if "transcript" in m.on_disk and not m.has_transcript_link:
+        if (
+            scope.google_docs
+            and "transcript" in m.on_disk
+            and not m.has_transcript_link
+        ):
             issues.append("TRANSCRIPT_NO_LINK")
 
         if issues:
@@ -376,51 +432,60 @@ def reconcile_type(
     report: TypeReport,
     channel_ids: set[str],
     include_historical: bool,
+    scope: Scope,
 ) -> list[str]:
-    """Fix what can be fixed by driving existing workflows. Returns action log."""
+    """Fix what can be fixed by driving existing workflows. Returns action log.
+
+    Only in-scope destinations are acted on: video_link repointing/cleanup runs
+    only when YouTube is enabled, and the wiki re-render flag is set only when the
+    wiki is enabled.
+    """
     actions: list[str] = []
     mt = report.meeting_type
 
-    affected = _affected_real_meetings(report, channel_ids, include_historical)
-    # Any dead pointer at all (real or orphan contamination) is deletable.
-    has_dead = any(
-        v not in channel_ids
-        for m in report.rows.values()
-        for v in m.link_parts.values()
-    )
-    if not affected and not has_dead:
-        return actions
-
-    # 1) Repoint every video_link for this type via the uploader's own workflow
-    #    (rewrites links for all live videos, healing repointable staleness).
-    if affected:
-        uploader = VideoUploader(source_type)
-        uploads_playlist = uploader.get_my_uploads_list()
-        if uploads_playlist:
-            uploader.get_recent_video_titles(uploads_playlist)
-            actions.append(f"repointed video_link.{mt.key}.* from live uploads")
-
-    # 2) Delete pointers with no surviving video — both meetings whose only copy
-    #    was deleted and orphan contamination misfiled under this namespace.
-    prefix = f"video_link.{mt.key}."
-    deleted = 0
-    for raw_key in list(r.scan_iter(match=f"{prefix}*")):
-        rk = raw_key.decode("utf-8") if isinstance(raw_key, bytes) else raw_key
-        val = r.get(rk)
-        if val and _video_id_from_link(val.decode("utf-8")) not in channel_ids:
-            r.delete(rk)
-            deleted += 1
-    if deleted:
-        actions.append(f"deleted {deleted} dead/orphan video_link pointer(s)")
-
-    # 3) Flag real affected meetings for wiki re-render (WikiUpdater consumes it).
-    for key in sorted(affected):
-        r.sadd(mt.redis_key(WIKI_REFRESH_KEY), key)
-    if affected:
-        actions.append(
-            f"flagged {len(affected)} meeting(s) for wiki refresh "
-            f"({mt.redis_key(WIKI_REFRESH_KEY)})"
+    # video_link repointing/cleanup is a YouTube-destination concern.
+    if scope.youtube:
+        affected = _affected_real_meetings(report, channel_ids, include_historical)
+        has_dead = any(
+            v not in channel_ids
+            for m in report.rows.values()
+            for v in m.link_parts.values()
         )
+
+        # 1) Repoint every video_link for this type via the uploader's own
+        #    workflow (rewrites links for all live videos, healing staleness).
+        if affected:
+            uploader = VideoUploader(source_type)
+            uploads_playlist = uploader.get_my_uploads_list()
+            if uploads_playlist:
+                uploader.get_recent_video_titles(uploads_playlist)
+                actions.append(f"repointed video_link.{mt.key}.* from live uploads")
+
+        # 2) Delete pointers with no surviving video — meetings whose only copy
+        #    was deleted and orphan contamination misfiled under this namespace.
+        if has_dead:
+            prefix = f"video_link.{mt.key}."
+            deleted = 0
+            for raw_key in list(r.scan_iter(match=f"{prefix}*")):
+                rk = raw_key.decode("utf-8") if isinstance(raw_key, bytes) else raw_key
+                val = r.get(rk)
+                if val and _video_id_from_link(val.decode("utf-8")) not in channel_ids:
+                    r.delete(rk)
+                    deleted += 1
+            if deleted:
+                actions.append(f"deleted {deleted} dead/orphan video_link pointer(s)")
+
+        # 3) Flag real affected meetings for wiki re-render — but only when the
+        #    wiki is a destination; with the wiki disabled there is nothing to
+        #    re-render (and flagging would be a no-op consumed by nobody).
+        if scope.wiki:
+            for key in sorted(affected):
+                r.sadd(mt.redis_key(WIKI_REFRESH_KEY), key)
+            if affected:
+                actions.append(
+                    f"flagged {len(affected)} meeting(s) for wiki refresh "
+                    f"({mt.redis_key(WIKI_REFRESH_KEY)})"
+                )
     return actions
 
 
@@ -451,10 +516,16 @@ class Plan:
 
 
 def plan_for_report(
-    report: TypeReport, channel_ids: set[str], include_historical: bool
+    report: TypeReport, channel_ids: set[str], include_historical: bool, scope: Scope
 ) -> Plan:
-    """Compute what --reconcile would do for one type (no side effects)."""
+    """Compute what --reconcile would do for one type (no side effects).
+
+    Mirrors reconcile_type's scoping: with YouTube disabled there are no pointer
+    changes, and with the wiki disabled no meetings are flagged for re-render.
+    """
     plan = Plan()
+    if not scope.youtube:
+        return plan
     mt = report.meeting_type
     for key, m in report.rows.items():
         if _has_presence(m):
@@ -472,7 +543,7 @@ def plan_for_report(
             for _ in set(m.yt_parts) - set(m.link_parts):  # uploaded, never linked
                 plan.repoint += 1
                 touched = True
-            if touched and not historical:
+            if touched and not historical and scope.wiki:
                 plan.wiki_keys.add(key)
                 plan.pages.add(
                     mt.wiki_year_template.format(get_year_string_from_string(key))
@@ -505,17 +576,30 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    service = _youtube_service()
-    uploads = _fetch_uploads(service)
-    channel_ids = {vid for _, vid in uploads}
+    scope = Scope.from_config()
+    # Only reach out to YouTube when it is a configured destination — a disk-only
+    # install has no YouTube credentials to authenticate with.
+    if scope.youtube:
+        service = _youtube_service()
+        uploads = _fetch_uploads(service)
+        channel_ids = {vid for _, vid in uploads}
+    else:
+        uploads = []
+        channel_ids = set()
     disk_by_stub, unrecognized = _disk_index()
     compressed_parts = _compressed_parts_by_stub()
 
     mode = "RECONCILE (writes to Redis)" if args.reconcile else "AUDIT (read-only)"
     print(f"Reconciliation report — mode: {mode}")
+    print(f"Destinations {scope.summary()}.")
+    channel_note = (
+        f"{len(channel_ids)} live channel video(s)"
+        if scope.youtube
+        else "YouTube (disabled — skipped)"
+    )
     print(
-        f"Cross-checking {len(channel_ids)} live channel video(s) against the files "
-        "on disk and the pointers in Redis, per meeting type.\n"
+        f"Cross-checking {channel_note} against the files on disk and the pointers "
+        "in Redis, per meeting type.\n"
     )
     print(
         "What the findings mean:\n"
@@ -548,11 +632,13 @@ def main() -> None:
             compressed_parts,
         )
         lines, orphan_links, historical = find_mismatches(
-            report, channel_ids, args.include_historical
+            report, channel_ids, args.include_historical, scope
         )
         total_orphan_links += orphan_links
         total_historical += historical
-        total_plan.merge(plan_for_report(report, channel_ids, args.include_historical))
+        total_plan.merge(
+            plan_for_report(report, channel_ids, args.include_historical, scope)
+        )
         header = f"=== {meeting_type.display_name} ({meeting_type.key}) ==="
         if lines or orphan_links:
             total_issue_meetings += len(lines)
@@ -566,7 +652,7 @@ def main() -> None:
                 )
             if args.reconcile:
                 for action in reconcile_type(
-                    source_type, report, channel_ids, args.include_historical
+                    source_type, report, channel_ids, args.include_historical, scope
                 ):
                     print(f"    -> {action}")
             print()
