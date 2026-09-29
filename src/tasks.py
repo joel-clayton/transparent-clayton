@@ -9,12 +9,11 @@ from celery.schedules import crontab
 from celery_app import app, r
 from src.constants import SCRAPED_KEY, EXITED_EARLY
 from src.meeting_types import MeetingType
-from src.processors.archive_docs import DocumentArchiver
 from src.processors.compress import Compressor
 from src.processors.download import Downloader
 from src.processors.extract import Extractor
 from src.processors.transcribe import Transcriber
-from src.processors.update_wiki import WikiUpdater
+from src.publishers import run_publisher
 from src.scrapers.cc_meetings import get_latest_downloaded_date, parse_meetings_from_url
 from src.scrapers.alerting import AlertLevel, alert
 from src.scrapers.constants import (
@@ -24,8 +23,6 @@ from src.scrapers.constants import (
 )
 from src.scrapers.errors import SiteStructureError, TransientScrapeError
 from src.scrapers.models import PipelineClass
-from src.processors.upload_transcript import TranscriptUploader
-from src.processors.upload_video import VideoUploader
 from src.types import MEETING_TYPE_BY_SOURCE, Meeting
 from src.util import get_datetime_from_string, send_to_discord_bots
 
@@ -131,8 +128,7 @@ def compress_cc_meeting_video() -> None:
 
 @app.task
 def upload_cc_meeting_video() -> None:
-    for source_type in MEETING_TYPE_BY_SOURCE:
-        VideoUploader(source_type).process()
+    run_publisher("upload_video")
 
 
 @app.task
@@ -149,20 +145,17 @@ def transcribe_cc_meeting_audio() -> None:
 
 @app.task
 def upload_cc_meeting_transcript() -> None:
-    for source_type in MEETING_TYPE_BY_SOURCE:
-        TranscriptUploader(source_type).process()
+    run_publisher("upload_transcript")
 
 
 @app.task
 def archive_cc_meeting_docs() -> None:
-    for meeting_type in MEETING_TYPE_BY_SOURCE.values():
-        DocumentArchiver(meeting_type).process()
+    run_publisher("archive_docs")
 
 
 @app.task
 def update_cc_mtg_wiki() -> None:
-    for source_type in MEETING_TYPE_BY_SOURCE:
-        WikiUpdater(source_type).process()
+    run_publisher("update_wiki")
 
 
 @app.task

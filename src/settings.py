@@ -85,6 +85,18 @@ TRANSCRIPT_SHARE_LIST = [
 ]
 
 
+# --- publishing destinations -------------------------------------------------
+# Output destinations to turn OFF, comma-separated (e.g. "youtube,wiki"); empty
+# means every destination is enabled. The pipeline dispatches publishers through
+# a registry (src.publishers) that consults this. TRA-133 will expand this into a
+# fuller per-destination configuration surface.
+DISABLED_PUBLISHERS = {
+    name.strip()
+    for name in os.environ.get("DISABLED_PUBLISHERS", "").split(",")
+    if name.strip()
+}
+
+
 # --- Google Drive parent folders --------------------------------------------
 # Drive folder ids. SOURCE_MATERIAL_PARENT_ID is the shared parent that holds
 # each type's transcript/document folders; CC_MTG_PARENT_FOLDER_ID is a legacy
