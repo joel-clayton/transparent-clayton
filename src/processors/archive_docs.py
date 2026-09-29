@@ -22,7 +22,6 @@ import logging
 import os
 from typing import Mapping, cast
 
-import requests
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
@@ -32,6 +31,11 @@ from src.constants import (
     DOCS_ARCHIVED_KEY,
 )
 from src.meeting_types import CITY_COUNCIL, MeetingType
+from src.processors.document_store import (
+    ARCHIVABLE_PIPELINE_CLASSES as _ARCHIVABLE,
+    docs_to_archive,
+    ensure_document_on_disk,
+)
 from src.processors.helpers.drive_folders import find_or_create_type_folder
 from src.processors.helpers.google_auth import load_credentials
 from src.processors.upload_transcript import (
@@ -39,29 +43,12 @@ from src.processors.upload_transcript import (
     DRIVE_TOKEN_FILE,
     SCOPES,
 )
-from src.scrapers.models import PipelineClass
 
 logger = logging.getLogger(__name__)
 
-DOC_DOWNLOAD_TIMEOUT = 30  # seconds
-_ARCHIVABLE = {PipelineClass.FULL.value, PipelineClass.DOCS_ONLY.value}
-
-
-def docs_to_archive(detail: Mapping[str, object]) -> dict[str, str]:
-    """The ``{label: source_url}`` documents worth archiving for a meeting.
-
-    Pure (no I/O) so the selection logic is unit-testable.
-    """
-    docs: dict[str, str] = {}
-    agenda_packet = detail.get("agenda_packet")
-    if agenda_packet:
-        docs["Agenda Packet"] = str(agenda_packet)
-    minutes = detail.get("minutes_and_supplemental_materials")
-    if isinstance(minutes, dict):
-        for label, url in minutes.items():
-            if url:
-                docs[str(label)] = str(url)
-    return docs
+# ``docs_to_archive`` now lives in document_store and is re-exported here so
+# existing importers keep working.
+__all__ = ["DocumentArchiver", "docs_to_archive"]
 
 
 class DocumentArchiver:
@@ -120,7 +107,7 @@ class DocumentArchiver:
         folder_id = self._ensure_meeting_folder(meeting_key)
         links: dict[str, str] = {}
         for label, url in docs_to_archive(detail).items():
-            link = self._archive_one(folder_id, label, url)
+            link = self._archive_one(folder_id, meeting_key, label, url)
             if link:
                 links[label] = link
         if links:
@@ -133,16 +120,21 @@ class DocumentArchiver:
         r.sadd(self.meeting_type.redis_key(DOCS_ARCHIVED_KEY), meeting_key)
         self.logger.info("Archived %d document(s) for %s", len(links), meeting_key)
 
-    def _archive_one(self, folder_id: str, label: str, url: str) -> str:
+    def _archive_one(
+        self, folder_id: str, meeting_key: str, label: str, url: str
+    ) -> str:
         # Idempotent: if a retry already uploaded this doc, reuse it.
         existing = self._find_file(folder_id, label)
         if existing:
             return existing
-        response = requests.get(url, timeout=DOC_DOWNLOAD_TIMEOUT)
-        response.raise_for_status()
+        # Source from the on-disk copy (downloaded once, shared with the
+        # documents-to-disk stage) rather than re-fetching from CivicClerk.
+        path = ensure_document_on_disk(self.meeting_type, meeting_key, label, url)
+        with open(path, "rb") as handle:
+            content = handle.read()
         media = MediaIoBaseUpload(
-            io.BytesIO(response.content),
-            mimetype=response.headers.get("Content-Type") or "application/pdf",
+            io.BytesIO(content),
+            mimetype="application/pdf",
             resumable=True,
         )
         created = (

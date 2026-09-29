@@ -12,6 +12,7 @@ ALWAYS_ON = {
     "src.tasks.compress_cc_meeting_video",
     "src.tasks.extract_cc_meeting_audio",
     "src.tasks.transcribe_cc_meeting_audio",
+    "src.tasks.download_cc_meeting_docs",
     "src.tasks.notify_success",
 }
 PUBLISHING = {
@@ -82,6 +83,7 @@ class TestBuildWorkflow(unittest.TestCase):
                 "src.tasks.upload_cc_meeting_video",
                 "src.tasks.extract_cc_meeting_audio",
                 "src.tasks.transcribe_cc_meeting_audio",
+                "src.tasks.download_cc_meeting_docs",
                 "src.tasks.upload_cc_meeting_transcript",
                 "src.tasks.archive_cc_meeting_docs",
                 "src.tasks.update_cc_mtg_wiki",

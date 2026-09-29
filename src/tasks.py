@@ -12,6 +12,7 @@ from src.constants import SCRAPED_KEY, EXITED_EARLY
 from src.meeting_types import MeetingType
 from src.processors.compress import Compressor
 from src.processors.download import Downloader
+from src.processors.download_docs import DocumentDownloader
 from src.processors.extract import Extractor
 from src.processors.transcribe import Transcriber
 from src.publishers import PUBLISHERS, run_publisher
@@ -145,6 +146,14 @@ def transcribe_cc_meeting_audio() -> None:
 
 
 @app.task
+def download_cc_meeting_docs() -> None:
+    # Always-on: persist each meeting's documents to disk regardless of whether
+    # Google Drive publishing is enabled.
+    for meeting_type in MEETING_TYPE_BY_SOURCE.values():
+        DocumentDownloader(meeting_type).process()
+
+
+@app.task
 def upload_cc_meeting_transcript() -> None:
     run_publisher("upload_transcript")
 
@@ -195,6 +204,7 @@ _STAGES: list[tuple[Any, str | None]] = [
     (upload_cc_meeting_video, "upload_video"),
     (extract_cc_meeting_audio, None),
     (transcribe_cc_meeting_audio, None),
+    (download_cc_meeting_docs, None),
     (upload_cc_meeting_transcript, "upload_transcript"),
     (archive_cc_meeting_docs, "archive_docs"),
     (update_cc_mtg_wiki, "update_wiki"),
