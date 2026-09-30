@@ -7,8 +7,8 @@ same meeting types.
 
 import logging
 
-from src.processors.archive_docs import DocumentArchiver
 from src.processors.update_wiki import WikiUpdater
+from src.processors.upload_docs import DocumentUploader
 from src.processors.upload_transcript import TranscriptUploader
 from src.processors.upload_video import VideoUploader
 from src.publishers.base import Publisher
@@ -35,13 +35,13 @@ class TranscriptUploadPublisher(Publisher):
             TranscriptUploader(source_type).process()
 
 
-class DocumentArchivePublisher(Publisher):
-    name = "archive_docs"
+class DocumentUploadPublisher(Publisher):
+    name = "upload_docs"
     destination = "google_docs"
 
     def run(self) -> None:
         for meeting_type in MEETING_TYPE_BY_SOURCE.values():
-            DocumentArchiver(meeting_type).process()
+            DocumentUploader(meeting_type).process()
 
 
 class WikiPublisher(Publisher):
@@ -59,7 +59,7 @@ PUBLISHERS: dict[str, Publisher] = {
     for publisher in (
         VideoUploadPublisher(),
         TranscriptUploadPublisher(),
-        DocumentArchivePublisher(),
+        DocumentUploadPublisher(),
         WikiPublisher(),
     )
 }

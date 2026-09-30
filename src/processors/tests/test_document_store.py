@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from src.meeting_types import CITY_COUNCIL
-from src.processors import document_store
+from src.processors.helpers import document_store
 from src.processors.tests._helpers import TempDirTestCase
 
 
@@ -65,7 +65,8 @@ class TestEnsureDocumentOnDisk(TempDirTestCase):
         with (
             self._patch_dir(),
             patch(
-                "src.processors.document_store.requests.get", return_value=response
+                "src.processors.helpers.document_store.requests.get",
+                return_value=response,
             ) as get,
         ):
             path1 = document_store.ensure_document_on_disk(
@@ -87,7 +88,10 @@ class TestEnsureDocumentOnDisk(TempDirTestCase):
         response = self._response(b"\x89PNG data", "image/png")
         with (
             self._patch_dir(),
-            patch("src.processors.document_store.requests.get", return_value=response),
+            patch(
+                "src.processors.helpers.document_store.requests.get",
+                return_value=response,
+            ),
         ):
             path = document_store.ensure_document_on_disk(
                 CITY_COUNCIL, "2026-06-02 07_00 PM", "Exhibit A", "https://x/exhibit"
@@ -107,7 +111,7 @@ class TestMeetingsWithDocuments(unittest.TestCase):
             ).encode(),
             b"c": json.dumps({"key": "c", "pipeline_class": "docs_only"}).encode(),
         }
-        with patch("src.processors.document_store.r") as r:
+        with patch("src.processors.helpers.document_store.r") as r:
             r.hgetall.return_value = details
             keys = [
                 key for key, _ in document_store.meetings_with_documents(CITY_COUNCIL)

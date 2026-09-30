@@ -1,13 +1,15 @@
-"""Archive meeting documents to Google Drive for durable, shareable links.
+"""Upload meeting documents to Google Drive for durable, shareable links.
 
 Documents scraped from CivicClerk are signed blob URLs that expire (~1 week), so
-the wiki can't safely link to them directly. This downloads each meeting's
-documents and re-uploads them to a per-meeting Drive folder, recording the
-durable ``webViewLink`` per document. The wiki then links to those copies.
+the wiki can't safely link to them directly. This uploads each meeting's on-disk
+documents to a per-meeting Drive folder, recording the durable ``webViewLink``
+per document. The wiki then links to those copies. The documents themselves are
+fetched to disk by the documents-to-disk stage (see
+:mod:`src.processors.download_docs`); this uploader sources from those copies.
 
 Applies to any meeting that has documents (FULL or DOCS_ONLY). Reuses the
-headless Drive auth (:mod:`src.processors.google_auth`) and the transcript
-uploader's Drive client/token, so archival shares one Drive consent with
+headless Drive auth (:mod:`src.processors.helpers.google_auth`) and the
+transcript uploader's Drive client/token, so this shares one Drive consent with
 transcripts.
 
 Runs unattended only once the OAuth consent screen is published (see
@@ -31,7 +33,7 @@ from src.constants import (
     DOCS_ARCHIVED_KEY,
 )
 from src.meeting_types import CITY_COUNCIL, MeetingType
-from src.processors.document_store import (
+from src.processors.helpers.document_store import (
     ARCHIVABLE_PIPELINE_CLASSES as _ARCHIVABLE,
     docs_to_archive,
     document_mimetype,
@@ -47,15 +49,15 @@ from src.processors.upload_transcript import (
 
 logger = logging.getLogger(__name__)
 
-# ``docs_to_archive`` now lives in document_store and is re-exported here so
+# ``docs_to_archive`` lives in helpers.document_store and is re-exported here so
 # existing importers keep working.
-__all__ = ["DocumentArchiver", "docs_to_archive"]
+__all__ = ["DocumentUploader", "docs_to_archive"]
 
 
-class DocumentArchiver:
+class DocumentUploader:
     def __init__(self, meeting_type: MeetingType = CITY_COUNCIL) -> None:
         self.meeting_type = meeting_type
-        self.logger = logging.getLogger(f"{__name__}::DocumentArchiver")
+        self.logger = logging.getLogger(f"{__name__}::DocumentUploader")
         credentials = load_credentials(
             scopes=SCOPES,
             client_secret_path=DESKTOP_APP_CLIENT_SECRET,

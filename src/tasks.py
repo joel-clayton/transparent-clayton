@@ -159,8 +159,8 @@ def upload_cc_meeting_transcript() -> None:
 
 
 @app.task
-def archive_cc_meeting_docs() -> None:
-    run_publisher("archive_docs")
+def upload_cc_meeting_docs() -> None:
+    run_publisher("upload_docs")
 
 
 @app.task
@@ -206,7 +206,7 @@ _STAGES: list[tuple[Any, str | None]] = [
     (transcribe_cc_meeting_audio, None),
     (download_cc_meeting_docs, None),
     (upload_cc_meeting_transcript, "upload_transcript"),
-    (archive_cc_meeting_docs, "archive_docs"),
+    (upload_cc_meeting_docs, "upload_docs"),
     (update_cc_mtg_wiki, "update_wiki"),
     (notify_success, None),
 ]

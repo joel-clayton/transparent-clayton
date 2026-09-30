@@ -4,7 +4,7 @@ Meeting documents (agenda packets, minutes, staff reports) are fetched from
 CivicClerk and, historically, streamed straight to Google Drive with nothing kept
 locally. Phase 3 makes disk the canonical store, so documents are saved here
 regardless of whether Drive publishing is enabled. The Drive archiver
-(:mod:`archive_docs`) uploads from these on-disk copies.
+(:mod:`src.processors.upload_docs`) uploads from these on-disk copies.
 
 Layout mirrors the Drive folders: one folder per meeting,
 ``<DOCUMENTS_DIR>/<file_stub> <meeting_key>/<label><ext>``, where the extension is

@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import MagicMock, mock_open, patch
 
 from src.meeting_types import CITY_COUNCIL
-from src.processors.archive_docs import DocumentArchiver, docs_to_archive
+from src.processors.upload_docs import DocumentUploader, docs_to_archive
 
 
 class TestDocsToArchive(unittest.TestCase):
@@ -30,7 +30,7 @@ class TestDocsToArchive(unittest.TestCase):
 
 class TestArchiveOneUploadsFromDisk(unittest.TestCase):
     def test_uploads_on_disk_bytes_with_content_derived_mimetype(self):
-        archiver = DocumentArchiver.__new__(DocumentArchiver)
+        archiver = DocumentUploader.__new__(DocumentUploader)
         archiver.meeting_type = CITY_COUNCIL
         archiver.service = MagicMock()
         archiver.service.files.return_value.create.return_value.execute.return_value = {
@@ -40,11 +40,11 @@ class TestArchiveOneUploadsFromDisk(unittest.TestCase):
 
         with (
             patch(
-                "src.processors.archive_docs.ensure_document_on_disk",
+                "src.processors.upload_docs.ensure_document_on_disk",
                 return_value="/docs/Exhibit A.png",
             ),
-            patch("src.processors.archive_docs.open", mock_open(read_data=b"PNGDATA")),
-            patch("src.processors.archive_docs.MediaIoBaseUpload") as media,
+            patch("src.processors.upload_docs.open", mock_open(read_data=b"PNGDATA")),
+            patch("src.processors.upload_docs.MediaIoBaseUpload") as media,
         ):
             link = archiver._archive_one("FOLDER", "2026-06-02", "Exhibit A", "u")
 

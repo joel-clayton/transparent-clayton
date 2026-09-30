@@ -9,7 +9,7 @@ Google Drive archiver then uploads from these copies.
 import logging
 
 from src.meeting_types import CITY_COUNCIL, MeetingType
-from src.processors.document_store import (
+from src.processors.helpers.document_store import (
     docs_to_archive,
     ensure_document_on_disk,
     meetings_with_documents,

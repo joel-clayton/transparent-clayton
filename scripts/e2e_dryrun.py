@@ -42,7 +42,7 @@ from celery_app import r  # noqa: E402
 from src.constants import NO_ASSETS_KEY, NO_AUDIO_KEY  # noqa: E402
 from src.meeting_types import MeetingType  # noqa: E402
 from src.processors import update_wiki  # noqa: E402
-from src.processors.archive_docs import docs_to_archive  # noqa: E402
+from src.processors.upload_docs import docs_to_archive  # noqa: E402
 from src.processors.compress import Compressor  # noqa: E402
 from src.processors.download import Downloader  # noqa: E402
 from src.processors.extract import Extractor  # noqa: E402

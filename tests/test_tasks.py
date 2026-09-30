@@ -18,7 +18,7 @@ ALWAYS_ON = {
 PUBLISHING = {
     "src.tasks.upload_cc_meeting_video",
     "src.tasks.upload_cc_meeting_transcript",
-    "src.tasks.archive_cc_meeting_docs",
+    "src.tasks.upload_cc_meeting_docs",
     "src.tasks.update_cc_mtg_wiki",
 }
 
@@ -85,7 +85,7 @@ class TestBuildWorkflow(unittest.TestCase):
                 "src.tasks.transcribe_cc_meeting_audio",
                 "src.tasks.download_cc_meeting_docs",
                 "src.tasks.upload_cc_meeting_transcript",
-                "src.tasks.archive_cc_meeting_docs",
+                "src.tasks.upload_cc_meeting_docs",
                 "src.tasks.update_cc_mtg_wiki",
                 "src.tasks.notify_success",
             ],
@@ -100,7 +100,7 @@ class TestBuildWorkflow(unittest.TestCase):
     def test_disabling_google_docs_drops_transcript_and_documents(self):
         names = set(_stage_names(disabled={"google_docs"}))
         self.assertNotIn("src.tasks.upload_cc_meeting_transcript", names)
-        self.assertNotIn("src.tasks.archive_cc_meeting_docs", names)
+        self.assertNotIn("src.tasks.upload_cc_meeting_docs", names)
         self.assertIn("src.tasks.upload_cc_meeting_video", names)
 
     def test_disk_only_drops_all_publishing_stages(self):

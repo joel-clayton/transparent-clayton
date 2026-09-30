@@ -35,7 +35,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive.file",
 ]
 # Per-machine OAuth client-secret path; overridable via DRIVE_CLIENT_SECRET_FILE
-# (see src.settings). Name kept for importers (archive_docs.py).
+# (see src.settings). Name kept for importers (upload_docs.py).
 DESKTOP_APP_CLIENT_SECRET = DRIVE_CLIENT_SECRET_FILE
 # Cached OAuth token so Drive uploads run headless after a one-time consent.
 DRIVE_TOKEN_FILE = os.environ.get("DRIVE_TOKEN_FILE") or os.path.join(
