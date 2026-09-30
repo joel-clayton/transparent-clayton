@@ -33,29 +33,35 @@ class TestDocsToArchive(unittest.TestCase):
         )
 
 
-class TestDocumentPath(unittest.TestCase):
-    def test_path_is_per_meeting_and_sanitized(self):
-        with patch.object(document_store, "DOCUMENTS_DIR", "/docs/"):
-            path = document_store.document_path(
-                CITY_COUNCIL, "2026-06-02 07_00 PM", "Staff Report/A"
-            )
+class TestExtensionAndMimetype(unittest.TestCase):
+    def test_extension_from_content_type_then_url_then_pdf(self):
+        self.assertEqual(document_store._extension_for("application/pdf", "u"), ".pdf")
+        self.assertEqual(document_store._extension_for("image/png", "u"), ".png")
+        # No/unknown Content-Type falls back to the URL extension, then .pdf.
         self.assertEqual(
-            path,
-            os.path.join(
-                "/docs/",
-                "City Council Meeting 2026-06-02 07_00 PM",
-                "Staff Report-A.pdf",
-            ),
+            document_store._extension_for(None, "https://x/doc.docx"), ".docx"
         )
+        self.assertEqual(document_store._extension_for(None, "https://x/blob"), ".pdf")
+
+    def test_document_mimetype_from_extension(self):
+        self.assertEqual(
+            document_store.document_mimetype("/d/a.pdf"), "application/pdf"
+        )
+        self.assertEqual(document_store.document_mimetype("/d/a.png"), "image/png")
 
 
 class TestEnsureDocumentOnDisk(TempDirTestCase):
     def _patch_dir(self):
         return patch.object(document_store, "DOCUMENTS_DIR", self.tmpdir + os.sep)
 
-    def test_downloads_when_absent_then_is_idempotent(self):
-        response = MagicMock(content=b"%PDF-1.4 data")
+    def _response(self, content, content_type):
+        response = MagicMock(content=content)
         response.raise_for_status = MagicMock()
+        response.headers = {"Content-Type": content_type}
+        return response
+
+    def test_downloads_when_absent_then_is_idempotent(self):
+        response = self._response(b"%PDF-1.4 data", "application/pdf")
         with (
             self._patch_dir(),
             patch(
@@ -65,18 +71,29 @@ class TestEnsureDocumentOnDisk(TempDirTestCase):
             path1 = document_store.ensure_document_on_disk(
                 CITY_COUNCIL, "2026-06-02 07_00 PM", "Agenda Packet", "https://x/a.pdf"
             )
-            # Second call must not re-download.
+            # Second call must not re-download (found on disk by label stem).
             path2 = document_store.ensure_document_on_disk(
                 CITY_COUNCIL, "2026-06-02 07_00 PM", "Agenda Packet", "https://x/a.pdf"
             )
 
         self.assertEqual(path1, path2)
-        self.assertTrue(os.path.exists(path1))
+        self.assertTrue(path1.endswith("Agenda Packet.pdf"))
         with open(path1, "rb") as handle:
             self.assertEqual(handle.read(), b"%PDF-1.4 data")
         get.assert_called_once()  # downloaded exactly once
-        # No leftover temp file.
-        self.assertFalse(os.path.exists(path1 + ".part"))
+        self.assertFalse(os.path.exists(path1 + ".part"))  # no leftover temp file
+
+    def test_extension_and_mimetype_follow_non_pdf_content_type(self):
+        response = self._response(b"\x89PNG data", "image/png")
+        with (
+            self._patch_dir(),
+            patch("src.processors.document_store.requests.get", return_value=response),
+        ):
+            path = document_store.ensure_document_on_disk(
+                CITY_COUNCIL, "2026-06-02 07_00 PM", "Exhibit A", "https://x/exhibit"
+            )
+        self.assertTrue(path.endswith("Exhibit A.png"))
+        self.assertEqual(document_store.document_mimetype(path), "image/png")
 
 
 class TestMeetingsWithDocuments(unittest.TestCase):

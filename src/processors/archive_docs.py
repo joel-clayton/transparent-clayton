@@ -34,6 +34,7 @@ from src.meeting_types import CITY_COUNCIL, MeetingType
 from src.processors.document_store import (
     ARCHIVABLE_PIPELINE_CLASSES as _ARCHIVABLE,
     docs_to_archive,
+    document_mimetype,
     ensure_document_on_disk,
 )
 from src.processors.helpers.drive_folders import find_or_create_type_folder
@@ -134,7 +135,7 @@ class DocumentArchiver:
             content = handle.read()
         media = MediaIoBaseUpload(
             io.BytesIO(content),
-            mimetype="application/pdf",
+            mimetype=document_mimetype(path),
             resumable=True,
         )
         created = (
