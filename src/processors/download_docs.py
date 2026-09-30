@@ -14,6 +14,7 @@ from src.processors.helpers.document_store import (
     ensure_document_on_disk,
     meetings_with_documents,
 )
+from src.scrapers.alerting import AlertLevel, alert
 
 
 class DocumentDownloader:
@@ -22,6 +23,7 @@ class DocumentDownloader:
         self.logger = logging.getLogger(f"{__name__}::DocumentDownloader")
 
     def process(self) -> None:
+        failures: list[str] = []
         for meeting_key, detail in meetings_with_documents(self.meeting_type):
             for label, url in docs_to_archive(detail).items():
                 try:
@@ -35,3 +37,14 @@ class DocumentDownloader:
                         meeting_key,
                         exc,
                     )
+                    failures.append(f"{meeting_key} / {label}: {exc}")
+
+        if failures:
+            # Surface a batched, actionable alert like the other pipeline stages
+            # (TRA-126), so persistently failing document downloads are visible
+            # rather than only logged.
+            alert(
+                AlertLevel.ACTIONABLE,
+                f"{len(failures)} {self.meeting_type.display_name} document(s) "
+                "failed to save this run:\n- " + "\n- ".join(failures),
+            )
