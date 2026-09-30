@@ -22,14 +22,22 @@ Mismatches reported:
     MISSING_VIDEO_LINK  a video is uploaded but no video_link points at it
     MISSING_UPLOAD      a compressed part is on disk but not uploaded
     NO_DETAIL           on disk and/or on YouTube but absent from the detail hash
-    TRANSCRIPT_NO_LINK  a transcript file is on disk but no transcript_link is set
+    MISSING_TRANSCRIPT  a transcript file is on disk but no Drive link is set
+    STALE_TRANSCRIPT_LINK  transcript_link points at a Drive file that is gone
+    MISSING_DOC         documents are on disk but none archived to Drive
+    STALE_DOC_LINK      an archived-document pointer references a dead Drive file
+
+Google Drive liveness (transcripts + archived docs) is verified with the Drive
+client, so a deleted Drive file is caught rather than trusted. Verified only when
+Google Docs is an enabled destination.
 
 The optional ``--reconcile`` step only drives existing workflows; it does not
 reimplement pipeline logic:
 
-  * repoints video_link/transcript pointers by calling the uploader's own
+  * repoints video_link pointers by calling the uploader's own
     ``get_recent_video_titles`` (which rewrites the links for every live video),
-  * deletes video_link pointers with no surviving video (nothing to point at),
+  * deletes video_link pointers with no surviving video, and clears dead
+    transcript_link/doc_link pointers (the pipeline re-uploads from disk),
   * flags each affected meeting for re-render by adding it to the type's
     ``wiki_refresh`` set, which ``WikiUpdater`` already consumes on its next run.
 
