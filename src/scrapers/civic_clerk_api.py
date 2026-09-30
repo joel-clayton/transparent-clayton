@@ -172,7 +172,7 @@ def split_documents(event: dict[str, Any]) -> tuple[str, dict[str, str]]:
     """Return ``(agenda_packet_url, {label: url})`` from an event's files.
 
     The "Agenda Packet" file (if any) is separated out to match the scraped
-    record shape :func:`src.processors.archive_docs.docs_to_archive` expects;
+    record shape :func:`src.processors.helpers.document_store.docs_to_archive` expects;
     every other published file is keyed by its name into the supplemental map.
     URLs are the stable ``GetMeetingFileStream`` endpoint (no expiry).
     """

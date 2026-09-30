@@ -12,7 +12,7 @@ class TestRegistry(unittest.TestCase):
     def test_registry_maps_stage_names_to_destinations(self):
         self.assertEqual(PUBLISHERS["upload_video"].destination, "youtube")
         self.assertEqual(PUBLISHERS["upload_transcript"].destination, "google_docs")
-        self.assertEqual(PUBLISHERS["archive_docs"].destination, "google_docs")
+        self.assertEqual(PUBLISHERS["upload_docs"].destination, "google_docs")
         self.assertEqual(PUBLISHERS["update_wiki"].destination, "wiki")
 
 
@@ -50,19 +50,19 @@ class TestRunPublisherDispatch(unittest.TestCase):
         with (
             patch.object(settings, "DISABLED_PUBLISHERS", {"google_docs"}),
             patch("src.publishers.registry.TranscriptUploader") as transcript,
-            patch("src.publishers.registry.DocumentArchiver") as archiver,
+            patch("src.publishers.registry.DocumentUploader") as archiver,
         ):
             run_publisher("upload_transcript")
-            run_publisher("archive_docs")
+            run_publisher("upload_docs")
         transcript.assert_not_called()
         archiver.assert_not_called()
 
     def test_document_archiver_runs_once_per_meeting_type(self):
         with (
             patch.object(settings, "DISABLED_PUBLISHERS", set()),
-            patch("src.publishers.registry.DocumentArchiver") as archiver,
+            patch("src.publishers.registry.DocumentUploader") as archiver,
         ):
-            run_publisher("archive_docs")
+            run_publisher("upload_docs")
         self.assertEqual(archiver.call_count, TYPE_COUNT)
         self.assertEqual(archiver.return_value.process.call_count, TYPE_COUNT)
 
