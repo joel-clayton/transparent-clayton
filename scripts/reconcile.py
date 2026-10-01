@@ -22,14 +22,22 @@ Mismatches reported:
     MISSING_VIDEO_LINK  a video is uploaded but no video_link points at it
     MISSING_UPLOAD      a compressed part is on disk but not uploaded
     NO_DETAIL           on disk and/or on YouTube but absent from the detail hash
-    TRANSCRIPT_NO_LINK  a transcript file is on disk but no transcript_link is set
+    MISSING_TRANSCRIPT  a transcript file is on disk but no Drive link is set
+    STALE_TRANSCRIPT_LINK  transcript_link points at a Drive file that is gone
+    MISSING_DOC         documents are on disk but none archived to Drive
+    STALE_DOC_LINK      an archived-document pointer references a dead Drive file
+
+Google Drive liveness (transcripts + archived docs) is verified with the Drive
+client, so a deleted Drive file is caught rather than trusted. Verified only when
+Google Docs is an enabled destination.
 
 The optional ``--reconcile`` step only drives existing workflows; it does not
 reimplement pipeline logic:
 
-  * repoints video_link/transcript pointers by calling the uploader's own
+  * repoints video_link pointers by calling the uploader's own
     ``get_recent_video_titles`` (which rewrites the links for every live video),
-  * deletes video_link pointers with no surviving video (nothing to point at),
+  * deletes video_link pointers with no surviving video, and clears dead
+    transcript_link/doc_link pointers (the pipeline re-uploads from disk),
   * flags each affected meeting for re-render by adding it to the type's
     ``wiki_refresh`` set, which ``WikiUpdater`` already consumes on its next run.
 
@@ -54,6 +62,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from googleapiclient.discovery import build  # noqa: E402
+from googleapiclient.errors import HttpError  # noqa: E402
 
 from celery_app import r  # noqa: E402
 from datetime import datetime  # noqa: E402
@@ -64,11 +73,17 @@ from src.constants import (  # noqa: E402
     DATETIME_FORMAT,
     DATETIME_PATTERN,
     DETAIL_KEY,
+    DOCS_ARCHIVED_KEY,
     WIKI_REFRESH_KEY,
 )
 from src.meeting_types import MeetingType  # noqa: E402
 from src.processors.constants import EARLIEST  # noqa: E402
 from src.processors.helpers.google_auth import load_credentials  # noqa: E402
+from src.processors.upload_transcript import (  # noqa: E402
+    DESKTOP_APP_CLIENT_SECRET,
+    DRIVE_TOKEN_FILE,
+    SCOPES as DRIVE_SCOPES,
+)
 from src.processors.upload_video import (  # noqa: E402
     CLIENT_SECRETS_FILE,
     MAX_UPLOADS_PAGES,
@@ -80,6 +95,7 @@ from src.processors.upload_video import (  # noqa: E402
 from src.publishers import is_destination_enabled  # noqa: E402
 from src.settings import (  # noqa: E402
     COMPRESSED_DIR,
+    DOCUMENTS_DIR,
     DOWNLOADED_DIR,
     EXTRACTED_AUDIO_DIR,
     TRANSCRIBED_DIR,
@@ -130,7 +146,9 @@ class MeetingRow:
     yt_parts: dict[int, str] = field(default_factory=dict)  # part -> live video id
     link_parts: dict[int, str] = field(default_factory=dict)  # part -> linked id
     has_detail: bool = False
-    has_transcript_link: bool = False
+    transcript_link: str | None = None  # Drive webViewLink, if recorded
+    doc_links: dict[str, str] = field(default_factory=dict)  # label -> Drive link
+    docs_on_disk: bool = False  # meeting has document files under DOCUMENTS_DIR
 
 
 @dataclass
@@ -166,6 +184,88 @@ def _youtube_service() -> Any:
         token_path=YOUTUBE_TOKEN_FILE,
     )
     return build("youtube", "v3", credentials=creds)
+
+
+def _drive_service() -> Any:
+    creds = load_credentials(
+        scopes=DRIVE_SCOPES,
+        client_secret_path=DESKTOP_APP_CLIENT_SECRET,
+        token_path=DRIVE_TOKEN_FILE,
+    )
+    return build("drive", "v3", credentials=creds)
+
+
+_DRIVE_ID_RE = re.compile(r"/d/([A-Za-z0-9_-]+)")
+
+
+def _drive_file_id(link: str) -> str | None:
+    """Extract the Drive/Docs file id from a webViewLink, or None.
+
+    Handles both Docs (``docs.google.com/document/d/<id>/edit``) and uploaded
+    files (``drive.google.com/file/d/<id>/view``).
+    """
+    match = _DRIVE_ID_RE.search(link)
+    return match.group(1) if match else None
+
+
+def _is_stale_drive_link(url: str, drive_ids: set[str]) -> bool:
+    """True only when the link has a parseable Drive id that is confirmed dead.
+
+    An unparseable link (no ``/d/<id>`` — e.g. a folder URL or an unexpected
+    shape) is left alone: we can't verify it, so we never report it stale or
+    delete it under --reconcile.
+    """
+    file_id = _drive_file_id(url)
+    return file_id is not None and file_id not in drive_ids
+
+
+def live_drive_ids(service: Any, ids: set[str]) -> set[str]:
+    """The subset of ``ids`` that still resolve to a live (non-trashed) Drive file.
+
+    One ``files.get`` per distinct id (ids are deduped by the caller). Only a
+    definitive **404** (or a trashed file) counts as dead — any other error
+    (rate limit, 5xx, auth/network blip) is treated as live, so a transient
+    failure never makes --reconcile delete valid pointers.
+    """
+    live: set[str] = set()
+    for file_id in ids:
+        try:
+            meta = (
+                service.files()
+                .get(fileId=file_id, fields="id, trashed", supportsAllDrives=True)
+                .execute()
+            )
+        except HttpError as exc:
+            resp = getattr(exc, "resp", None)
+            if resp is not None and resp.status == 404:
+                continue  # definitively gone
+            live.add(file_id)  # transient/permission error -> assume live
+            continue
+        except Exception:
+            live.add(file_id)  # network/other -> assume live, never delete on doubt
+            continue
+        if not meta.get("trashed"):
+            live.add(file_id)
+    return live
+
+
+def _all_drive_ids() -> set[str]:
+    """Every Drive file id referenced by a transcript_link or doc_link in Redis,
+    deduped, so liveness is checked with one ``files.get`` per distinct file."""
+    ids: set[str] = set()
+    for raw_key in r.scan_iter(match="transcript_link.*"):
+        val = r.get(raw_key)
+        if val:
+            file_id = _drive_file_id(val.decode("utf-8"))
+            if file_id:
+                ids.add(file_id)
+    for raw_key in r.scan_iter(match="doc_link.*"):
+        for val in (r.hgetall(raw_key) or {}).values():
+            decoded = val.decode("utf-8") if isinstance(val, bytes) else val
+            file_id = _drive_file_id(decoded)
+            if file_id:
+                ids.add(file_id)
+    return ids
 
 
 def _disk_index() -> tuple[dict[str, dict[str, set[str]]], dict[str, int]]:
@@ -214,12 +314,34 @@ def _compressed_parts_by_stub() -> dict[str, dict[str, set[int]]]:
     return out
 
 
+def _documents_on_disk() -> dict[str, set[str]]:
+    """stub -> {meeting keys that have a non-empty document folder on disk}.
+
+    Document folders are named ``<file_stub> <meeting_key>`` under DOCUMENTS_DIR
+    (see helpers.document_store.meeting_document_dir).
+    """
+    stubs = [mt.file_stub for mt in MEETING_TYPE_BY_SOURCE.values()]
+    out: dict[str, set[str]] = {s: set() for s in stubs}
+    if not os.path.isdir(DOCUMENTS_DIR):
+        return out
+    for name in os.listdir(DOCUMENTS_DIR):
+        folder = os.path.join(DOCUMENTS_DIR, name)
+        if name.startswith("._") or not os.path.isdir(folder):
+            continue
+        stub = next((s for s in stubs if name.startswith(f"{s} ")), None)
+        key = _meeting_key_from_filename(name)
+        if stub and key and any(not f.startswith("._") for f in os.listdir(folder)):
+            out[stub].add(key)
+    return out
+
+
 def build_type_report(
     meeting_type: MeetingType,
     channel_ids: set[str],
     uploads: list[tuple[str, str]],
     disk_by_stub: dict[str, dict[str, set[str]]],
     compressed_parts: dict[str, dict[str, set[int]]],
+    docs_by_stub: dict[str, set[str]],
 ) -> TypeReport:
     rows: dict[str, MeetingRow] = {}
 
@@ -231,6 +353,8 @@ def build_type_report(
         row(key).on_disk |= stages
     for key, parts in compressed_parts.get(meeting_type.file_stub, {}).items():
         row(key).disk_parts |= parts
+    for key in docs_by_stub.get(meeting_type.file_stub, set()):
+        row(key).docs_on_disk = True
 
     # --- youtube (this type's titles) ---
     for title, vid in uploads:
@@ -265,11 +389,26 @@ def build_type_report(
         vid = _video_id_from_link(val.decode("utf-8"))
         row(meeting_key).link_parts[int(part_str)] = vid
 
-    # --- redis: transcript_link.* ---
+    # --- redis: transcript_link.<type>.<meeting_key> -> Drive webViewLink ---
     tprefix = f"transcript_link.{meeting_type.key}."
     for raw_key in r.scan_iter(match=f"{tprefix}*"):
         rk = raw_key.decode("utf-8") if isinstance(raw_key, bytes) else raw_key
-        row(rk[len(tprefix) :]).has_transcript_link = True
+        val = r.get(rk)
+        if val:
+            row(rk[len(tprefix) :]).transcript_link = val.decode("utf-8")
+
+    # --- redis: doc_link.<type>.<meeting_key> -> hash of {label: Drive link} ---
+    dprefix = f"doc_link.{meeting_type.key}."
+    for raw_key in r.scan_iter(match=f"{dprefix}*"):
+        rk = raw_key.decode("utf-8") if isinstance(raw_key, bytes) else raw_key
+        links = {
+            (k.decode("utf-8") if isinstance(k, bytes) else k): (
+                v.decode("utf-8") if isinstance(v, bytes) else v
+            )
+            for k, v in (r.hgetall(rk) or {}).items()
+        }
+        if links:
+            row(rk[len(dprefix) :]).doc_links = links
 
     return TypeReport(meeting_type=meeting_type, rows=rows)
 
@@ -323,11 +462,15 @@ def _has_presence(m: MeetingRow) -> bool:
     """The meeting actually exists in this type: it has a detail record or files
     on disk. A row with only link/upload entries and no presence is contamination
     (a pointer misfiled under this namespace by a past cross-type bug)."""
-    return m.has_detail or bool(m.on_disk) or bool(m.disk_parts)
+    return m.has_detail or bool(m.on_disk) or bool(m.disk_parts) or m.docs_on_disk
 
 
 def find_mismatches(
-    report: TypeReport, channel_ids: set[str], include_historical: bool, scope: Scope
+    report: TypeReport,
+    channel_ids: set[str],
+    drive_ids: set[str],
+    include_historical: bool,
+    scope: Scope,
 ) -> tuple[list[str], int, int]:
     """Return (actionable mismatch lines, orphan-link count, historical-skipped).
 
@@ -389,13 +532,29 @@ def find_mismatches(
         if not m.has_detail and (m.on_disk or m.yt_parts):
             issues.append("NO_DETAIL (on disk/youtube but not in Redis detail)")
 
-        # TRANSCRIPT_NO_LINK: a transcript file with no transcript_link pointer.
-        if (
-            scope.google_docs
-            and "transcript" in m.on_disk
-            and not m.has_transcript_link
-        ):
-            issues.append("TRANSCRIPT_NO_LINK")
+        if scope.google_docs:
+            # MISSING_TRANSCRIPT: a transcript file on disk with no Drive pointer.
+            if "transcript" in m.on_disk and not m.transcript_link:
+                issues.append("MISSING_TRANSCRIPT (on disk, no Drive link)")
+            # STALE_TRANSCRIPT_LINK: the transcript_link points at a Drive file
+            # that no longer exists (a broken wiki transcript link).
+            elif m.transcript_link and _is_stale_drive_link(
+                m.transcript_link, drive_ids
+            ):
+                issues.append("STALE_TRANSCRIPT_LINK")
+
+            # STALE_DOC_LINK: an archived-document pointer to a dead Drive file.
+            stale_docs = sorted(
+                label
+                for label, url in m.doc_links.items()
+                if _is_stale_drive_link(url, drive_ids)
+            )
+            if stale_docs:
+                issues.append("STALE_DOC_LINK " + ", ".join(stale_docs))
+
+            # MISSING_DOC: documents on disk but nothing archived to Drive.
+            if m.docs_on_disk and not m.doc_links:
+                issues.append("MISSING_DOC (on disk, none archived to Drive)")
 
         if issues:
             lines.append(f"  {key}: " + "; ".join(issues))
@@ -427,21 +586,59 @@ def _affected_real_meetings(
     return affected
 
 
+def _stale_drive(
+    report: TypeReport, drive_ids: set[str], include_historical: bool
+) -> tuple[set[str], int, int]:
+    """Real, in-floor meetings with a dead Drive pointer.
+
+    Returns (affected meeting keys, #stale transcript links, #stale doc entries).
+    A pointer is dead when its Drive file id is not among the live ``drive_ids``.
+    """
+    affected: set[str] = set()
+    stale_transcripts = 0
+    stale_docs = 0
+    for key, m in report.rows.items():
+        if not _has_presence(m):
+            continue
+        dt = _key_datetime(key)
+        if not include_historical and dt is not None and dt < EARLIEST:
+            continue
+        touched = False
+        if m.transcript_link and _is_stale_drive_link(m.transcript_link, drive_ids):
+            stale_transcripts += 1
+            touched = True
+        dead = [u for u in m.doc_links.values() if _is_stale_drive_link(u, drive_ids)]
+        if dead:
+            stale_docs += len(dead)
+            touched = True
+        if touched:
+            affected.add(key)
+    return affected, stale_transcripts, stale_docs
+
+
 def reconcile_type(
     source_type: SourceType,
     report: TypeReport,
     channel_ids: set[str],
+    drive_ids: set[str],
     include_historical: bool,
     scope: Scope,
 ) -> list[str]:
     """Fix what can be fixed by driving existing workflows. Returns action log.
 
     Only in-scope destinations are acted on: video_link repointing/cleanup runs
-    only when YouTube is enabled, and the wiki re-render flag is set only when the
-    wiki is enabled.
+    only when YouTube is enabled, dead Drive pointers are cleared only when Google
+    Docs is enabled, and the wiki re-render flag is set only when the wiki is.
     """
     actions: list[str] = []
     mt = report.meeting_type
+    wiki_flagged: set[str] = set()
+
+    def flag_wiki(keys: set[str]) -> None:
+        if scope.wiki:
+            for key in sorted(keys):
+                r.sadd(mt.redis_key(WIKI_REFRESH_KEY), key)
+            wiki_flagged.update(keys)
 
     # video_link repointing/cleanup is a YouTube-destination concern.
     if scope.youtube:
@@ -475,17 +672,49 @@ def reconcile_type(
             if deleted:
                 actions.append(f"deleted {deleted} dead/orphan video_link pointer(s)")
 
-        # 3) Flag real affected meetings for wiki re-render — but only when the
-        #    wiki is a destination; with the wiki disabled there is nothing to
-        #    re-render (and flagging would be a no-op consumed by nobody).
-        if scope.wiki:
-            for key in sorted(affected):
-                r.sadd(mt.redis_key(WIKI_REFRESH_KEY), key)
-            if affected:
-                actions.append(
-                    f"flagged {len(affected)} meeting(s) for wiki refresh "
-                    f"({mt.redis_key(WIKI_REFRESH_KEY)})"
+        # 3) Flag real affected meetings for wiki re-render (see flag_wiki: only
+        #    when the wiki is a destination).
+        flag_wiki(affected)
+
+    # dead Drive pointers (transcripts + archived docs) are a Google-Docs concern.
+    if scope.google_docs:
+        drive_affected, _, _ = _stale_drive(report, drive_ids, include_historical)
+        cleared_t = 0
+        cleared_d = 0
+        for key in drive_affected:
+            m = report.rows[key]
+            # Clearing the transcript pointer is enough: the transcript stage
+            # re-uploads when the Drive file is missing (its idempotency is the
+            # live Drive-folder listing), which re-sets the pointer.
+            if m.transcript_link and _is_stale_drive_link(m.transcript_link, drive_ids):
+                r.delete(mt.transcript_link_key_template.format(meeting_key=key))
+                cleared_t += 1
+            dead_labels = [
+                label
+                for label, url in m.doc_links.items()
+                if _is_stale_drive_link(url, drive_ids)
+            ]
+            if dead_labels:
+                r.hdel(
+                    mt.doc_link_key_template.format(meeting_key=key),
+                    *dead_labels,
                 )
+                cleared_d += len(dead_labels)
+                # The document archiver skips meetings already in DOCS_ARCHIVED,
+                # so clear that membership too or the deleted doc never re-uploads
+                # (turning a stale link into a permanently missing one).
+                r.srem(mt.redis_key(DOCS_ARCHIVED_KEY), key)
+        if cleared_t:
+            actions.append(f"cleared {cleared_t} dead transcript_link pointer(s)")
+        if cleared_d:
+            actions.append(f"cleared {cleared_d} dead doc_link entry(ies)")
+        flag_wiki(drive_affected)
+
+    if wiki_flagged:
+        actions.append(
+            f"flagged {len(wiki_flagged)} meeting(s) for wiki refresh "
+            f"({mt.redis_key(WIKI_REFRESH_KEY)})"
+        )
     return actions
 
 
@@ -496,6 +725,8 @@ class Plan:
     repoint: int = 0  # pointers that would be re-aimed at a surviving video
     clear_real: int = 0  # dead pointers on real meetings with no surviving video
     clear_orphan: int = 0  # orphan contamination pointers with no meeting behind them
+    clear_transcript: int = 0  # transcript_link pointers to a dead Drive file
+    clear_doc: int = 0  # archived-document pointers to a dead Drive file
     wiki_keys: set[str] = field(default_factory=set)  # real meetings to re-render
     pages: set[str] = field(default_factory=set)  # wiki pages those meetings live on
 
@@ -503,6 +734,8 @@ class Plan:
         self.repoint += other.repoint
         self.clear_real += other.clear_real
         self.clear_orphan += other.clear_orphan
+        self.clear_transcript += other.clear_transcript
+        self.clear_doc += other.clear_doc
         self.wiki_keys |= other.wiki_keys
         self.pages |= other.pages
 
@@ -512,11 +745,21 @@ class Plan:
 
     @property
     def any_changes(self) -> bool:
-        return bool(self.repoint or self.total_deletes or self.wiki_keys)
+        return bool(
+            self.repoint
+            or self.total_deletes
+            or self.clear_transcript
+            or self.clear_doc
+            or self.wiki_keys
+        )
 
 
 def plan_for_report(
-    report: TypeReport, channel_ids: set[str], include_historical: bool, scope: Scope
+    report: TypeReport,
+    channel_ids: set[str],
+    drive_ids: set[str],
+    include_historical: bool,
+    scope: Scope,
 ) -> Plan:
     """Compute what --reconcile would do for one type (no side effects).
 
@@ -524,34 +767,46 @@ def plan_for_report(
     changes, and with the wiki disabled no meetings are flagged for re-render.
     """
     plan = Plan()
-    if not scope.youtube:
-        return plan
     mt = report.meeting_type
-    for key, m in report.rows.items():
-        if _has_presence(m):
-            dt = _key_datetime(key)
-            historical = not include_historical and dt is not None and dt < EARLIEST
-            touched = False
-            for part, vid in m.link_parts.items():
-                if vid in channel_ids:
-                    continue
-                if part in m.yt_parts:  # a surviving upload to re-aim at
+
+    def flag_wiki(key: str) -> None:
+        if scope.wiki:
+            plan.wiki_keys.add(key)
+            plan.pages.add(
+                mt.wiki_year_template.format(get_year_string_from_string(key))
+            )
+
+    if scope.youtube:
+        for key, m in report.rows.items():
+            if _has_presence(m):
+                dt = _key_datetime(key)
+                historical = not include_historical and dt is not None and dt < EARLIEST
+                touched = False
+                for part, vid in m.link_parts.items():
+                    if vid in channel_ids:
+                        continue
+                    if part in m.yt_parts:  # a surviving upload to re-aim at
+                        plan.repoint += 1
+                    else:  # nothing live to point at -> the pointer is removed
+                        plan.clear_real += 1
+                    touched = True
+                for _ in set(m.yt_parts) - set(m.link_parts):  # uploaded, never linked
                     plan.repoint += 1
-                else:  # nothing live to point at -> the pointer is removed
-                    plan.clear_real += 1
-                touched = True
-            for _ in set(m.yt_parts) - set(m.link_parts):  # uploaded, never linked
-                plan.repoint += 1
-                touched = True
-            if touched and not historical and scope.wiki:
-                plan.wiki_keys.add(key)
-                plan.pages.add(
-                    mt.wiki_year_template.format(get_year_string_from_string(key))
-                )
-        else:
-            for vid in m.link_parts.values():
-                if vid not in channel_ids:
-                    plan.clear_orphan += 1
+                    touched = True
+                if touched and not historical:
+                    flag_wiki(key)
+            else:
+                for vid in m.link_parts.values():
+                    if vid not in channel_ids:
+                        plan.clear_orphan += 1
+
+    if scope.google_docs:
+        affected, stale_t, stale_d = _stale_drive(report, drive_ids, include_historical)
+        plan.clear_transcript += stale_t
+        plan.clear_doc += stale_d
+        for key in affected:
+            flag_wiki(key)
+
     return plan
 
 
@@ -577,8 +832,8 @@ def main() -> None:
     args = parser.parse_args()
 
     scope = Scope.from_config()
-    # Only reach out to YouTube when it is a configured destination — a disk-only
-    # install has no YouTube credentials to authenticate with.
+    # Only reach out to a destination when it is configured — a disk-only install
+    # has no YouTube/Drive credentials to authenticate with.
     if scope.youtube:
         service = _youtube_service()
         uploads = _fetch_uploads(service)
@@ -586,8 +841,13 @@ def main() -> None:
     else:
         uploads = []
         channel_ids = set()
+    if scope.google_docs:
+        drive_ids = live_drive_ids(_drive_service(), _all_drive_ids())
+    else:
+        drive_ids = set()
     disk_by_stub, unrecognized = _disk_index()
     compressed_parts = _compressed_parts_by_stub()
+    docs_by_stub = _documents_on_disk()
 
     mode = "RECONCILE (writes to Redis)" if args.reconcile else "AUDIT (read-only)"
     print(f"Reconciliation report — mode: {mode}")
@@ -597,9 +857,14 @@ def main() -> None:
         if scope.youtube
         else "YouTube (disabled — skipped)"
     )
+    drive_note = (
+        f"{len(drive_ids)} live Drive file(s)"
+        if scope.google_docs
+        else "Google Drive (disabled — skipped)"
+    )
     print(
-        f"Cross-checking {channel_note} against the files on disk and the pointers "
-        "in Redis, per meeting type.\n"
+        f"Cross-checking {channel_note} and {drive_note} against the files on disk "
+        "and the pointers in Redis, per meeting type.\n"
     )
     print(
         "What the findings mean:\n"
@@ -611,8 +876,12 @@ def main() -> None:
         "uploaded to YouTube.\n"
         "  NO_DETAIL          the meeting has files/uploads but no Redis 'detail' "
         "record (usually an older meeting already on the wiki; informational).\n"
-        "  TRANSCRIPT_NO_LINK a transcript file exists on disk but no transcript "
-        "link is recorded in Redis.\n"
+        "  MISSING_TRANSCRIPT a transcript file is on disk but no Drive link is set.\n"
+        "  STALE_TRANSCRIPT_LINK the transcript_link points at a Drive file that no "
+        "longer exists — the wiki transcript link is broken.\n"
+        "  MISSING_DOC        documents are on disk but none are archived to Drive.\n"
+        "  STALE_DOC_LINK     an archived-document pointer references a dead Drive "
+        "file.\n"
         "  ORPHAN_LINK        a dead pointer with no matching meeting in this type — "
         "leftover cross-type contamination; never shown on the wiki.\n"
     )
@@ -630,14 +899,17 @@ def main() -> None:
             uploads,
             disk_by_stub,
             compressed_parts,
+            docs_by_stub,
         )
         lines, orphan_links, historical = find_mismatches(
-            report, channel_ids, args.include_historical, scope
+            report, channel_ids, drive_ids, args.include_historical, scope
         )
         total_orphan_links += orphan_links
         total_historical += historical
         total_plan.merge(
-            plan_for_report(report, channel_ids, args.include_historical, scope)
+            plan_for_report(
+                report, channel_ids, drive_ids, args.include_historical, scope
+            )
         )
         header = f"=== {meeting_type.display_name} ({meeting_type.key}) ==="
         if lines or orphan_links:
@@ -652,7 +924,12 @@ def main() -> None:
                 )
             if args.reconcile:
                 for action in reconcile_type(
-                    source_type, report, channel_ids, args.include_historical, scope
+                    source_type,
+                    report,
+                    channel_ids,
+                    drive_ids,
+                    args.include_historical,
+                    scope,
                 ):
                     print(f"    -> {action}")
             print()
@@ -717,7 +994,20 @@ def _print_planned_changes(plan: Plan, applied: bool) -> None:
             f"    • {verb.lower()}: remove {plan.clear_orphan} orphan pointer(s) "
             "left by past cross-type contamination (no meeting behind them)."
         )
-    if not (plan.repoint or plan.total_deletes):
+    if plan.clear_transcript:
+        print(
+            f"    • {verb.lower()}: clear {plan.clear_transcript} transcript_link "
+            "pointer(s) to a Drive file that no longer exists (re-uploaded on the "
+            "next pipeline run)."
+        )
+    if plan.clear_doc:
+        print(
+            f"    • {verb.lower()}: clear {plan.clear_doc} archived-document "
+            "pointer(s) to a dead Drive file."
+        )
+    if not (
+        plan.repoint or plan.total_deletes or plan.clear_transcript or plan.clear_doc
+    ):
         print("    • (no pointer changes)")
 
     print("\n  Public wiki (the ONLY outward-facing change):")
@@ -730,7 +1020,7 @@ def _print_planned_changes(plan: Plan, applied: bool) -> None:
         )
         print(
             f"    • {len(plan.wiki_keys)} meeting row(s) {tail}. Their broken "
-            "'Video Backup' links get repointed to the surviving video or removed. "
+            "backup/transcript/document links get repointed or removed. "
             f"Affected page(s): {pages}."
         )
         print(
