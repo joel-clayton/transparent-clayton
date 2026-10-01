@@ -61,6 +61,11 @@ class TestPureHelpers(unittest.TestCase):
             ),
             "2026-05-26 07_00 PM",
         )
+        # Date-only fallback (DATE_PATTERN) — used for date-keyed meetings.
+        self.assertEqual(
+            _meeting_key_from_filename("City Council Meeting 2026-05-08.txt"),
+            "2026-05-08",
+        )
         self.assertIsNone(_meeting_key_from_filename("Budget Committee 05-21-24.m4a"))
 
     def test_has_presence(self):
