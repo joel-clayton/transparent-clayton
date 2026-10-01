@@ -1,4 +1,7 @@
 import unittest
+from unittest.mock import MagicMock
+
+from googleapiclient.errors import HttpError
 
 from scripts.reconcile import (
     MeetingRow,
@@ -6,10 +9,12 @@ from scripts.reconcile import (
     TypeReport,
     _drive_file_id,
     _has_presence,
+    _is_stale_drive_link,
     _key_datetime,
     _meeting_key_from_filename,
     _video_id_from_link,
     find_mismatches,
+    live_drive_ids,
 )
 from src.meeting_types import CITY_COUNCIL
 
@@ -148,6 +153,38 @@ class TestDriveFindings(unittest.TestCase):
         rows = {self.KEY: MeetingRow(key=self.KEY, has_detail=True, docs_on_disk=True)}
         lines, _, _ = _fm(rows)
         self.assertIn("MISSING_DOC", lines[0])
+
+
+class TestDriveLiveness(unittest.TestCase):
+    def test_is_stale_only_for_parseable_confirmed_dead(self):
+        dead = "https://docs.google.com/document/d/DEAD/edit"
+        live = "https://docs.google.com/document/d/LIVE/edit"
+        folder = "https://drive.google.com/drive/folders/X"  # no /d/<id>
+        self.assertTrue(_is_stale_drive_link(dead, set()))
+        self.assertFalse(_is_stale_drive_link(live, {"LIVE"}))
+        # Unparseable link can't be verified -> never stale (never deleted).
+        self.assertFalse(_is_stale_drive_link(folder, set()))
+
+    def test_only_404_and_trashed_count_as_dead(self):
+        outcomes = {"live": "ok", "trash": "trashed", "gone": 404, "blip": 500}
+
+        def get(fileId, **kwargs):
+            req = MagicMock()
+            outcome = outcomes[fileId]
+            if outcome == "ok":
+                req.execute.return_value = {"id": fileId, "trashed": False}
+            elif outcome == "trashed":
+                req.execute.return_value = {"id": fileId, "trashed": True}
+            else:
+                req.execute.side_effect = HttpError(MagicMock(status=outcome), b"")
+            return req
+
+        service = MagicMock()
+        service.files.return_value.get.side_effect = get
+        result = live_drive_ids(service, set(outcomes))
+        # 404 and trashed are dead; a transient 500 is treated as live (never
+        # deleted on uncertainty).
+        self.assertEqual(result, {"live", "blip"})
 
 
 class TestScoping(unittest.TestCase):

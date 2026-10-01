@@ -62,6 +62,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from googleapiclient.discovery import build  # noqa: E402
+from googleapiclient.errors import HttpError  # noqa: E402
 
 from celery_app import r  # noqa: E402
 from datetime import datetime  # noqa: E402
@@ -72,6 +73,7 @@ from src.constants import (  # noqa: E402
     DATETIME_FORMAT,
     DATETIME_PATTERN,
     DETAIL_KEY,
+    DOCS_ARCHIVED_KEY,
     WIKI_REFRESH_KEY,
 )
 from src.meeting_types import MeetingType  # noqa: E402
@@ -206,11 +208,24 @@ def _drive_file_id(link: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _is_stale_drive_link(url: str, drive_ids: set[str]) -> bool:
+    """True only when the link has a parseable Drive id that is confirmed dead.
+
+    An unparseable link (no ``/d/<id>`` — e.g. a folder URL or an unexpected
+    shape) is left alone: we can't verify it, so we never report it stale or
+    delete it under --reconcile.
+    """
+    file_id = _drive_file_id(url)
+    return file_id is not None and file_id not in drive_ids
+
+
 def live_drive_ids(service: Any, ids: set[str]) -> set[str]:
     """The subset of ``ids`` that still resolve to a live (non-trashed) Drive file.
 
-    One ``files.get`` per distinct id; a 404 (or any error) or a trashed file
-    counts as dead. Ids are already deduped by the caller to respect quota.
+    One ``files.get`` per distinct id (ids are deduped by the caller). Only a
+    definitive **404** (or a trashed file) counts as dead — any other error
+    (rate limit, 5xx, auth/network blip) is treated as live, so a transient
+    failure never makes --reconcile delete valid pointers.
     """
     live: set[str] = set()
     for file_id in ids:
@@ -220,8 +235,15 @@ def live_drive_ids(service: Any, ids: set[str]) -> set[str]:
                 .get(fileId=file_id, fields="id, trashed", supportsAllDrives=True)
                 .execute()
             )
+        except HttpError as exc:
+            resp = getattr(exc, "resp", None)
+            if resp is not None and resp.status == 404:
+                continue  # definitively gone
+            live.add(file_id)  # transient/permission error -> assume live
+            continue
         except Exception:
-            continue  # 404 / permission / gone -> dead
+            live.add(file_id)  # network/other -> assume live, never delete on doubt
+            continue
         if not meta.get("trashed"):
             live.add(file_id)
     return live
@@ -516,8 +538,8 @@ def find_mismatches(
                 issues.append("MISSING_TRANSCRIPT (on disk, no Drive link)")
             # STALE_TRANSCRIPT_LINK: the transcript_link points at a Drive file
             # that no longer exists (a broken wiki transcript link).
-            elif (
-                m.transcript_link and _drive_file_id(m.transcript_link) not in drive_ids
+            elif m.transcript_link and _is_stale_drive_link(
+                m.transcript_link, drive_ids
             ):
                 issues.append("STALE_TRANSCRIPT_LINK")
 
@@ -525,7 +547,7 @@ def find_mismatches(
             stale_docs = sorted(
                 label
                 for label, url in m.doc_links.items()
-                if _drive_file_id(url) not in drive_ids
+                if _is_stale_drive_link(url, drive_ids)
             )
             if stale_docs:
                 issues.append("STALE_DOC_LINK " + ", ".join(stale_docs))
@@ -582,10 +604,10 @@ def _stale_drive(
         if not include_historical and dt is not None and dt < EARLIEST:
             continue
         touched = False
-        if m.transcript_link and _drive_file_id(m.transcript_link) not in drive_ids:
+        if m.transcript_link and _is_stale_drive_link(m.transcript_link, drive_ids):
             stale_transcripts += 1
             touched = True
-        dead = [u for u in m.doc_links.values() if _drive_file_id(u) not in drive_ids]
+        dead = [u for u in m.doc_links.values() if _is_stale_drive_link(u, drive_ids)]
         if dead:
             stale_docs += len(dead)
             touched = True
@@ -661,13 +683,16 @@ def reconcile_type(
         cleared_d = 0
         for key in drive_affected:
             m = report.rows[key]
-            if m.transcript_link and _drive_file_id(m.transcript_link) not in drive_ids:
+            # Clearing the transcript pointer is enough: the transcript stage
+            # re-uploads when the Drive file is missing (its idempotency is the
+            # live Drive-folder listing), which re-sets the pointer.
+            if m.transcript_link and _is_stale_drive_link(m.transcript_link, drive_ids):
                 r.delete(mt.transcript_link_key_template.format(meeting_key=key))
                 cleared_t += 1
             dead_labels = [
                 label
                 for label, url in m.doc_links.items()
-                if _drive_file_id(url) not in drive_ids
+                if _is_stale_drive_link(url, drive_ids)
             ]
             if dead_labels:
                 r.hdel(
@@ -675,6 +700,10 @@ def reconcile_type(
                     *dead_labels,
                 )
                 cleared_d += len(dead_labels)
+                # The document archiver skips meetings already in DOCS_ARCHIVED,
+                # so clear that membership too or the deleted doc never re-uploads
+                # (turning a stale link into a permanently missing one).
+                r.srem(mt.redis_key(DOCS_ARCHIVED_KEY), key)
         if cleared_t:
             actions.append(f"cleared {cleared_t} dead transcript_link pointer(s)")
         if cleared_d:
