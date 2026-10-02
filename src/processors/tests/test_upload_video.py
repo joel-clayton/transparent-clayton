@@ -193,5 +193,47 @@ class TestProcessForDateFailsLoudly(unittest.TestCase):
             discord.assert_not_called()  # never falsely reports "completed"
 
 
+class TestPlaylistBucketing(unittest.TestCase):
+    """Videos must only resolve to THIS meeting type's playlist (TRA-155): the old
+    get_playlists mapped every year-titled playlist to this type's key, so a
+    non-City-Council upload landed in a City Council playlist."""
+
+    def _uploader_with_playlists(self, items):
+        uploader = make_uploader(VideoUploader)  # City Council
+        uploader.service = MagicMock()
+        uploader.service.playlists.return_value.list.return_value.execute.return_value = {
+            "items": items
+        }
+        return uploader
+
+    def test_get_playlists_records_only_this_types_playlists(self):
+        items = [
+            {"id": "cc26", "snippet": {"title": "2026 City Council Meetings"}},
+            {"id": "pc26", "snippet": {"title": "2026 Planning Commission Meetings"}},
+            {"id": "misc", "snippet": {"title": "Watch later"}},  # no year
+        ]
+        uploader = self._uploader_with_playlists(items)
+        with patch("src.processors.upload_video.r") as mock_r:
+            uploader.get_playlists()
+        self.assertEqual(uploader.playlists, [{"cc26": "2026"}])
+        # Only the City Council pointer is cached — never the PC playlist.
+        mock_r.set.assert_called_once_with("video_playlist.cc_mtg.2026", "cc26")
+
+    def test_get_playlist_for_year_ignores_stale_pointer_and_creates(self):
+        uploader = make_uploader(VideoUploader)
+        uploader.playlists = [{"other": "2025"}]  # non-empty: skip get_playlists()
+        with (
+            # A stale/mismapped redis pointer must NOT be used.
+            patch("src.processors.upload_video.r") as mock_r,
+            patch.object(
+                uploader, "create_playlist_for_year", return_value="new26"
+            ) as c,
+        ):
+            mock_r.get.return_value = b"STALE_CC_PLAYLIST"
+            result = uploader.get_playlist_for_year("2026")
+        self.assertEqual(result, "new26")
+        c.assert_called_once_with("2026")
+
+
 if __name__ == "__main__":
     unittest.main()

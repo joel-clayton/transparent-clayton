@@ -118,13 +118,23 @@ class VideoUploader(Processor):
         )
         for playlist_id, title in playlists.items():
             year_str = get_year_string_from_string(title)
-            if year_str:
-                playlist_info: PlaylistInfo = {playlist_id: year_str}  # type: ignore
-                self.playlists.append(playlist_info)
-                redis_key = self.meeting_type.video_playlist_key_template.format(
-                    year_str
-                )
-                r.set(redis_key, playlist_id)
+            if not year_str:
+                continue
+            # Only record playlists that belong to THIS meeting type. Previously
+            # EVERY year-titled playlist (e.g. all the City Council ones) was
+            # mapped to this type's video_playlist key, so a non-City-Council
+            # upload resolved to a City Council playlist and was filed there.
+            if title != self.meeting_type.playlist_name_template.format(year_str):
+                continue
+            self._cache_playlist(playlist_id, year_str)
+
+    def _cache_playlist(self, playlist_id: str, year_str: str) -> None:
+        playlist_info: PlaylistInfo = {playlist_id: year_str}  # type: ignore
+        self.playlists.append(playlist_info)
+        r.set(
+            self.meeting_type.video_playlist_key_template.format(year_str),
+            playlist_id,
+        )
 
     def create_playlist_for_year(self, year_str: str) -> str:
         request = self.service.playlists().insert(
@@ -137,17 +147,23 @@ class VideoUploader(Processor):
             },
         )
         response = request.execute()
-        return response["id"]
+        playlist_id: str = response["id"]
+        self._cache_playlist(playlist_id, year_str)
+        return playlist_id
 
     def get_playlist_for_year(self, year_str: str) -> str:
         if not self.playlists:
             self.get_playlists()
-        playlist_id = r.get(
-            self.meeting_type.video_playlist_key_template.format(year_str)
-        )
-        if not playlist_id:
-            return self.create_playlist_for_year(year_str)
-        return playlist_id.decode("utf-8")
+        # Resolve only from playlists get_playlists confirmed belong to this type
+        # this run, so a stale/mismapped video_playlist pointer (from the old
+        # cross-type bug) is ignored rather than used. If none matches, create it.
+        for info in self.playlists:
+            if not info:
+                continue
+            for cached_id, cached_year in info.items():
+                if cached_year == year_str:
+                    return cached_id
+        return self.create_playlist_for_year(year_str)
 
     def add_video_to_playlist(self, playlist_id: str, video_id: str) -> str:
         self.logger.info(f"playlist_id: {playlist_id}, video_id: {video_id}")
