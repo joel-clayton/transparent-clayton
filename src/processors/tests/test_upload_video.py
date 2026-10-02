@@ -213,26 +213,24 @@ class TestPlaylistBucketing(unittest.TestCase):
             {"id": "misc", "snippet": {"title": "Watch later"}},  # no year
         ]
         uploader = self._uploader_with_playlists(items)
-        with patch("src.processors.upload_video.r") as mock_r:
-            uploader.get_playlists()
+        uploader.get_playlists()
+        # Only the City Council playlist is recorded — never the PC one.
         self.assertEqual(uploader.playlists, [{"cc26": "2026"}])
-        # Only the City Council pointer is cached — never the PC playlist.
-        mock_r.set.assert_called_once_with("video_playlist.cc_mtg.2026", "cc26")
 
-    def test_get_playlist_for_year_ignores_stale_pointer_and_creates(self):
+    def test_get_playlist_for_year_resolves_from_type_list_else_creates(self):
         uploader = make_uploader(VideoUploader)
-        uploader.playlists = [{"other": "2025"}]  # non-empty: skip get_playlists()
-        with (
-            # A stale/mismapped redis pointer must NOT be used.
-            patch("src.processors.upload_video.r") as mock_r,
-            patch.object(
-                uploader, "create_playlist_for_year", return_value="new26"
-            ) as c,
-        ):
-            mock_r.get.return_value = b"STALE_CC_PLAYLIST"
-            result = uploader.get_playlist_for_year("2026")
-        self.assertEqual(result, "new26")
-        c.assert_called_once_with("2026")
+        uploader.playlists = [{"cc26": "2026"}, {"cc25": "2025"}]
+        # A year present in this type's list resolves without creating.
+        with patch.object(uploader, "create_playlist_for_year") as create:
+            self.assertEqual(uploader.get_playlist_for_year("2026"), "cc26")
+        create.assert_not_called()
+        # A year not in the list creates the type's own playlist (a stale pointer
+        # for another type is never consulted — the resolver doesn't read Redis).
+        with patch.object(
+            uploader, "create_playlist_for_year", return_value="new24"
+        ) as create:
+            self.assertEqual(uploader.get_playlist_for_year("2024"), "new24")
+        create.assert_called_once_with("2024")
 
 
 if __name__ == "__main__":

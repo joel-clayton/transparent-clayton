@@ -114,7 +114,8 @@ class VideoUploader(Processor):
         request = self.service.playlists().list(
             mine=True, part="snippet,contentDetails", maxResults=RESULT_COUNT
         )
-        while request is not None:
+        pages = 0
+        while request is not None and pages < MAX_UPLOADS_PAGES:
             response = request.execute()
             for item in response.get("items", []):
                 title = item["snippet"]["title"]
@@ -129,14 +130,14 @@ class VideoUploader(Processor):
                     continue
                 self._cache_playlist(item["id"], year_str)
             request = self.service.playlists().list_next(request, response)
+            pages += 1
 
     def _cache_playlist(self, playlist_id: str, year_str: str) -> None:
+        # Kept only in-memory for this run. get_playlists re-lists every run, so
+        # the old video_playlist Redis pointer never actually saved an API call;
+        # it's dropped here (nothing reads it) rather than left as dead state.
         playlist_info: PlaylistInfo = {playlist_id: year_str}  # type: ignore
         self.playlists.append(playlist_info)
-        r.set(
-            self.meeting_type.video_playlist_key_template.format(year_str),
-            playlist_id,
-        )
 
     def create_playlist_for_year(self, year_str: str) -> str:
         request = self.service.playlists().insert(
