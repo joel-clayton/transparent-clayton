@@ -108,25 +108,27 @@ class VideoUploader(Processor):
         return build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
 
     def get_playlists(self) -> None:
-        playlists_request = self.service.playlists().list(
-            mine=True, part="snippet,contentDetails"
+        # Page through ALL playlists: with one page per the API default, once the
+        # channel exceeds it this type's playlist could fall off the listing and
+        # get_playlist_for_year would create a duplicate every run.
+        request = self.service.playlists().list(
+            mine=True, part="snippet,contentDetails", maxResults=RESULT_COUNT
         )
-        response = playlists_request.execute()
-
-        playlists = dict(
-            [(d["id"], d["snippet"]["title"]) for d in response.get("items")]
-        )
-        for playlist_id, title in playlists.items():
-            year_str = get_year_string_from_string(title)
-            if not year_str:
-                continue
-            # Only record playlists that belong to THIS meeting type. Previously
-            # EVERY year-titled playlist (e.g. all the City Council ones) was
-            # mapped to this type's video_playlist key, so a non-City-Council
-            # upload resolved to a City Council playlist and was filed there.
-            if title != self.meeting_type.playlist_name_template.format(year_str):
-                continue
-            self._cache_playlist(playlist_id, year_str)
+        while request is not None:
+            response = request.execute()
+            for item in response.get("items", []):
+                title = item["snippet"]["title"]
+                year_str = get_year_string_from_string(title)
+                if not year_str:
+                    continue
+                # Only record playlists that belong to THIS meeting type.
+                # Previously EVERY year-titled playlist (e.g. all the City Council
+                # ones) was mapped to this type's video_playlist key, so a
+                # non-City-Council upload resolved to a City Council playlist.
+                if title != self.meeting_type.playlist_name_template.format(year_str):
+                    continue
+                self._cache_playlist(item["id"], year_str)
+            request = self.service.playlists().list_next(request, response)
 
     def _cache_playlist(self, playlist_id: str, year_str: str) -> None:
         playlist_info: PlaylistInfo = {playlist_id: year_str}  # type: ignore

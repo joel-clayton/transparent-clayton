@@ -201,9 +201,9 @@ class TestPlaylistBucketing(unittest.TestCase):
     def _uploader_with_playlists(self, items):
         uploader = make_uploader(VideoUploader)  # City Council
         uploader.service = MagicMock()
-        uploader.service.playlists.return_value.list.return_value.execute.return_value = {
-            "items": items
-        }
+        playlists = uploader.service.playlists.return_value
+        playlists.list.return_value.execute.return_value = {"items": items}
+        playlists.list_next.return_value = None  # single page
         return uploader
 
     def test_get_playlists_records_only_this_types_playlists(self):
