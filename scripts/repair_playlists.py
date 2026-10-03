@@ -49,7 +49,10 @@ from src.util import get_year_string_from_string  # noqa: E402
 # Commission (its correct PC videos are moved by this tool).
 SKIP_VIDEO_IDS = {"DzhdARPh05s", "EN5TG9pFS-Q"}
 
-PLACEHOLDER_TITLES = {"Deleted video", "Private video"}
+# Only a genuinely dead item is safe to remove. A "Private video" is a LIVE video
+# that is temporarily private — its id is hidden, so removing the playlist entry
+# would be irreversible; leave those in place.
+PLACEHOLDER_TITLES = {"Deleted video"}
 
 
 def _service() -> Any:

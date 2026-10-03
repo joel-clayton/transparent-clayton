@@ -39,13 +39,12 @@ class TestClassifyItem(unittest.TestCase):
     def test_keep_when_type_unknown(self):
         self.assertEqual(classify_item(CITY_COUNCIL, "Mystery clip", "v2")[0], "keep")
 
-    def test_remove_placeholder(self):
+    def test_remove_only_truly_dead_placeholder(self):
         self.assertEqual(
             classify_item(CITY_COUNCIL, "Deleted video", "v3")[0], "remove"
         )
-        self.assertEqual(
-            classify_item(CITY_COUNCIL, "Private video", None)[0], "remove"
-        )
+        # A "Private video" is live (hidden), not dead — never delete its entry.
+        self.assertEqual(classify_item(CITY_COUNCIL, "Private video", None)[0], "keep")
 
     def test_move_when_misfiled(self):
         action, dest = classify_item(
