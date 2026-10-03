@@ -31,6 +31,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from googleapiclient.discovery import build  # noqa: E402
+from googleapiclient.errors import HttpError  # noqa: E402
 
 from celery_app import r  # noqa: E402
 from src.meeting_types import MEETING_TYPES, MeetingType  # noqa: E402
@@ -144,9 +145,14 @@ def _playlist_items(service: Any, playlist_id: str) -> list[dict[str, str]]:
     return out
 
 
-def _ensure_playlist(service: Any, name: str, cache: dict[str, str]) -> str:
+def _ensure_playlist(
+    service: Any, name: str, cache: dict[str, str]
+) -> tuple[str, bool]:
+    """Return (playlist_id, created). ``created`` is True when this call inserted
+    the playlist — callers must NOT immediately list its items, since a freshly
+    created playlist isn't queryable yet (playlistItems.list returns 404)."""
     if name in cache:
-        return cache[name]
+        return cache[name], False
     response = (
         service.playlists()
         .insert(
@@ -157,7 +163,19 @@ def _ensure_playlist(service: Any, name: str, cache: dict[str, str]) -> str:
     )
     cache[name] = response["id"]
     print(f"    created playlist {name!r}")
-    return response["id"]
+    return response["id"], True
+
+
+def _playlist_video_ids(service: Any, playlist_id: str) -> set[str]:
+    """Current video ids in a playlist, or an empty set if it isn't listable yet
+    (a 404 from a just-created playlist that hasn't propagated)."""
+    try:
+        return {it["video_id"] for it in _playlist_items(service, playlist_id)}
+    except HttpError as exc:
+        resp = getattr(exc, "resp", None)
+        if resp is not None and resp.status == 404:
+            return set()
+        raise
 
 
 def _drop_stale_pointers(playlists: dict[str, str], execute: bool) -> int:
@@ -215,11 +233,13 @@ def main() -> None:
             moves += 1
             return
         try:
-            dest_id = _ensure_playlist(service, dest_name, name_to_id)
+            dest_id, created = _ensure_playlist(service, dest_name, name_to_id)
             if dest_id not in dest_members:
-                dest_members[dest_id] = {
-                    it["video_id"] for it in _playlist_items(service, dest_id)
-                }
+                # A playlist created this run is empty and not yet listable; only
+                # list a pre-existing one to seed the dedup set.
+                dest_members[dest_id] = (
+                    set() if created else _playlist_video_ids(service, dest_id)
+                )
             if item["video_id"] not in dest_members[dest_id]:
                 service.playlistItems().insert(
                     part="snippet",

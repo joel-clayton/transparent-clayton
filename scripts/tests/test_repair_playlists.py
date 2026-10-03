@@ -1,7 +1,12 @@
 import unittest
+from unittest.mock import MagicMock
+
+from googleapiclient.errors import HttpError
 
 from scripts.repair_playlists import (
     SKIP_VIDEO_IDS,
+    _ensure_playlist,
+    _playlist_video_ids,
     classify_item,
     owner_type,
     video_type,
@@ -70,6 +75,30 @@ class TestClassifyItem(unittest.TestCase):
             ),
             ("move", GENERAL),
         )
+
+
+class TestPlaylistHelpers(unittest.TestCase):
+    def test_ensure_playlist_reports_created_then_cached(self):
+        svc = MagicMock()
+        svc.playlists.return_value.insert.return_value.execute.return_value = {
+            "id": "NEW"
+        }
+        cache: dict[str, str] = {}
+        self.assertEqual(_ensure_playlist(svc, "2026 X Meetings", cache), ("NEW", True))
+        svc.playlists.return_value.insert.reset_mock()
+        # Second call: cached, reported as not-created, and no insert issued.
+        self.assertEqual(
+            _ensure_playlist(svc, "2026 X Meetings", cache), ("NEW", False)
+        )
+        svc.playlists.return_value.insert.assert_not_called()
+
+    def test_playlist_video_ids_empty_on_404(self):
+        svc = MagicMock()
+        svc.playlistItems.return_value.list.return_value.execute.side_effect = (
+            HttpError(MagicMock(status=404), b"not found")
+        )
+        # A just-created, not-yet-listable playlist yields an empty set, not a crash.
+        self.assertEqual(_playlist_video_ids(svc, "PNEW"), set())
 
 
 if __name__ == "__main__":
