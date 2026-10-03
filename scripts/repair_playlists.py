@@ -247,9 +247,9 @@ def main() -> None:
     dest_members: dict[str, set[str]] = {}  # dest playlist id -> its video ids
 
     def _move(item: dict[str, str], src_title: str, dest: MeetingType) -> None:
-        """Move one item into dest's correct year playlist. One item's failure is
-        collected and does not abort the batch; a video already in the
-        destination is not inserted again (so a partial-run re-run won't duplicate)."""
+        """Plan/perform moving one item into dest's correct year playlist: resolve
+        the year, log the move, and (under --execute) delegate the API work to
+        _perform_move, collecting any failure so one bad item doesn't abort the batch."""
         nonlocal moves
         year = get_year_string_from_string(item["title"])
         if not year:  # don't fabricate a yearless " <Type> Meetings" playlist
