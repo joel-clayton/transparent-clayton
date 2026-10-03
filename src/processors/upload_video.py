@@ -108,23 +108,36 @@ class VideoUploader(Processor):
         return build(API_SERVICE_NAME, API_VERSION, credentials=credentials)
 
     def get_playlists(self) -> None:
-        playlists_request = self.service.playlists().list(
-            mine=True, part="snippet,contentDetails"
+        # Page through ALL playlists: with one page per the API default, once the
+        # channel exceeds it this type's playlist could fall off the listing and
+        # get_playlist_for_year would create a duplicate every run.
+        request = self.service.playlists().list(
+            mine=True, part="snippet,contentDetails", maxResults=RESULT_COUNT
         )
-        response = playlists_request.execute()
+        pages = 0
+        while request is not None and pages < MAX_UPLOADS_PAGES:
+            response = request.execute()
+            for item in response.get("items", []):
+                title = item["snippet"]["title"]
+                year_str = get_year_string_from_string(title)
+                if not year_str:
+                    continue
+                # Only record playlists that belong to THIS meeting type.
+                # Previously EVERY year-titled playlist (e.g. all the City Council
+                # ones) was mapped to this type's video_playlist key, so a
+                # non-City-Council upload resolved to a City Council playlist.
+                if title != self.meeting_type.playlist_name_template.format(year_str):
+                    continue
+                self._cache_playlist(item["id"], year_str)
+            request = self.service.playlists().list_next(request, response)
+            pages += 1
 
-        playlists = dict(
-            [(d["id"], d["snippet"]["title"]) for d in response.get("items")]
-        )
-        for playlist_id, title in playlists.items():
-            year_str = get_year_string_from_string(title)
-            if year_str:
-                playlist_info: PlaylistInfo = {playlist_id: year_str}  # type: ignore
-                self.playlists.append(playlist_info)
-                redis_key = self.meeting_type.video_playlist_key_template.format(
-                    year_str
-                )
-                r.set(redis_key, playlist_id)
+    def _cache_playlist(self, playlist_id: str, year_str: str) -> None:
+        # Kept only in-memory for this run. get_playlists re-lists every run, so
+        # the old video_playlist Redis pointer never actually saved an API call;
+        # it's dropped here (nothing reads it) rather than left as dead state.
+        playlist_info: PlaylistInfo = {playlist_id: year_str}  # type: ignore
+        self.playlists.append(playlist_info)
 
     def create_playlist_for_year(self, year_str: str) -> str:
         request = self.service.playlists().insert(
@@ -137,17 +150,23 @@ class VideoUploader(Processor):
             },
         )
         response = request.execute()
-        return response["id"]
+        playlist_id: str = response["id"]
+        self._cache_playlist(playlist_id, year_str)
+        return playlist_id
 
     def get_playlist_for_year(self, year_str: str) -> str:
         if not self.playlists:
             self.get_playlists()
-        playlist_id = r.get(
-            self.meeting_type.video_playlist_key_template.format(year_str)
-        )
-        if not playlist_id:
-            return self.create_playlist_for_year(year_str)
-        return playlist_id.decode("utf-8")
+        # Resolve only from playlists get_playlists confirmed belong to this type
+        # this run, so a stale/mismapped video_playlist pointer (from the old
+        # cross-type bug) is ignored rather than used. If none matches, create it.
+        for info in self.playlists:
+            if not info:
+                continue
+            for cached_id, cached_year in info.items():
+                if cached_year == year_str:
+                    return cached_id
+        return self.create_playlist_for_year(year_str)
 
     def add_video_to_playlist(self, playlist_id: str, video_id: str) -> str:
         self.logger.info(f"playlist_id: {playlist_id}, video_id: {video_id}")

@@ -193,5 +193,45 @@ class TestProcessForDateFailsLoudly(unittest.TestCase):
             discord.assert_not_called()  # never falsely reports "completed"
 
 
+class TestPlaylistBucketing(unittest.TestCase):
+    """Videos must only resolve to THIS meeting type's playlist (TRA-155): the old
+    get_playlists mapped every year-titled playlist to this type's key, so a
+    non-City-Council upload landed in a City Council playlist."""
+
+    def _uploader_with_playlists(self, items):
+        uploader = make_uploader(VideoUploader)  # City Council
+        uploader.service = MagicMock()
+        playlists = uploader.service.playlists.return_value
+        playlists.list.return_value.execute.return_value = {"items": items}
+        playlists.list_next.return_value = None  # single page
+        return uploader
+
+    def test_get_playlists_records_only_this_types_playlists(self):
+        items = [
+            {"id": "cc26", "snippet": {"title": "2026 City Council Meetings"}},
+            {"id": "pc26", "snippet": {"title": "2026 Planning Commission Meetings"}},
+            {"id": "misc", "snippet": {"title": "Watch later"}},  # no year
+        ]
+        uploader = self._uploader_with_playlists(items)
+        uploader.get_playlists()
+        # Only the City Council playlist is recorded — never the PC one.
+        self.assertEqual(uploader.playlists, [{"cc26": "2026"}])
+
+    def test_get_playlist_for_year_resolves_from_type_list_else_creates(self):
+        uploader = make_uploader(VideoUploader)
+        uploader.playlists = [{"cc26": "2026"}, {"cc25": "2025"}]
+        # A year present in this type's list resolves without creating.
+        with patch.object(uploader, "create_playlist_for_year") as create:
+            self.assertEqual(uploader.get_playlist_for_year("2026"), "cc26")
+        create.assert_not_called()
+        # A year not in the list creates the type's own playlist (a stale pointer
+        # for another type is never consulted — the resolver doesn't read Redis).
+        with patch.object(
+            uploader, "create_playlist_for_year", return_value="new24"
+        ) as create:
+            self.assertEqual(uploader.get_playlist_for_year("2024"), "new24")
+        create.assert_called_once_with("2024")
+
+
 if __name__ == "__main__":
     unittest.main()
