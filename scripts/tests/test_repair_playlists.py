@@ -1,7 +1,10 @@
 import unittest
+from unittest.mock import MagicMock
 
 from scripts.repair_playlists import (
     SKIP_VIDEO_IDS,
+    _ensure_playlist,
+    _perform_move,
     classify_item,
     owner_type,
     video_type,
@@ -70,6 +73,61 @@ class TestClassifyItem(unittest.TestCase):
             ),
             ("move", GENERAL),
         )
+
+
+class TestPlaylistHelpers(unittest.TestCase):
+    def test_ensure_playlist_reports_created_then_cached(self):
+        svc = MagicMock()
+        svc.playlists.return_value.insert.return_value.execute.return_value = {
+            "id": "NEW"
+        }
+        cache: dict[str, str] = {}
+        self.assertEqual(_ensure_playlist(svc, "2026 X Meetings", cache), ("NEW", True))
+        svc.playlists.return_value.insert.reset_mock()
+        # Second call: cached, reported as not-created, and no insert issued.
+        self.assertEqual(
+            _ensure_playlist(svc, "2026 X Meetings", cache), ("NEW", False)
+        )
+        svc.playlists.return_value.insert.assert_not_called()
+
+    def test_perform_move_into_created_playlist_does_not_list_it(self):
+        """The TRA-157 regression: a just-created playlist must NOT be listed to
+        seed the dedup set (listing one that hasn't propagated 404s)."""
+        svc = MagicMock()
+        svc.playlists.return_value.insert.return_value.execute.return_value = {
+            "id": "NEWID"
+        }
+        name_to_id: dict[str, str] = {}  # dest absent -> _ensure_playlist creates it
+        dest_members: dict[str, set[str]] = {}
+        item = {"video_id": "vid", "item_id": "itemid", "title": "t"}
+
+        _perform_move(svc, item, "2026 X Meetings", name_to_id, dest_members)
+
+        svc.playlistItems.return_value.list.assert_not_called()  # never lists the new one
+        svc.playlistItems.return_value.insert.assert_called_once()
+        svc.playlistItems.return_value.delete.assert_called_once_with(id="itemid")
+        self.assertEqual(dest_members["NEWID"], {"vid"})
+
+    def test_perform_move_existing_playlist_dedups_but_still_removes_source(self):
+        svc = MagicMock()
+        name_to_id = {"2026 X Meetings": "EXIST"}  # present -> created=False, listed
+        dest_members: dict[str, set[str]] = {}
+        svc.playlistItems.return_value.list.return_value.execute.return_value = {
+            "items": [
+                {
+                    "id": "i",
+                    "snippet": {"title": "t", "resourceId": {"videoId": "vid"}},
+                }
+            ]
+        }
+        svc.playlistItems.return_value.list_next.return_value = None
+        item = {"video_id": "vid", "item_id": "itemid", "title": "t"}
+
+        _perform_move(svc, item, "2026 X Meetings", name_to_id, dest_members)
+
+        # Already in the destination -> no second insert, but still removed from source.
+        svc.playlistItems.return_value.insert.assert_not_called()
+        svc.playlistItems.return_value.delete.assert_called_once_with(id="itemid")
 
 
 if __name__ == "__main__":
