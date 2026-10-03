@@ -31,7 +31,6 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from googleapiclient.discovery import build  # noqa: E402
-from googleapiclient.errors import HttpError  # noqa: E402
 
 from celery_app import r  # noqa: E402
 from src.meeting_types import MEETING_TYPES, MeetingType  # noqa: E402
@@ -167,15 +166,46 @@ def _ensure_playlist(
 
 
 def _playlist_video_ids(service: Any, playlist_id: str) -> set[str]:
-    """Current video ids in a playlist, or an empty set if it isn't listable yet
-    (a 404 from a just-created playlist that hasn't propagated)."""
-    try:
-        return {it["video_id"] for it in _playlist_items(service, playlist_id)}
-    except HttpError as exc:
-        resp = getattr(exc, "resp", None)
-        if resp is not None and resp.status == 404:
-            return set()
-        raise
+    """Current video ids in an EXISTING playlist. Callers must not pass a
+    just-created playlist (its item listing 404s until it propagates) — those are
+    seeded empty via the ``created`` flag from _ensure_playlist instead. A 404 here
+    therefore means the playlist is genuinely gone and is allowed to propagate up so
+    the move is recorded as a failure rather than silently treated as empty."""
+    return {it["video_id"] for it in _playlist_items(service, playlist_id)}
+
+
+def _perform_move(
+    service: Any,
+    item: dict[str, str],
+    dest_name: str,
+    name_to_id: dict[str, str],
+    dest_members: dict[str, set[str]],
+) -> None:
+    """Insert ``item`` into ``dest_name`` (creating that playlist if needed), then
+    delete it from its source. A playlist created this run is known-empty and is not
+    listed; a pre-existing one is listed so a video already present is not inserted
+    again (a partial-run re-run can't duplicate). ``name_to_id``/``dest_members`` are
+    updated in place; API failures raise so the caller can record them."""
+    dest_id, created = _ensure_playlist(service, dest_name, name_to_id)
+    if dest_id not in dest_members:
+        dest_members[dest_id] = (
+            set() if created else _playlist_video_ids(service, dest_id)
+        )
+    if item["video_id"] not in dest_members[dest_id]:
+        service.playlistItems().insert(
+            part="snippet",
+            body={
+                "snippet": {
+                    "playlistId": dest_id,
+                    "resourceId": {
+                        "kind": "youtube#video",
+                        "videoId": item["video_id"],
+                    },
+                }
+            },
+        ).execute()
+        dest_members[dest_id].add(item["video_id"])
+    service.playlistItems().delete(id=item["item_id"]).execute()
 
 
 def _drop_stale_pointers(playlists: dict[str, str], execute: bool) -> int:
@@ -233,28 +263,7 @@ def main() -> None:
             moves += 1
             return
         try:
-            dest_id, created = _ensure_playlist(service, dest_name, name_to_id)
-            if dest_id not in dest_members:
-                # A playlist created this run is empty and not yet listable; only
-                # list a pre-existing one to seed the dedup set.
-                dest_members[dest_id] = (
-                    set() if created else _playlist_video_ids(service, dest_id)
-                )
-            if item["video_id"] not in dest_members[dest_id]:
-                service.playlistItems().insert(
-                    part="snippet",
-                    body={
-                        "snippet": {
-                            "playlistId": dest_id,
-                            "resourceId": {
-                                "kind": "youtube#video",
-                                "videoId": item["video_id"],
-                            },
-                        }
-                    },
-                ).execute()
-                dest_members[dest_id].add(item["video_id"])
-            service.playlistItems().delete(id=item["item_id"]).execute()
+            _perform_move(service, item, dest_name, name_to_id, dest_members)
             moves += 1
         except Exception as exc:
             failures.append(f"move {item['video_id']} -> {dest_name!r}: {exc}")

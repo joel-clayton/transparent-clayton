@@ -1,12 +1,10 @@
 import unittest
 from unittest.mock import MagicMock
 
-from googleapiclient.errors import HttpError
-
 from scripts.repair_playlists import (
     SKIP_VIDEO_IDS,
     _ensure_playlist,
-    _playlist_video_ids,
+    _perform_move,
     classify_item,
     owner_type,
     video_type,
@@ -92,13 +90,44 @@ class TestPlaylistHelpers(unittest.TestCase):
         )
         svc.playlists.return_value.insert.assert_not_called()
 
-    def test_playlist_video_ids_empty_on_404(self):
+    def test_perform_move_into_created_playlist_does_not_list_it(self):
+        """The TRA-157 regression: a just-created playlist must NOT be listed to
+        seed the dedup set (listing one that hasn't propagated 404s)."""
         svc = MagicMock()
-        svc.playlistItems.return_value.list.return_value.execute.side_effect = (
-            HttpError(MagicMock(status=404), b"not found")
-        )
-        # A just-created, not-yet-listable playlist yields an empty set, not a crash.
-        self.assertEqual(_playlist_video_ids(svc, "PNEW"), set())
+        svc.playlists.return_value.insert.return_value.execute.return_value = {
+            "id": "NEWID"
+        }
+        name_to_id: dict[str, str] = {}  # dest absent -> _ensure_playlist creates it
+        dest_members: dict[str, set[str]] = {}
+        item = {"video_id": "vid", "item_id": "itemid", "title": "t"}
+
+        _perform_move(svc, item, "2026 X Meetings", name_to_id, dest_members)
+
+        svc.playlistItems.return_value.list.assert_not_called()  # never lists the new one
+        svc.playlistItems.return_value.insert.assert_called_once()
+        svc.playlistItems.return_value.delete.assert_called_once_with(id="itemid")
+        self.assertEqual(dest_members["NEWID"], {"vid"})
+
+    def test_perform_move_existing_playlist_dedups_but_still_removes_source(self):
+        svc = MagicMock()
+        name_to_id = {"2026 X Meetings": "EXIST"}  # present -> created=False, listed
+        dest_members: dict[str, set[str]] = {}
+        svc.playlistItems.return_value.list.return_value.execute.return_value = {
+            "items": [
+                {
+                    "id": "i",
+                    "snippet": {"title": "t", "resourceId": {"videoId": "vid"}},
+                }
+            ]
+        }
+        svc.playlistItems.return_value.list_next.return_value = None
+        item = {"video_id": "vid", "item_id": "itemid", "title": "t"}
+
+        _perform_move(svc, item, "2026 X Meetings", name_to_id, dest_members)
+
+        # Already in the destination -> no second insert, but still removed from source.
+        svc.playlistItems.return_value.insert.assert_not_called()
+        svc.playlistItems.return_value.delete.assert_called_once_with(id="itemid")
 
 
 if __name__ == "__main__":
