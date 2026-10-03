@@ -192,33 +192,32 @@ def main() -> None:
     moves = 0
     removals = 0
     skips: list[str] = []
-    for pid, title in sorted(playlists.items(), key=lambda kv: kv[1]):
-        owner = owner_type(title)
-        if owner is None:
-            continue  # not a pipeline-managed playlist
-        for item in _playlist_items(service, pid):
-            action, dest = classify_item(owner, item["title"], item["video_id"])
-            if action == "keep":
-                continue
-            if action == "skip":
-                skips.append(f"{item['video_id']}  {item['title']!r}")
-                continue
-            if action == "remove":
-                removals += 1
-                print(f"  remove placeholder from {title!r}: {item['item_id']}")
-                if args.execute:
-                    service.playlistItems().delete(id=item["item_id"]).execute()
-                continue
-            # move
-            assert dest is not None
-            year = get_year_string_from_string(item["title"]) or ""
-            dest_name = dest.playlist_name_template.format(year)
+    failures: list[str] = []
+    dest_members: dict[str, set[str]] = {}  # dest playlist id -> its video ids
+
+    def _move(item: dict[str, str], src_title: str, dest: MeetingType) -> None:
+        """Move one item into dest's correct year playlist. One item's failure is
+        collected and does not abort the batch; a video already in the
+        destination is not inserted again (so a partial-run re-run won't duplicate)."""
+        nonlocal moves
+        year = get_year_string_from_string(item["title"])
+        if not year:  # don't fabricate a yearless " <Type> Meetings" playlist
+            failures.append(f"no parseable year, not moved: {item['title']!r}")
+            return
+        dest_name = dest.playlist_name_template.format(year)
+        print(
+            f"  move {item['video_id']} {item['title']!r}: {src_title!r} -> {dest_name!r}"
+        )
+        if not args.execute:
             moves += 1
-            print(
-                f"  move {item['video_id']} {item['title']!r}: {title!r} -> {dest_name!r}"
-            )
-            if args.execute:
-                dest_id = _ensure_playlist(service, dest_name, name_to_id)
+            return
+        try:
+            dest_id = _ensure_playlist(service, dest_name, name_to_id)
+            if dest_id not in dest_members:
+                dest_members[dest_id] = {
+                    it["video_id"] for it in _playlist_items(service, dest_id)
+                }
+            if item["video_id"] not in dest_members[dest_id]:
                 service.playlistItems().insert(
                     part="snippet",
                     body={
@@ -231,7 +230,36 @@ def main() -> None:
                         }
                     },
                 ).execute()
-                service.playlistItems().delete(id=item["item_id"]).execute()
+                dest_members[dest_id].add(item["video_id"])
+            service.playlistItems().delete(id=item["item_id"]).execute()
+            moves += 1
+        except Exception as exc:
+            failures.append(f"move {item['video_id']} -> {dest_name!r}: {exc}")
+
+    for pid, title in sorted(playlists.items(), key=lambda kv: kv[1]):
+        owner = owner_type(title)
+        if owner is None:
+            continue  # not a pipeline-managed playlist
+        for item in _playlist_items(service, pid):
+            action, dest = classify_item(owner, item["title"], item["video_id"])
+            if action == "keep":
+                continue
+            if action == "skip":
+                skips.append(f"{item['video_id']}  {item['title']!r}")
+                continue
+            if action == "remove":
+                print(f"  remove placeholder from {title!r}: {item['item_id']}")
+                if not args.execute:
+                    removals += 1
+                    continue
+                try:
+                    service.playlistItems().delete(id=item["item_id"]).execute()
+                    removals += 1
+                except Exception as exc:
+                    failures.append(f"remove {item['item_id']} from {title!r}: {exc}")
+                continue
+            assert dest is not None
+            _move(item, title, dest)
 
     stale = _drop_stale_pointers(playlists, args.execute)
 
@@ -244,6 +272,10 @@ def main() -> None:
         print(f"Left for manual deletion ({len(skips)} obsolete video(s)):")
         for s in skips:
             print(f"  {s}")
+    if failures:
+        print(f"\n{len(failures)} operation(s) FAILED (safe to re-run):")
+        for f in failures:
+            print(f"  {f}")
     if not args.execute:
         print("\n(read-only audit — re-run with --execute to apply.)")
 

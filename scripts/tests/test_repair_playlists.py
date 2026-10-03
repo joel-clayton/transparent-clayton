@@ -64,12 +64,12 @@ class TestClassifyItem(unittest.TestCase):
             CITY_COUNCIL, "Clayton CA General Meeting 2026-05-26 07:00 PM", vid
         )
         self.assertEqual((action, dest), ("skip", None))
-        # A non-skipped General video in the same situation would move.
+        # A non-skip-listed General video misfiled in a CC playlist DOES move.
         self.assertEqual(
             classify_item(
-                GENERAL, "Clayton CA General Meeting 2026-08-26 06:00 PM", "ok"
-            )[0],
-            "keep",
+                CITY_COUNCIL, "Clayton CA General Meeting 2026-08-26 06:00 PM", "ok"
+            ),
+            ("move", GENERAL),
         )
 
 
