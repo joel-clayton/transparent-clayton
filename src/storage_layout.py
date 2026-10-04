@@ -21,20 +21,27 @@ from src.settings import STORAGE_ROOT
 
 
 def storage_is_mounted() -> bool:
-    """Whether the storage volume is mounted (its root exists). Stage dirs live on
-    an external volume; when it is unmounted the pipeline must fail loudly rather
-    than write to the boot disk."""
+    """Whether the storage root exists, used as the "is the volume ready" signal.
+
+    ``os.path.isdir(STORAGE_ROOT)`` (not ``os.path.ismount``): STORAGE_ROOT is a
+    directory nested *below* the actual mount point (e.g. .../Volumes/Gautam is the
+    mount, STORAGE_ROOT is .../Clayton/CC Meetings under it), so ismount would be
+    False even when mounted. isdir also matches the scraper's existing mount check.
+    The residual risk — a stray dir left at that path on the boot disk passing the
+    check — is accepted (and is pre-existing in the scraper check)."""
     return os.path.isdir(STORAGE_ROOT)
 
 
 def write_dir_for_bucket(base_dir: str, bucket: str) -> str:
     """The per-type subdirectory ``<base_dir>/<bucket>/`` to write into (always the
-    new layout — the pipeline never writes flat), bootstrapping the stage tree.
+    new layout — the pipeline never writes flat).
 
-    Created only when the storage volume is mounted (:func:`storage_is_mounted`):
-    a mounted-but-empty volume self-bootstraps its stage dirs, but an unmounted one
-    is left alone so the write fails loudly against the missing dir instead of
-    fabricating the tree on the boot disk."""
+    Created, together with any missing stage dir below it, only when the storage
+    root exists (:func:`storage_is_mounted`); when it does not — an unmounted volume
+    (or one mounted at an ancestor but without STORAGE_ROOT yet present) — this is a
+    no-op so the write fails loudly against the missing dir instead of fabricating
+    the stage tree on the boot disk. Initial creation of STORAGE_ROOT itself is a
+    one-time volume-setup step, as it was before bucketing."""
     path = os.path.join(base_dir, bucket) + os.sep
     if storage_is_mounted():
         os.makedirs(path, exist_ok=True)

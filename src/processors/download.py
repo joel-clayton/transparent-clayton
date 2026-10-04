@@ -157,4 +157,7 @@ class Downloader(Processor):
             "copy",
             f"{output_file}",
         ]
-        subprocess.run(ffmpeg_command)
+        # check=True so a failed ffmpeg (network error, or a missing output dir when
+        # the storage volume is unmounted) raises instead of being swallowed — the
+        # caller then records it as a failure rather than marking the date complete.
+        subprocess.run(ffmpeg_command, check=True)
