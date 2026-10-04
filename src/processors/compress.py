@@ -4,7 +4,7 @@ This script compresses mp4 video takes a diff of videos based on a date in
  not present in the destination folder.
 
 Usage:
-$ pipenv run python compress.py -d /Volumes/Gautam/Clayton/CC Meetings/Downloaded/ -t "-c:v libx265 -vtag hvc1" -o /Volumes/Gautam/Clayton/CC Meetings/Compressed/ -p "City of Clayton"
+$ pipenv run python compress.py -d /Volumes/Gautam/Clayton/Downloaded/ -t "-c:v libx265 -vtag hvc1" -o /Volumes/Gautam/Clayton/Compressed/ -p "City of Clayton"
 """
 
 import subprocess

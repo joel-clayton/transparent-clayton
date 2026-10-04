@@ -17,9 +17,9 @@ class TestSnapshotStore(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        # Mimic ".../CC Meetings/RawSnapshots": the parent must already exist,
+        # Mimic ".../Clayton/RawSnapshots": the parent must already exist,
         # standing in for the mounted volume.
-        self.volume = Path(self._tmp.name) / "CC Meetings"
+        self.volume = Path(self._tmp.name) / "Clayton"
         self.volume.mkdir()
         self.root = self.volume / "RawSnapshots"
         self.store = SnapshotStore(self.root)

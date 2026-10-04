@@ -29,9 +29,7 @@ CIVIC_CLERK_API_TIMEOUT = 30.0  # seconds
 CIVIC_CLERK_API_MAX_PAGES = 400
 # Overridable storage root (shared with src.settings) so a dry run can point the
 # whole pipeline at a throwaway directory off the external volume.
-_STORAGE_ROOT = os.environ.get(
-    "PIPELINE_STORAGE_ROOT", "/Volumes/Gautam/Clayton/CC Meetings"
-)
+_STORAGE_ROOT = os.environ.get("PIPELINE_STORAGE_ROOT", "/Volumes/Gautam/Clayton")
 DOWNLOADED_PATH = Path(_STORAGE_ROOT) / "Downloaded"
 RAW_SNAPSHOT_PATH = Path(_STORAGE_ROOT) / "RawSnapshots"
 VIDEO_FILE_NAME_TEMPLATE = (
