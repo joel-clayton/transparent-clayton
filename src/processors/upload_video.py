@@ -24,6 +24,7 @@ from src.constants import (
 )
 from src.processors.process import Processor
 from src.settings import COMPRESSED_DIR, YOUTUBE_CLIENT_SECRET_FILE
+from src.storage_layout import read_dirs_for_bucket
 from src.types import JobType, SourceType, type_stubs, Meeting, MEETING_TYPE_BY_SOURCE
 from src.processors.constants import (
     PUBLIC_VIDEO_STATUS,
@@ -281,20 +282,23 @@ class VideoUploader(Processor):
         return video_id
 
     def gather_dates(self, dir_path: str) -> List:
+        """Absolute paths of this type's compressed files to upload. Reads the
+        per-type bucket plus the legacy flat layout (transition fallback)."""
         file_name_stub = type_stubs.get(self.source_type, "")
-        files = [
-            f
-            for f in listdir(dir_path)
-            if path.isfile(os.path.join(dir_path, f))
-            if file_name_stub in f
-        ]
-        dates = []
-        for f in files:
-            date_match = re.search(self.meeting_type.compressed_title_prefix, f)
-            if date_match:
-                absolute_path = os.path.join(dir_path, f)
-                dates.append(absolute_path)
-        return sorted(dates)
+        paths = []
+        for directory in read_dirs_for_bucket(dir_path, self.meeting_type.disk_bucket):
+            if not path.isdir(directory):
+                continue
+            for f in listdir(directory):
+                if not path.isfile(os.path.join(directory, f)):
+                    continue
+                if f.startswith("._"):
+                    continue
+                if file_name_stub not in f:
+                    continue
+                if re.search(self.meeting_type.compressed_title_prefix, f):
+                    paths.append(os.path.join(directory, f))
+        return sorted(paths)
 
     def gather_input_dates(self) -> List:
         return sorted(self.gather_dates(COMPRESSED_DIR), reverse=True)[:RESULT_COUNT]

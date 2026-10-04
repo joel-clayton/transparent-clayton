@@ -11,11 +11,13 @@ from src.processors.constants import EARLIEST
 from src.types import (
     JobType,
     SourceType,
+    MEETING_TYPE_BY_SOURCE,
     job_file_formats,
     job_paths,
     type_stubs,
     source_job_file_templates,
 )
+from src.storage_layout import read_dirs_for_bucket, write_dir_for_bucket
 from src.scrapers.alerting import AlertLevel, alert
 from src.util import get_datetime_string_from_string, get_date_string_from_string
 
@@ -43,37 +45,50 @@ class Processor:
         if not job_type:
             job_type = self.job_type
         file_name = self.construct_filename_for_date(date, job_type)
-        dir_path = job_paths[job_type]
-        return str(os.path.join(dir_path, file_name))
+        base_dir = job_paths[job_type]
+        bucket = MEETING_TYPE_BY_SOURCE[self.source_type].disk_bucket
+        # Writes go to the per-type bucket (created here). For reads during the
+        # flat->bucketed transition, fall back to an existing legacy flat file;
+        # when nothing exists yet (a stage about to write), default to the bucket.
+        new_path = os.path.join(write_dir_for_bucket(base_dir, bucket), file_name)
+        if os.path.exists(new_path):
+            return str(new_path)
+        legacy_path = os.path.join(base_dir, file_name)
+        if os.path.exists(legacy_path):
+            return str(legacy_path)
+        return str(new_path)
 
     def gather_dates(self, dir_path: str) -> list:
         """
-        Get all dates from file names in a specified directory, optionally
-         using a pattern to filter file names down to a particular set
+        Get all dates from file names in a stage directory, filtered to this
+        meeting type. Reads this type's per-type bucket plus the legacy flat
+        layout (transition fallback), unioning the dates found in both.
         """
         file_name_stub = type_stubs.get(self.source_type, "")
-        files = [
-            f
-            for f in listdir(dir_path)
-            if path.isfile(os.path.join(dir_path, f))
-            # Skip macOS AppleDouble sidecars ("._Name...") that live alongside
-            # real files on the external volume; they match the stub/date regex
-            # but aren't media and would be treated as phantom meetings.
-            if not f.startswith("._")
-            if file_name_stub in f
-        ]
+        bucket = MEETING_TYPE_BY_SOURCE[self.source_type].disk_bucket
         dates = []
-        for f in files:
-            datetime_match = re.search(DATETIME_PATTERN, f)
-            if datetime_match:
-                date_str = datetime_match.group(0)
-                dates.append(date_str)
-            else:
-                date_match = re.search(DATE_PATTERN, f)
-                if date_match:
-                    date_str = date_match.group(0)
-                    dates.append(date_str)
-        return sorted(dates)
+        for directory in read_dirs_for_bucket(dir_path, bucket):
+            if not path.isdir(directory):
+                continue
+            files = [
+                f
+                for f in listdir(directory)
+                if path.isfile(os.path.join(directory, f))
+                # Skip macOS AppleDouble sidecars ("._Name...") that live alongside
+                # real files on the external volume; they match the stub/date regex
+                # but aren't media and would be treated as phantom meetings.
+                if not f.startswith("._")
+                if file_name_stub in f
+            ]
+            for f in files:
+                datetime_match = re.search(DATETIME_PATTERN, f)
+                if datetime_match:
+                    dates.append(datetime_match.group(0))
+                else:
+                    date_match = re.search(DATE_PATTERN, f)
+                    if date_match:
+                        dates.append(date_match.group(0))
+        return sorted(set(dates))
 
     def gather_input_dates(self) -> List:
         raise NotImplementedError

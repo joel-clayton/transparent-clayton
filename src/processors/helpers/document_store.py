@@ -61,8 +61,24 @@ def _safe_label(label: str) -> str:
 
 
 def meeting_document_dir(meeting_type: MeetingType, meeting_key: str) -> str:
-    """The per-meeting folder, mirroring the Drive meeting folder name."""
-    return os.path.join(DOCUMENTS_DIR, f"{meeting_type.file_stub} {meeting_key}")
+    """The per-meeting folder to write into, under this type's bucket:
+    ``<DOCUMENTS_DIR>/<disk_bucket>/<file_stub> <meeting_key>/`` (TRA-135)."""
+    return os.path.join(
+        DOCUMENTS_DIR,
+        meeting_type.disk_bucket,
+        f"{meeting_type.file_stub} {meeting_key}",
+    )
+
+
+def _meeting_document_dirs(meeting_type: MeetingType, meeting_key: str) -> list[str]:
+    """Folders to read a meeting's documents from, most-current first: the bucketed
+    location, then the legacy flat one directly under DOCUMENTS_DIR (transition
+    fallback until the one-time migration runs)."""
+    folder = f"{meeting_type.file_stub} {meeting_key}"
+    return [
+        meeting_document_dir(meeting_type, meeting_key),
+        os.path.join(DOCUMENTS_DIR, folder),
+    ]
 
 
 def _extension_for(content_type: str | None, url: str) -> str:
@@ -87,14 +103,14 @@ def find_document(
     Matched by the sanitized label stem plus a single extension, since the
     extension is content-derived and not known ahead of the download.
     """
-    directory = meeting_document_dir(meeting_type, meeting_key)
-    if not os.path.isdir(directory):
-        return None
     stem = _safe_label(label)
-    for name in os.listdir(directory):
-        rest = name[len(stem) :]
-        if name.startswith(f"{stem}.") and "." not in rest[1:]:
-            return os.path.join(directory, name)
+    for directory in _meeting_document_dirs(meeting_type, meeting_key):
+        if not os.path.isdir(directory):
+            continue
+        for name in os.listdir(directory):
+            rest = name[len(stem) :]
+            if name.startswith(f"{stem}.") and "." not in rest[1:]:
+                return os.path.join(directory, name)
     return None
 
 
