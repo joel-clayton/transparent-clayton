@@ -24,8 +24,8 @@ def storage_is_mounted() -> bool:
     """Whether the storage root exists, used as the "is the volume ready" signal.
 
     ``os.path.isdir(STORAGE_ROOT)`` (not ``os.path.ismount``): STORAGE_ROOT is a
-    directory nested *below* the actual mount point (e.g. .../Volumes/Gautam is the
-    mount, STORAGE_ROOT is .../Clayton/CC Meetings under it), so ismount would be
+    directory nested *below* the actual mount point (e.g. /Volumes/Gautam is the
+    mount, STORAGE_ROOT is .../Gautam/Clayton under it), so ismount would be
     False even when mounted. isdir also matches the scraper's existing mount check.
     The residual risk — a stray dir left at that path on the boot disk passing the
     check — is accepted (and is pre-existing in the scraper check)."""
