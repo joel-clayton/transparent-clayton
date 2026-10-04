@@ -1,3 +1,4 @@
+import os
 import unittest
 from datetime import date, datetime
 from unittest.mock import patch
@@ -118,6 +119,54 @@ class TestGatherDates(TempDirTestCase):
     def test_skips_files_without_stub(self):
         self.touch("Other File 2026-05-08.mp4")
         self.assertEqual(self.processor.gather_dates(self.tmpdir), [])
+
+
+class TestPerTypeLayout(TempDirTestCase):
+    """TRA-135: writes go to <stage>/<bucket>/; reads see the bucket and, during
+    the transition, the legacy flat layout too."""
+
+    FNAME = "City Council Meeting 2026-05-08 - City of Clayton.mp4"
+    BUCKET = "City Council"  # == CITY_COUNCIL.disk_bucket
+
+    def setUp(self):
+        super().setUp()
+        self.processor = _StubProcessor(job_type=JobType.DOWNLOAD)
+        patcher = patch.dict(
+            "src.processors.process.job_paths",
+            {JobType.DOWNLOAD: self.tmpdir + os.sep},
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.bucket_dir = os.path.join(self.tmpdir, self.BUCKET)
+
+    def test_write_path_defaults_to_bucket_and_creates_it(self):
+        path = self.processor.construct_filepath_for_date("2026-05-08")
+        self.assertEqual(path, os.path.join(self.tmpdir, self.BUCKET, self.FNAME))
+        self.assertTrue(os.path.isdir(self.bucket_dir))
+
+    def test_prefers_existing_bucket_file_over_new_default(self):
+        os.makedirs(self.bucket_dir)
+        self.touch(self.FNAME, self.bucket_dir)
+        path = self.processor.construct_filepath_for_date("2026-05-08")
+        self.assertEqual(path, os.path.join(self.bucket_dir, self.FNAME))
+
+    def test_falls_back_to_legacy_flat_file_when_present(self):
+        self.touch(self.FNAME)  # legacy flat location
+        path = self.processor.construct_filepath_for_date("2026-05-08")
+        self.assertEqual(path, os.path.join(self.tmpdir, self.FNAME))
+
+    def test_gather_dates_reads_the_bucket(self):
+        os.makedirs(self.bucket_dir)
+        self.touch(self.FNAME, self.bucket_dir)
+        self.assertEqual(self.processor.gather_dates(self.tmpdir), ["2026-05-08"])
+
+    def test_gather_dates_unions_bucket_and_legacy_flat(self):
+        os.makedirs(self.bucket_dir)
+        self.touch(self.FNAME, self.bucket_dir)
+        self.touch("City Council Meeting 2026-06-01 - City of Clayton.mp4")  # flat
+        self.assertEqual(
+            self.processor.gather_dates(self.tmpdir), ["2026-05-08", "2026-06-01"]
+        )
 
 
 class TestGetMostRecentMissingDates(unittest.TestCase):

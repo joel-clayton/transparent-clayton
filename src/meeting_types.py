@@ -119,6 +119,15 @@ class MeetingType:
         its transcript year folders and archived-document folders."""
         return f"{self.display_name} Meetings"
 
+    # --- on-disk layout ---
+    @property
+    def disk_bucket(self) -> str:
+        """This type's per-type subdirectory name inside each on-disk stage dir
+        (Downloaded/<bucket>/, Compressed/<bucket>/, ...), mirroring the per-type
+        Drive folders and YouTube playlists. All display names are filesystem-safe
+        (spaces only), so the plain display name is used."""
+        return self.display_name
+
 
 # The City Council key is the pre-existing abbreviation, kept so all current
 # Redis keys and filenames are unchanged. New types follow the same shape.

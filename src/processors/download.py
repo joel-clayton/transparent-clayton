@@ -12,6 +12,7 @@ from src.constants import DETAIL_KEY, SCRAPED_KEY, DOWNLOADED_KEY
 from src.processors.process import Processor
 from src.scrapers.alerting import AlertLevel, alert
 from src.settings import DOWNLOADED_DIR
+from src.storage_layout import write_dir_for_bucket
 from src.types import JobType, SourceType, MEETING_TYPE_BY_SOURCE
 
 PLAYER_URL = (
@@ -106,7 +107,8 @@ class Downloader(Processor):
             opts = {
                 **YTDL_OPTS,
                 "outtmpl": os.path.join(
-                    DOWNLOADED_DIR, self.meeting_type.file_template_yt_dlp
+                    write_dir_for_bucket(DOWNLOADED_DIR, self.meeting_type.disk_bucket),
+                    self.meeting_type.file_template_yt_dlp,
                 ).format(date),
             }
             # Let yt-dlp errors propagate so a failed download is treated as a

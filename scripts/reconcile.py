@@ -55,7 +55,7 @@ import re
 import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Iterator
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _REPO_ROOT not in sys.path:
@@ -268,6 +268,22 @@ def _all_drive_ids() -> set[str]:
     return ids
 
 
+def _iter_stage_filenames(directory: str) -> Iterator[str]:
+    """Yield basenames of files in a stage dir across both on-disk layouts: files
+    directly in the dir (legacy flat) and files one level down in each per-type
+    bucket subdirectory (TRA-135). Buckets are exactly one level deep."""
+    if not os.path.isdir(directory):
+        return
+    for entry in os.listdir(directory):
+        full = os.path.join(directory, entry)
+        if os.path.isfile(full):
+            yield entry
+        elif os.path.isdir(full):  # a per-type bucket
+            for sub in os.listdir(full):
+                if os.path.isfile(os.path.join(full, sub)):
+                    yield sub
+
+
 def _disk_index() -> tuple[dict[str, dict[str, set[str]]], dict[str, int]]:
     """Scan the stage dirs once. Returns (by_stub, unrecognized_counts).
 
@@ -282,12 +298,8 @@ def _disk_index() -> tuple[dict[str, dict[str, set[str]]], dict[str, int]]:
     # Track compressed parts separately: stub -> key -> {parts}
     unrecognized: dict[str, int] = defaultdict(int)
     for stage, directory in STAGE_DIRS.items():
-        if not os.path.isdir(directory):
-            continue
-        for name in os.listdir(directory):
-            if name.startswith("._") or not os.path.isfile(
-                os.path.join(directory, name)
-            ):
+        for name in _iter_stage_filenames(directory):
+            if name.startswith("._"):
                 continue
             stub = next((s for s in stubs if s in name), None)
             key = _meeting_key_from_filename(name)
@@ -302,9 +314,7 @@ def _compressed_parts_by_stub() -> dict[str, dict[str, set[int]]]:
     """stub -> meeting_key -> {compressed part numbers on disk}."""
     stubs = [mt.file_stub for mt in MEETING_TYPE_BY_SOURCE.values()]
     out: dict[str, dict[str, set[int]]] = {s: defaultdict(set) for s in stubs}
-    if not os.path.isdir(COMPRESSED_DIR):
-        return out
-    for name in os.listdir(COMPRESSED_DIR):
+    for name in _iter_stage_filenames(COMPRESSED_DIR):
         if name.startswith("._") or not name.endswith(".mp4"):
             continue
         stub = next((s for s in stubs if s in name), None)
@@ -317,17 +327,27 @@ def _compressed_parts_by_stub() -> dict[str, dict[str, set[int]]]:
 def _documents_on_disk() -> dict[str, set[str]]:
     """stub -> {meeting keys that have a non-empty document folder on disk}.
 
-    Document folders are named ``<file_stub> <meeting_key>`` under DOCUMENTS_DIR
-    (see helpers.document_store.meeting_document_dir).
+    Document folders are named ``<file_stub> <meeting_key>``, either under a
+    per-type bucket (``<DOCUMENTS_DIR>/<bucket>/<file_stub> <meeting_key>/``,
+    TRA-135) or, pre-migration, directly under DOCUMENTS_DIR.
     """
     stubs = [mt.file_stub for mt in MEETING_TYPE_BY_SOURCE.values()]
     out: dict[str, set[str]] = {s: set() for s in stubs}
     if not os.path.isdir(DOCUMENTS_DIR):
         return out
-    for name in os.listdir(DOCUMENTS_DIR):
-        folder = os.path.join(DOCUMENTS_DIR, name)
-        if name.startswith("._") or not os.path.isdir(folder):
+    # Candidate meeting folders: top-level (legacy flat) plus one level down inside
+    # each per-type bucket. A bucket dir itself carries no date key and is skipped.
+    candidates: list[tuple[str, str]] = []
+    for entry in os.listdir(DOCUMENTS_DIR):
+        path = os.path.join(DOCUMENTS_DIR, entry)
+        if entry.startswith("._") or not os.path.isdir(path):
             continue
+        candidates.append((entry, path))
+        for sub in os.listdir(path):
+            sub_path = os.path.join(path, sub)
+            if not sub.startswith("._") and os.path.isdir(sub_path):
+                candidates.append((sub, sub_path))
+    for name, folder in candidates:
         stub = next((s for s in stubs if name.startswith(f"{s} ")), None)
         key = _meeting_key_from_filename(name)
         if stub and key and any(not f.startswith("._") for f in os.listdir(folder)):

@@ -23,6 +23,7 @@ from src.settings import (
     TRANSCRIBED_DIR,
     TRANSCRIPT_SHARE_LIST,
 )
+from src.storage_layout import resolve_existing_file
 from src.types import JobType, SourceType, MEETING_TYPE_BY_SOURCE
 from src.util import get_year_string_from_string, send_to_discord_bots
 
@@ -122,7 +123,11 @@ class TranscriptUploader(Processor):
             "parents": [parent_id],
             "mimeType": "application/vnd.google-apps.document",
         }
-        source_filepath = str(os.path.join(TRANSCRIBED_DIR, source_filename))
+        source_filepath = str(
+            resolve_existing_file(
+                TRANSCRIBED_DIR, self.meeting_type.disk_bucket, source_filename
+            )
+        )
         media = MediaFileUpload(
             source_filepath,
             mimetype="text/plain",
