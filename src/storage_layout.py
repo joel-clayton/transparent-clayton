@@ -17,15 +17,26 @@ once the one-time migration (``scripts/migrate_disk_layout.py``) has run.
 import os
 from typing import Iterator
 
+from src.settings import STORAGE_ROOT
+
+
+def storage_is_mounted() -> bool:
+    """Whether the storage volume is mounted (its root exists). Stage dirs live on
+    an external volume; when it is unmounted the pipeline must fail loudly rather
+    than write to the boot disk."""
+    return os.path.isdir(STORAGE_ROOT)
+
 
 def write_dir_for_bucket(base_dir: str, bucket: str) -> str:
     """The per-type subdirectory ``<base_dir>/<bucket>/`` to write into (always the
-    new layout — the pipeline never writes flat). Created only when ``base_dir``
-    already exists: the stage dirs live on an external volume, so this must not
-    fabricate the stage tree on the boot disk when the volume is unmounted — a
-    write then fails loudly against the missing dir, as it did before bucketing."""
+    new layout — the pipeline never writes flat), bootstrapping the stage tree.
+
+    Created only when the storage volume is mounted (:func:`storage_is_mounted`):
+    a mounted-but-empty volume self-bootstraps its stage dirs, but an unmounted one
+    is left alone so the write fails loudly against the missing dir instead of
+    fabricating the tree on the boot disk."""
     path = os.path.join(base_dir, bucket) + os.sep
-    if os.path.isdir(base_dir):
+    if storage_is_mounted():
         os.makedirs(path, exist_ok=True)
     return path
 

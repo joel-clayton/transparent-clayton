@@ -137,6 +137,10 @@ class TestPerTypeLayout(TempDirTestCase):
         )
         patcher.start()
         self.addCleanup(patcher.stop)
+        # Treat the temp tree as the mounted storage volume so writes bootstrap.
+        root_patcher = patch("src.storage_layout.STORAGE_ROOT", self.tmpdir)
+        root_patcher.start()
+        self.addCleanup(root_patcher.stop)
         self.bucket_dir = os.path.join(self.tmpdir, self.BUCKET)
 
     def test_write_path_defaults_to_bucket_and_creates_it(self):

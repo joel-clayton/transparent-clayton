@@ -274,16 +274,18 @@ def _all_drive_ids() -> set[str]:
 def _iter_stage_filenames(directory: str) -> Iterator[str]:
     """Yield basenames of files in a stage dir across both on-disk layouts: files
     directly in the dir (legacy flat) and files one level down in each per-type
-    bucket subdirectory (TRA-135). Buckets are exactly one level deep."""
+    bucket subdirectory (TRA-135). Buckets are exactly one level deep. macOS
+    AppleDouble sidecars ("._Name") are skipped here so no caller has to."""
     if not os.path.isdir(directory):
         return
     for entry in os.listdir(directory):
         full = os.path.join(directory, entry)
         if os.path.isfile(full):
-            yield entry
+            if not entry.startswith("._"):
+                yield entry
         elif os.path.isdir(full) and entry in _BUCKETS:  # a per-type bucket
             for sub in os.listdir(full):
-                if os.path.isfile(os.path.join(full, sub)):
+                if not sub.startswith("._") and os.path.isfile(os.path.join(full, sub)):
                     yield sub
 
 
@@ -302,8 +304,6 @@ def _disk_index() -> tuple[dict[str, dict[str, set[str]]], dict[str, int]]:
     unrecognized: dict[str, int] = defaultdict(int)
     for stage, directory in STAGE_DIRS.items():
         for name in _iter_stage_filenames(directory):
-            if name.startswith("._"):
-                continue
             stub = next((s for s in stubs if s in name), None)
             key = _meeting_key_from_filename(name)
             if not stub or not key:
@@ -318,7 +318,7 @@ def _compressed_parts_by_stub() -> dict[str, dict[str, set[int]]]:
     stubs = [mt.file_stub for mt in MEETING_TYPE_BY_SOURCE.values()]
     out: dict[str, dict[str, set[int]]] = {s: defaultdict(set) for s in stubs}
     for name in _iter_stage_filenames(COMPRESSED_DIR):
-        if name.startswith("._") or not name.endswith(".mp4"):
+        if not name.endswith(".mp4"):
             continue
         stub = next((s for s in stubs if s in name), None)
         key = _meeting_key_from_filename(name)

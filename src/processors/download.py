@@ -104,11 +104,20 @@ class Downloader(Processor):
             self.logger.info("Trying youtube-dl method")
             from yt_dlp import YoutubeDL
 
+            download_dir = write_dir_for_bucket(
+                DOWNLOADED_DIR, self.meeting_type.disk_bucket
+            )
+            # Unlike ffmpeg (which errors on a missing dir), yt-dlp creates its
+            # output tree itself, so guard the unmounted-volume case explicitly —
+            # otherwise the download would land on the boot disk.
+            if not os.path.isdir(download_dir):
+                raise RuntimeError(
+                    f"Storage volume not mounted; refusing to download to {download_dir}"
+                )
             opts = {
                 **YTDL_OPTS,
                 "outtmpl": os.path.join(
-                    write_dir_for_bucket(DOWNLOADED_DIR, self.meeting_type.disk_bucket),
-                    self.meeting_type.file_template_yt_dlp,
+                    download_dir, self.meeting_type.file_template_yt_dlp
                 ).format(date),
             }
             # Let yt-dlp errors propagate so a failed download is treated as a

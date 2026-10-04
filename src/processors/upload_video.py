@@ -284,14 +284,17 @@ class VideoUploader(Processor):
         """Absolute paths of this type's compressed files to upload. Reads the
         per-type bucket plus the legacy flat layout (transition fallback)."""
         file_name_stub = type_stubs.get(self.source_type, "")
-        paths = []
+        # Keyed by filename so a compressed file present in BOTH the per-type bucket
+        # and the legacy flat dir mid-transition counts once (bucket wins — it is
+        # yielded first); otherwise a duplicate would consume an upload slot.
+        by_name: dict[str, str] = {}
         for full in iter_stage_files(dir_path, self.meeting_type.disk_bucket):
             name = os.path.basename(full)
             if file_name_stub not in name:
                 continue
             if re.search(self.meeting_type.compressed_title_prefix, name):
-                paths.append(full)
-        return sorted(paths)
+                by_name.setdefault(name, full)
+        return sorted(by_name.values())
 
     def gather_input_dates(self) -> List:
         return sorted(self.gather_dates(COMPRESSED_DIR), reverse=True)[:RESULT_COUNT]
