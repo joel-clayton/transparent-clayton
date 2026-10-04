@@ -130,8 +130,12 @@ class TestParseMeetingsFromUrlRouting(unittest.TestCase):
 class TestGetLatestDownloadedDate(unittest.TestCase):
     def _latest(self, meeting_type, filenames):
         with (
+            # Mount check in cc_meetings, plus iter_stage_files' dir/file checks in
+            # storage_layout: treat the fakes as a real dir of real files.
             mock.patch.object(cc_meetings.os.path, "isdir", return_value=True),
-            mock.patch.object(cc_meetings.os, "listdir", return_value=filenames),
+            mock.patch("src.storage_layout.os.path.isdir", return_value=True),
+            mock.patch("src.storage_layout.os.path.isfile", return_value=True),
+            mock.patch("src.storage_layout.os.listdir", return_value=filenames),
         ):
             return cc_meetings.get_latest_downloaded_date(meeting_type)
 

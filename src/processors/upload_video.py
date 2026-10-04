@@ -4,7 +4,6 @@ import random
 import re
 import time
 from datetime import datetime
-from os import listdir, path
 from typing import Any, List, TypedDict
 from urllib.request import Request
 
@@ -24,7 +23,7 @@ from src.constants import (
 )
 from src.processors.process import Processor
 from src.settings import COMPRESSED_DIR, YOUTUBE_CLIENT_SECRET_FILE
-from src.storage_layout import read_dirs_for_bucket
+from src.storage_layout import iter_stage_files
 from src.types import JobType, SourceType, type_stubs, Meeting, MEETING_TYPE_BY_SOURCE
 from src.processors.constants import (
     PUBLIC_VIDEO_STATUS,
@@ -286,18 +285,12 @@ class VideoUploader(Processor):
         per-type bucket plus the legacy flat layout (transition fallback)."""
         file_name_stub = type_stubs.get(self.source_type, "")
         paths = []
-        for directory in read_dirs_for_bucket(dir_path, self.meeting_type.disk_bucket):
-            if not path.isdir(directory):
+        for full in iter_stage_files(dir_path, self.meeting_type.disk_bucket):
+            name = os.path.basename(full)
+            if file_name_stub not in name:
                 continue
-            for f in listdir(directory):
-                if not path.isfile(os.path.join(directory, f)):
-                    continue
-                if f.startswith("._"):
-                    continue
-                if file_name_stub not in f:
-                    continue
-                if re.search(self.meeting_type.compressed_title_prefix, f):
-                    paths.append(os.path.join(directory, f))
+            if re.search(self.meeting_type.compressed_title_prefix, name):
+                paths.append(full)
         return sorted(paths)
 
     def gather_input_dates(self) -> List:

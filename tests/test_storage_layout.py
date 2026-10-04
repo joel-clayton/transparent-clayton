@@ -3,6 +3,7 @@ import tempfile
 import unittest
 
 from src.storage_layout import (
+    iter_stage_files,
     read_dirs_for_bucket,
     resolve_existing_file,
     write_dir_for_bucket,
@@ -19,6 +20,28 @@ class TestStorageLayout(unittest.TestCase):
         path = write_dir_for_bucket(self.base, "City Council")
         self.assertEqual(path, os.path.join(self.base, "City Council") + os.sep)
         self.assertTrue(os.path.isdir(path))
+
+    def test_write_dir_does_not_create_when_base_missing(self):
+        # Unmounted-volume guard: never fabricate the stage tree on the boot disk.
+        missing = os.path.join(self.base, "not-mounted")
+        path = write_dir_for_bucket(missing, "City Council")
+        self.assertEqual(path, os.path.join(missing, "City Council") + os.sep)
+        self.assertFalse(os.path.exists(path))
+
+    def test_iter_stage_files_spans_bucket_and_flat_and_skips_sidecars(self):
+        bucket_dir = os.path.join(self.base, "City Council")
+        os.makedirs(bucket_dir)
+        for p in (
+            os.path.join(bucket_dir, "bucketed.mp4"),
+            os.path.join(self.base, "legacy_flat.mp4"),
+            os.path.join(self.base, "._sidecar.mp4"),
+        ):
+            with open(p, "w"):
+                pass
+        found = {
+            os.path.basename(p) for p in iter_stage_files(self.base, "City Council")
+        }
+        self.assertEqual(found, {"bucketed.mp4", "legacy_flat.mp4"})
 
     def test_read_dirs_are_bucket_then_legacy_flat(self):
         self.assertEqual(

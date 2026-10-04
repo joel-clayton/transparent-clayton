@@ -15,13 +15,18 @@ once the one-time migration (``scripts/migrate_disk_layout.py``) has run.
 """
 
 import os
+from typing import Iterator
 
 
 def write_dir_for_bucket(base_dir: str, bucket: str) -> str:
-    """The per-type subdirectory ``<base_dir>/<bucket>/`` to write into, created
-    if missing. This is always the new layout — the pipeline never writes flat."""
+    """The per-type subdirectory ``<base_dir>/<bucket>/`` to write into (always the
+    new layout — the pipeline never writes flat). Created only when ``base_dir``
+    already exists: the stage dirs live on an external volume, so this must not
+    fabricate the stage tree on the boot disk when the volume is unmounted — a
+    write then fails loudly against the missing dir, as it did before bucketing."""
     path = os.path.join(base_dir, bucket) + os.sep
-    os.makedirs(path, exist_ok=True)
+    if os.path.isdir(base_dir):
+        os.makedirs(path, exist_ok=True)
     return path
 
 
@@ -45,3 +50,20 @@ def read_dirs_for_bucket(base_dir: str, bucket: str) -> list[str]:
     entries are kept — callers skip directories that aren't present. Neither dir
     is created here; reads never have the side effect of making stage folders."""
     return [os.path.join(base_dir, bucket) + os.sep, base_dir]
+
+
+def iter_stage_files(base_dir: str, bucket: str) -> Iterator[str]:
+    """Yield absolute paths of a type's files in a stage, across the per-type
+    bucket and the legacy flat layout (transition). Skips macOS AppleDouble
+    sidecars and any entry that isn't a plain file (e.g. other types' buckets when
+    scanning the flat dir). The single place the transition read-scan lives; the
+    legacy flat dir drops out of ``read_dirs_for_bucket`` in the follow-up."""
+    for directory in read_dirs_for_bucket(base_dir, bucket):
+        if not os.path.isdir(directory):
+            continue
+        for name in os.listdir(directory):
+            if name.startswith("._"):
+                continue
+            full = os.path.join(directory, name)
+            if os.path.isfile(full):
+                yield full

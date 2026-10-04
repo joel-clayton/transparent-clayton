@@ -56,7 +56,7 @@ from src.scrapers.civic_clerk_api import (
 )
 from src.scrapers.errors import SiteStructureError, TransientScrapeError
 from src.meeting_types import CITY_COUNCIL, MeetingType
-from src.storage_layout import read_dirs_for_bucket
+from src.storage_layout import iter_stage_files
 from src.scrapers.models import MeetingRecord, PipelineClass
 from src.scrapers.retry import retry_transient
 from src.scrapers.snapshot import SnapshotStore, fetch_stamp
@@ -185,12 +185,10 @@ def get_latest_downloaded_date(meeting_type: MeetingType = CITY_COUNCIL) -> str:
     # Filter by this type's filename stub so each type has its own watermark.
     # Scan this type's per-type bucket plus the legacy flat dir (TRA-135
     # transition); the stub filter keeps other types' files out either way.
-    filenames: list[str] = []
-    for directory in read_dirs_for_bucket(
-        str(DOWNLOADED_PATH), meeting_type.disk_bucket
-    ):
-        if os.path.isdir(directory):
-            filenames.extend(os.listdir(directory))
+    filenames = [
+        os.path.basename(p)
+        for p in iter_stage_files(str(DOWNLOADED_PATH), meeting_type.disk_bucket)
+    ]
     time_sorted_filenames = sorted(
         [
             filename

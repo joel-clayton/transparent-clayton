@@ -2,7 +2,6 @@ import logging
 import os
 import re
 from datetime import date, datetime
-from os import listdir, path
 from typing import List
 
 from celery_app import r
@@ -17,7 +16,11 @@ from src.types import (
     type_stubs,
     source_job_file_templates,
 )
-from src.storage_layout import read_dirs_for_bucket, write_dir_for_bucket
+from src.storage_layout import (
+    iter_stage_files,
+    resolve_existing_file,
+    write_dir_for_bucket,
+)
 from src.scrapers.alerting import AlertLevel, alert
 from src.util import get_datetime_string_from_string, get_date_string_from_string
 
@@ -47,47 +50,36 @@ class Processor:
         file_name = self.construct_filename_for_date(date, job_type)
         base_dir = job_paths[job_type]
         bucket = MEETING_TYPE_BY_SOURCE[self.source_type].disk_bucket
-        # Writes go to the per-type bucket (created here). For reads during the
-        # flat->bucketed transition, fall back to an existing legacy flat file;
-        # when nothing exists yet (a stage about to write), default to the bucket.
-        new_path = os.path.join(write_dir_for_bucket(base_dir, bucket), file_name)
-        if os.path.exists(new_path):
-            return str(new_path)
-        legacy_path = os.path.join(base_dir, file_name)
-        if os.path.exists(legacy_path):
-            return str(legacy_path)
-        return str(new_path)
+        # Resolve against existing files (per-type bucket, then legacy flat during
+        # the transition); when neither exists this is an imminent write, so ensure
+        # the bucket dir. write_dir_for_bucket no-ops on an unmounted volume, so the
+        # write still fails loudly rather than landing on the boot disk.
+        resolved = resolve_existing_file(base_dir, bucket, file_name)
+        if not os.path.exists(resolved):
+            write_dir_for_bucket(base_dir, bucket)
+        return str(resolved)
 
     def gather_dates(self, dir_path: str) -> list:
         """
         Get all dates from file names in a stage directory, filtered to this
         meeting type. Reads this type's per-type bucket plus the legacy flat
-        layout (transition fallback), unioning the dates found in both.
+        layout (transition). Deduped with a set because the same date can appear in
+        both layouts mid-transition; callers treat the result as a date set.
         """
         file_name_stub = type_stubs.get(self.source_type, "")
         bucket = MEETING_TYPE_BY_SOURCE[self.source_type].disk_bucket
         dates = []
-        for directory in read_dirs_for_bucket(dir_path, bucket):
-            if not path.isdir(directory):
+        for full in iter_stage_files(dir_path, bucket):
+            name = os.path.basename(full)
+            if file_name_stub not in name:
                 continue
-            files = [
-                f
-                for f in listdir(directory)
-                if path.isfile(os.path.join(directory, f))
-                # Skip macOS AppleDouble sidecars ("._Name...") that live alongside
-                # real files on the external volume; they match the stub/date regex
-                # but aren't media and would be treated as phantom meetings.
-                if not f.startswith("._")
-                if file_name_stub in f
-            ]
-            for f in files:
-                datetime_match = re.search(DATETIME_PATTERN, f)
-                if datetime_match:
-                    dates.append(datetime_match.group(0))
-                else:
-                    date_match = re.search(DATE_PATTERN, f)
-                    if date_match:
-                        dates.append(date_match.group(0))
+            datetime_match = re.search(DATETIME_PATTERN, name)
+            if datetime_match:
+                dates.append(datetime_match.group(0))
+            else:
+                date_match = re.search(DATE_PATTERN, name)
+                if date_match:
+                    dates.append(date_match.group(0))
         return sorted(set(dates))
 
     def gather_input_dates(self) -> List:

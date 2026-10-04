@@ -114,6 +114,9 @@ STAGE_DIRS: dict[str, str] = {
     "audio": EXTRACTED_AUDIO_DIR,
     "transcript": TRANSCRIBED_DIR,
 }
+# Per-type bucket names (TRA-135); only these subdirs are descended into when
+# scanning a stage dir, so a stray temp/partial dir is never counted as assets.
+_BUCKETS: set[str] = {mt.disk_bucket for mt in MEETING_TYPE_BY_SOURCE.values()}
 
 
 def _meeting_key_from_filename(name: str) -> str | None:
@@ -278,7 +281,7 @@ def _iter_stage_filenames(directory: str) -> Iterator[str]:
         full = os.path.join(directory, entry)
         if os.path.isfile(full):
             yield entry
-        elif os.path.isdir(full):  # a per-type bucket
+        elif os.path.isdir(full) and entry in _BUCKETS:  # a per-type bucket
             for sub in os.listdir(full):
                 if os.path.isfile(os.path.join(full, sub)):
                     yield sub
@@ -343,10 +346,11 @@ def _documents_on_disk() -> dict[str, set[str]]:
         if entry.startswith("._") or not os.path.isdir(path):
             continue
         candidates.append((entry, path))
-        for sub in os.listdir(path):
-            sub_path = os.path.join(path, sub)
-            if not sub.startswith("._") and os.path.isdir(sub_path):
-                candidates.append((sub, sub_path))
+        if entry in _BUCKETS:  # descend only into per-type buckets
+            for sub in os.listdir(path):
+                sub_path = os.path.join(path, sub)
+                if not sub.startswith("._") and os.path.isdir(sub_path):
+                    candidates.append((sub, sub_path))
     for name, folder in candidates:
         stub = next((s for s in stubs if name.startswith(f"{s} ")), None)
         key = _meeting_key_from_filename(name)
