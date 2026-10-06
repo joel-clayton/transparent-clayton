@@ -4,7 +4,7 @@ import random
 import re
 import time
 from datetime import datetime
-from typing import Any, List, TypedDict
+from typing import Any, List
 from urllib.request import Request
 
 import httplib2
@@ -76,9 +76,10 @@ RESULT_COUNT = 50  # page size for the uploads list (see get_recent_video_titles
 MAX_UPLOADS_PAGES = 200  # safety cap on pagination (~10k videos at 50/page)
 
 
-class PlaylistInfo(TypedDict):
-    playlist_id: str
-    playlist_year: str
+def _normalize_playlist_title(title: str) -> str:
+    """Collapse whitespace and casing so a playlist whose title drifted from the
+    template (trailing space, casing) still matches rather than spawning a duplicate."""
+    return " ".join(title.split()).casefold()
 
 
 class VideoUploader(Processor):
@@ -95,7 +96,8 @@ class VideoUploader(Processor):
         self.meeting_type = MEETING_TYPE_BY_SOURCE[source_type]
         self.redis_key = self.meeting_type.redis_key(VIDEO_UPLOADED_KEY)
         self.service = self.authenticate()
-        self.playlists: List[PlaylistInfo | None] = []
+        # year -> playlist id, for this meeting type only; populated by get_playlists.
+        self.playlists_by_year: dict[str, str] = {}
         self.videos: dict = {}
         super().__init__()
 
@@ -126,7 +128,12 @@ class VideoUploader(Processor):
                 # Previously EVERY year-titled playlist (e.g. all the City Council
                 # ones) was mapped to this type's video_playlist key, so a
                 # non-City-Council upload resolved to a City Council playlist.
-                if title != self.meeting_type.playlist_name_template.format(year_str):
+                # Matched tolerantly (whitespace/case) so an externally-renamed
+                # playlist is reused rather than duplicated.
+                expected = self.meeting_type.playlist_name_template.format(year_str)
+                if _normalize_playlist_title(title) != _normalize_playlist_title(
+                    expected
+                ):
                     continue
                 self._cache_playlist(item["id"], year_str)
             request = self.service.playlists().list_next(request, response)
@@ -136,8 +143,7 @@ class VideoUploader(Processor):
         # Kept only in-memory for this run. get_playlists re-lists every run, so
         # the old video_playlist Redis pointer never actually saved an API call;
         # it's dropped here (nothing reads it) rather than left as dead state.
-        playlist_info: PlaylistInfo = {playlist_id: year_str}  # type: ignore
-        self.playlists.append(playlist_info)
+        self.playlists_by_year[year_str] = playlist_id
 
     def create_playlist_for_year(self, year_str: str) -> str:
         request = self.service.playlists().insert(
@@ -155,17 +161,14 @@ class VideoUploader(Processor):
         return playlist_id
 
     def get_playlist_for_year(self, year_str: str) -> str:
-        if not self.playlists:
+        if not self.playlists_by_year:
             self.get_playlists()
         # Resolve only from playlists get_playlists confirmed belong to this type
         # this run, so a stale/mismapped video_playlist pointer (from the old
         # cross-type bug) is ignored rather than used. If none matches, create it.
-        for info in self.playlists:
-            if not info:
-                continue
-            for cached_id, cached_year in info.items():
-                if cached_year == year_str:
-                    return cached_id
+        existing = self.playlists_by_year.get(year_str)
+        if existing:
+            return existing
         return self.create_playlist_for_year(year_str)
 
     def add_video_to_playlist(self, playlist_id: str, video_id: str) -> str:
@@ -446,7 +449,7 @@ class VideoUploader(Processor):
     def process_for_date(self, date: str) -> None:
         if not self.service:
             self.authenticate()
-        if not self.playlists:
+        if not self.playlists_by_year:
             self.get_playlists()
         if get_file_size_in_mb(date) < MIN_COMPRESSED_VIDEO_MB:
             self.logger.info(f"Skipping {date}, video file size is below minimum")

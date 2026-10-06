@@ -44,8 +44,6 @@ TRANSCRIPT_LINK_CC_MTG_KEY_TEMPLATE = "transcript_link.cc_mtg.{meeting_key}"
 # Per-meeting Redis hash of {document label: durable Drive link} once archived.
 DOC_LINK_CC_MTG_KEY_TEMPLATE = "doc_link.cc_mtg.{meeting_key}"
 
-VIDEO_PLAYLIST_CC_MTG_KEY_TEMPLATE = "video_playlist.cc_mtg.{}"
-
 VIDEO_PLAYLIST_NAME_TEMPLATE = "{} City Council Meetings"
 VIDEO_LINK_TEMPLATE = "https://www.youtube.com/watch?v={}"
 PART_NUMBER_TITLE_PATTERN = r"part [0-9]*"

@@ -31,7 +31,6 @@ from src.constants import (
     VIDEO_LINK_CC_MTG_KEY_TEMPLATE,
     TRANSCRIPT_LINK_CC_MTG_KEY_TEMPLATE,
     DOC_LINK_CC_MTG_KEY_TEMPLATE,
-    VIDEO_PLAYLIST_CC_MTG_KEY_TEMPLATE,
     VIDEO_PLAYLIST_NAME_TEMPLATE,
     CC_MTG_FILE_STUB,
 )
@@ -81,7 +80,6 @@ class TestCityCouncilReproducesConstants(unittest.TestCase):
             (cc.video_link_key_template, VIDEO_LINK_CC_MTG_KEY_TEMPLATE),
             (cc.transcript_link_key_template, TRANSCRIPT_LINK_CC_MTG_KEY_TEMPLATE),
             (cc.doc_link_key_template, DOC_LINK_CC_MTG_KEY_TEMPLATE),
-            (cc.video_playlist_key_template, VIDEO_PLAYLIST_CC_MTG_KEY_TEMPLATE),
             (cc.playlist_name_template, VIDEO_PLAYLIST_NAME_TEMPLATE),
             (cc.file_stub, CC_MTG_FILE_STUB),
             (cc.file_template, CC_MTG_FILE_TEMPLATE),
