@@ -262,6 +262,16 @@ class TestScope(unittest.TestCase):
         summary = Scope.of(youtube=True, google_docs=False, wiki=True).summary()
         self.assertEqual(summary, "in scope: youtube, wiki; disabled: google_docs")
 
+    def test_known_but_disabled_destination_returns_false(self):
+        self.assertFalse(Scope.of(youtube=False, google_docs=True, wiki=True).youtube)
+
+    def test_accessor_for_unregistered_destination_raises(self):
+        # A registry rename that leaves a named accessor dangling must fail loudly,
+        # not silently disable that destination's findings.
+        scope = Scope.of(video=True, google_docs=True, wiki=True)  # 'youtube' renamed
+        with self.assertRaises(KeyError):
+            _ = scope.youtube
+
 
 if __name__ == "__main__":
     unittest.main()

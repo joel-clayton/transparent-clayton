@@ -463,7 +463,19 @@ class Scope:
         return cls(dict(enabled))
 
     def _on(self, destination: str) -> bool:
-        return self.enabled.get(destination, False)
+        # A known destination (in the registry-derived set) returns its enablement;
+        # an UNKNOWN name raises rather than degrading to "disabled". This is what
+        # makes the registry the real source of truth for behavior, not just the
+        # summary: if a publisher's `destination` is renamed without updating the
+        # finding logic that asks for it by name, reconcile fails loudly here
+        # instead of silently skipping that destination's findings/actions.
+        if destination not in self.enabled:
+            raise KeyError(
+                f"Unknown reconcile destination {destination!r}; registry "
+                f"destinations are {sorted(self.enabled)}. The finding logic and the "
+                "publisher registry have drifted."
+            )
+        return self.enabled[destination]
 
     @property
     def youtube(self) -> bool:
