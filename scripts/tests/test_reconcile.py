@@ -21,7 +21,7 @@ from scripts.reconcile import (
 )
 from src.meeting_types import CITY_COUNCIL
 
-ALL = Scope(youtube=True, google_docs=True, wiki=True)
+ALL = Scope.of(youtube=True, google_docs=True, wiki=True)
 
 
 def _fm(rows, scope=ALL, channel_ids=frozenset(), drive_ids=frozenset()):
@@ -224,7 +224,9 @@ class TestScoping(unittest.TestCase):
             self.KEY: MeetingRow(key=self.KEY, has_detail=True, link_parts={2: "DEAD"}),
             "orphan": MeetingRow(key="2026-07-01 07_00 PM", link_parts={1: "DEAD"}),
         }
-        lines, orphans, _ = _fm(rows, scope=Scope(False, True, True))
+        lines, orphans, _ = _fm(
+            rows, scope=Scope.of(youtube=False, google_docs=True, wiki=True)
+        )
         self.assertEqual((lines, orphans), ([], 0))
 
     def test_google_docs_disabled_hides_drive_findings(self):
@@ -237,8 +239,28 @@ class TestScoping(unittest.TestCase):
                 transcript_link="https://docs.google.com/document/d/DEAD/edit",
             )
         }
-        self.assertTrue(_fm(rows, scope=Scope(True, True, True))[0])  # findings present
-        self.assertEqual(_fm(rows, scope=Scope(True, False, True))[0], [])  # hidden
+        self.assertTrue(
+            _fm(rows, scope=Scope.of(youtube=True, google_docs=True, wiki=True))[0]
+        )  # findings present
+        self.assertEqual(
+            _fm(rows, scope=Scope.of(youtube=True, google_docs=False, wiki=True))[0], []
+        )  # hidden
+
+
+class TestScope(unittest.TestCase):
+    def test_from_config_covers_every_registry_destination(self):
+        # The scoped destination set is derived from the publisher registry, so a
+        # new/renamed destination is never silently left un-scoped.
+        from src.publishers import PUBLISHERS
+
+        scope = Scope.from_config()
+        self.assertEqual(
+            set(scope.enabled), {p.destination for p in PUBLISHERS.values()}
+        )
+
+    def test_summary_partitions_in_a_single_pass(self):
+        summary = Scope.of(youtube=True, google_docs=False, wiki=True).summary()
+        self.assertEqual(summary, "in scope: youtube, wiki; disabled: google_docs")
 
 
 if __name__ == "__main__":
