@@ -272,6 +272,27 @@ class TestScope(unittest.TestCase):
         with self.assertRaises(KeyError):
             _ = scope.youtube
 
+    def test_unhandled_flags_new_destination_but_not_handled_ones(self):
+        # A new enabled destination reconcile has no checks for is surfaced; the
+        # three handled destinations never are, enabled or not.
+        self.assertEqual(
+            Scope.of(
+                youtube=True, google_docs=True, wiki=True, mastodon=True
+            ).unhandled(),
+            ["mastodon"],
+        )
+        self.assertEqual(
+            Scope.of(youtube=True, google_docs=False, wiki=True).unhandled(), []
+        )
+
+    def test_summary_keeps_canonical_order_from_config_path(self):
+        # from_config sorts keys alphabetically, but summary restores the
+        # operator-familiar youtube/google_docs/wiki order.
+        summary = Scope({"google_docs": True, "wiki": True, "youtube": True}).summary()
+        self.assertEqual(
+            summary, "in scope: youtube, google_docs, wiki; disabled: none"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

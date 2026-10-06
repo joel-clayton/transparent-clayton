@@ -437,24 +437,43 @@ def build_type_report(
     return TypeReport(meeting_type=meeting_type, rows=rows)
 
 
+# Destinations reconcile actually has checks/findings for. The publisher registry
+# is the source of truth for which destinations EXIST; this is the subset reconcile
+# knows how to audit (and the order its summary lists them in). A registry
+# destination outside this set needs finding logic before it can be checked, so it
+# is surfaced loudly (summary + warning) rather than silently un-audited.
+_HANDLED_DESTINATIONS = ("youtube", "google_docs", "wiki")
+
+
 class Scope:
     """Which publishing destinations reconcile checks and acts on.
 
-    The set of destinations is derived from the publisher registry (``PUBLISHERS``),
-    the one authoritative source of destination names, so a new or renamed
-    destination is scoped automatically instead of being silently dropped. A
-    destination disabled in the pipeline config (DISABLED_PUBLISHERS) is out of
-    scope: its findings are not reported and its reconcile actions are not taken,
-    so a disk-only or wiki-less install shows no spurious mismatches.
+    The set of destinations comes from the publisher registry (``PUBLISHERS``), the
+    authoritative source of destination names, so the scope summary always reflects
+    every configured destination. Reconcile's checks cover ``_HANDLED_DESTINATIONS``:
+    renaming a handled destination fails loudly at the accessor, and a registry
+    destination *outside* that set is reported in the summary and flagged by a
+    warning (:meth:`unhandled`) — it needs finding logic before it can be audited —
+    rather than being silently dropped. A destination disabled via
+    DISABLED_PUBLISHERS is out of scope: its findings are not reported and its
+    actions are not taken, so a disk-only or wiki-less install shows no spurious
+    mismatches.
     """
 
     def __init__(self, enabled: dict[str, bool]) -> None:
-        self.enabled = enabled
+        self.enabled = dict(enabled)  # copy: don't alias a caller's dict
 
     @classmethod
     def from_config(cls) -> "Scope":
         destinations = {p.destination for p in PUBLISHERS.values()}
         return cls({d: is_destination_enabled(d) for d in sorted(destinations)})
+
+    def unhandled(self) -> list[str]:
+        """Enabled registry destinations reconcile has no checks for (so their
+        assets are not audited). Empty in normal operation."""
+        return sorted(
+            d for d, on in self.enabled.items() if on and d not in _HANDLED_DESTINATIONS
+        )
 
     @classmethod
     def of(cls, **enabled: bool) -> "Scope":
@@ -490,10 +509,12 @@ class Scope:
         return self._on("wiki")
 
     def summary(self) -> str:
-        on: list[str] = []
-        off: list[str] = []
-        for destination, is_on in self.enabled.items():
-            (on if is_on else off).append(destination)
+        # Canonical order: handled destinations first (stable, operator-familiar),
+        # then any extras alphabetically.
+        order = [d for d in _HANDLED_DESTINATIONS if d in self.enabled]
+        order += sorted(d for d in self.enabled if d not in _HANDLED_DESTINATIONS)
+        on = [d for d in order if self.enabled[d]]
+        off = [d for d in order if not self.enabled[d]]
         return (
             f"in scope: {', '.join(on) or 'none'}; disabled: {', '.join(off) or 'none'}"
         )
@@ -873,6 +894,13 @@ def main() -> None:
     args = parser.parse_args()
 
     scope = Scope.from_config()
+    unhandled = scope.unhandled()
+    if unhandled:
+        print(
+            f"WARNING: enabled destination(s) {', '.join(unhandled)} have no "
+            "reconcile checks — their assets are NOT audited. Add finding logic "
+            "before relying on this report for them.\n"
+        )
     # Only reach out to a destination when it is configured — a disk-only install
     # has no YouTube/Drive credentials to authenticate with.
     if scope.youtube:
