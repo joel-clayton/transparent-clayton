@@ -33,9 +33,7 @@ _load_dotenv()
 # --- on-disk asset store -----------------------------------------------------
 # Root of the on-disk asset store. Overridable (e.g. for a dry run against a
 # throwaway directory); defaults to the external volume used in production.
-STORAGE_ROOT = os.environ.get(
-    "PIPELINE_STORAGE_ROOT", "/Volumes/Gautam/Clayton/CC Meetings"
-)
+STORAGE_ROOT = os.environ.get("PIPELINE_STORAGE_ROOT", "/Volumes/Gautam/Clayton")
 
 DOWNLOADED_DIR = os.path.join(STORAGE_ROOT, "Downloaded") + os.sep
 COMPRESSED_DIR = os.path.join(STORAGE_ROOT, "Compressed") + os.sep

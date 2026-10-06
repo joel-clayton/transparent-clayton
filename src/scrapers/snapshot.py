@@ -36,10 +36,10 @@ class SnapshotStore:
     def ensure_ready(self) -> None:
         """Verify the snapshot root is usable, else raise a transient error.
 
-        The parent (the shared "CC Meetings" dir) only exists when the external
-        volume is mounted. Creating it with ``parents=True`` would silently
-        shadow the mount point on the boot disk, so require the parent up front
-        and only create the leaf.
+        The parent (the shared storage root, e.g. .../Clayton) only exists when
+        the external volume is mounted. Creating it with ``parents=True`` would
+        silently shadow the mount point on the boot disk, so require the parent up
+        front and only create the leaf.
         """
         if not self.root.parent.is_dir():
             raise TransientScrapeError(
