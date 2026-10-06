@@ -15,13 +15,36 @@ once the one-time migration (``scripts/migrate_disk_layout.py``) has run.
 """
 
 import os
+from typing import Iterator
+
+from src.settings import STORAGE_ROOT
+
+
+def storage_is_mounted() -> bool:
+    """Whether the storage root exists, used as the "is the volume ready" signal.
+
+    ``os.path.isdir(STORAGE_ROOT)`` (not ``os.path.ismount``): STORAGE_ROOT is a
+    directory nested *below* the actual mount point (e.g. /Volumes/Gautam is the
+    mount, STORAGE_ROOT is .../Gautam/Clayton under it), so ismount would be
+    False even when mounted. isdir also matches the scraper's existing mount check.
+    The residual risk — a stray dir left at that path on the boot disk passing the
+    check — is accepted (and is pre-existing in the scraper check)."""
+    return os.path.isdir(STORAGE_ROOT)
 
 
 def write_dir_for_bucket(base_dir: str, bucket: str) -> str:
-    """The per-type subdirectory ``<base_dir>/<bucket>/`` to write into, created
-    if missing. This is always the new layout — the pipeline never writes flat."""
+    """The per-type subdirectory ``<base_dir>/<bucket>/`` to write into (always the
+    new layout — the pipeline never writes flat).
+
+    Created, together with any missing stage dir below it, only when the storage
+    root exists (:func:`storage_is_mounted`); when it does not — an unmounted volume
+    (or one mounted at an ancestor but without STORAGE_ROOT yet present) — this is a
+    no-op so the write fails loudly against the missing dir instead of fabricating
+    the stage tree on the boot disk. Initial creation of STORAGE_ROOT itself is a
+    one-time volume-setup step, as it was before bucketing."""
     path = os.path.join(base_dir, bucket) + os.sep
-    os.makedirs(path, exist_ok=True)
+    if storage_is_mounted():
+        os.makedirs(path, exist_ok=True)
     return path
 
 
@@ -45,3 +68,20 @@ def read_dirs_for_bucket(base_dir: str, bucket: str) -> list[str]:
     entries are kept — callers skip directories that aren't present. Neither dir
     is created here; reads never have the side effect of making stage folders."""
     return [os.path.join(base_dir, bucket) + os.sep, base_dir]
+
+
+def iter_stage_files(base_dir: str, bucket: str) -> Iterator[str]:
+    """Yield absolute paths of a type's files in a stage, across the per-type
+    bucket and the legacy flat layout (transition). Skips macOS AppleDouble
+    sidecars and any entry that isn't a plain file (e.g. other types' buckets when
+    scanning the flat dir). The single place the transition read-scan lives; the
+    legacy flat dir drops out of ``read_dirs_for_bucket`` in the follow-up."""
+    for directory in read_dirs_for_bucket(base_dir, bucket):
+        if not os.path.isdir(directory):
+            continue
+        for name in os.listdir(directory):
+            if name.startswith("._"):
+                continue
+            full = os.path.join(directory, name)
+            if os.path.isfile(full):
+                yield full

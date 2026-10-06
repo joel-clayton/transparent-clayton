@@ -1,3 +1,5 @@
+import os
+import tempfile
 import unittest
 from unittest.mock import MagicMock
 
@@ -10,6 +12,7 @@ from scripts.reconcile import (
     _drive_file_id,
     _has_presence,
     _is_stale_drive_link,
+    _iter_stage_filenames,
     _key_datetime,
     _meeting_key_from_filename,
     _video_id_from_link,
@@ -190,6 +193,27 @@ class TestDriveLiveness(unittest.TestCase):
         # 404 and trashed are dead; a transient 500 is treated as live (never
         # deleted on uncertainty).
         self.assertEqual(result, {"live", "blip"})
+
+
+class TestIterStageFilenames(unittest.TestCase):
+    def setUp(self):
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        self.stage = td.name
+
+    def _touch(self, *parts):
+        path = os.path.join(self.stage, *parts)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w"):
+            pass
+
+    def test_reads_flat_and_bucket_but_ignores_non_bucket_subdirs(self):
+        self._touch("flat.mp4")  # legacy flat file
+        self._touch("City Council", "bucketed.mp4")  # a real per-type bucket
+        self._touch(".tmp_ffmpeg", "part.mp4")  # a stray non-bucket subdir
+        found = set(_iter_stage_filenames(self.stage))
+        # The stray subdir's contents are NOT counted; only flat + known buckets.
+        self.assertEqual(found, {"flat.mp4", "bucketed.mp4"})
 
 
 class TestScoping(unittest.TestCase):

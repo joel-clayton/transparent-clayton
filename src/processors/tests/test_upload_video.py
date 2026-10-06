@@ -55,6 +55,23 @@ class TestGetRecentVideoTitlesPaginates(unittest.TestCase):
         )
 
 
+class TestVideoUploaderGatherDedup(TempDirTestCase):
+    """During the flat->bucket transition a compressed file can exist in both the
+    per-type bucket and the legacy flat dir; gather_dates must return it once (the
+    bucket copy) so it doesn't consume two upload slots."""
+
+    FNAME = "Clayton CA City Council Meeting 2026-05-26 - 000.mp4"
+
+    def test_same_file_in_bucket_and_flat_counts_once(self):
+        uploader = make_uploader(VideoUploader)  # City Council
+        bucket_dir = os.path.join(self.tmpdir, "City Council")
+        os.makedirs(bucket_dir)
+        self.touch(self.FNAME, bucket_dir)
+        self.touch(self.FNAME)  # legacy flat copy of the same meeting
+        result = uploader.gather_dates(self.tmpdir)
+        self.assertEqual(result, [os.path.join(bucket_dir, self.FNAME)])
+
+
 class TestGetPartNumFromString(unittest.TestCase):
     def setUp(self):
         self.uploader = make_uploader(VideoUploader)
