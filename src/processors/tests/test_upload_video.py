@@ -70,6 +70,17 @@ class TestPlaylistsFetchedOnce(unittest.TestCase):
             uploader.get_playlist_for_year("2027")  # must not re-fetch
         pl.list.assert_called_once()
 
+    def test_get_playlists_raises_on_page_cap(self):
+        # A truncated listing could miss this type's playlist and duplicate it.
+        uploader = make_uploader(VideoUploader)
+        uploader.service = MagicMock()
+        pl = uploader.service.playlists.return_value
+        pl.list.return_value.execute.return_value = {"items": []}
+        pl.list_next.return_value = MagicMock()  # always more pages
+        with patch("src.processors.upload_video.MAX_UPLOADS_PAGES", 1):
+            with self.assertRaises(RuntimeError):
+                uploader.get_playlists()
+
 
 class TestVideoUploaderGatherDedup(TempDirTestCase):
     """During the flat->bucket transition a compressed file can exist in both the

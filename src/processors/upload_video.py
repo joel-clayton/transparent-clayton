@@ -133,6 +133,14 @@ class VideoUploader(Processor):
                 self._cache_playlist(item["id"], year_str)
             request = self.service.playlists().list_next(request, response)
             pages += 1
+        if request is not None:
+            # Truncated listing: this type's playlist could be on a dropped page, so
+            # get_playlist_for_year would create a duplicate. Fail loudly rather than
+            # cache an incomplete result (matches scripts/repair_playlists.py).
+            raise RuntimeError(
+                f"Hit the {MAX_UPLOADS_PAGES}-page cap listing playlists; the channel "
+                "has more than this loaded. Raise MAX_UPLOADS_PAGES and re-run."
+            )
         self._playlists_fetched = True
 
     def _cache_playlist(self, playlist_id: str, year_str: str) -> None:
@@ -445,7 +453,7 @@ class VideoUploader(Processor):
 
     def process_for_date(self, date: str) -> None:
         if not self.service:
-            self.authenticate()
+            self.service = self.authenticate()  # reassign, not a no-op
         if not self._playlists_fetched:
             self.get_playlists()
         if get_file_size_in_mb(date) < MIN_COMPRESSED_VIDEO_MB:
