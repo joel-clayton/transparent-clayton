@@ -92,7 +92,7 @@ from src.processors.upload_video import (  # noqa: E402
     YOUTUBE_TOKEN_FILE,
     VideoUploader,
 )
-from src.publishers import is_destination_enabled  # noqa: E402
+from src.publishers import PUBLISHERS, is_destination_enabled  # noqa: E402
 from src.settings import (  # noqa: E402
     COMPRESSED_DIR,
     DOCUMENTS_DIR,
@@ -437,46 +437,84 @@ def build_type_report(
     return TypeReport(meeting_type=meeting_type, rows=rows)
 
 
-@dataclass
+# Destinations reconcile actually has checks/findings for. The publisher registry
+# is the source of truth for which destinations EXIST; this is the subset reconcile
+# knows how to audit (and the order its summary lists them in). A registry
+# destination outside this set needs finding logic before it can be checked, so it
+# is surfaced loudly (summary + warning) rather than silently un-audited.
+_HANDLED_DESTINATIONS = ("youtube", "google_docs", "wiki")
+
+
 class Scope:
     """Which publishing destinations reconcile checks and acts on.
 
-    A destination that is disabled in the pipeline config (DISABLED_PUBLISHERS) is
-    out of scope: its findings are not reported and its reconcile actions are not
-    taken, so a disk-only or wiki-less install shows no spurious mismatches.
+    The set of destinations comes from the publisher registry (``PUBLISHERS``), the
+    authoritative source of destination names, so the scope summary always reflects
+    every configured destination. Reconcile's checks cover ``_HANDLED_DESTINATIONS``:
+    renaming a handled destination fails loudly at the accessor, and a registry
+    destination *outside* that set is reported in the summary and flagged by a
+    warning (:meth:`unhandled`) — it needs finding logic before it can be audited —
+    rather than being silently dropped. A destination disabled via
+    DISABLED_PUBLISHERS is out of scope: its findings are not reported and its
+    actions are not taken, so a disk-only or wiki-less install shows no spurious
+    mismatches.
     """
 
-    youtube: bool
-    google_docs: bool
-    wiki: bool
+    def __init__(self, enabled: dict[str, bool]) -> None:
+        self.enabled = dict(enabled)  # copy: don't alias a caller's dict
 
     @classmethod
     def from_config(cls) -> "Scope":
-        return cls(
-            youtube=is_destination_enabled("youtube"),
-            google_docs=is_destination_enabled("google_docs"),
-            wiki=is_destination_enabled("wiki"),
+        destinations = {p.destination for p in PUBLISHERS.values()}
+        return cls({d: is_destination_enabled(d) for d in sorted(destinations)})
+
+    def unhandled(self) -> list[str]:
+        """Enabled registry destinations reconcile has no checks for (so their
+        assets are not audited). Empty in normal operation."""
+        return sorted(
+            d for d, on in self.enabled.items() if on and d not in _HANDLED_DESTINATIONS
         )
 
+    @classmethod
+    def of(cls, **enabled: bool) -> "Scope":
+        """A scope with destinations set explicitly (for tests and callers that
+        don't read the registry)."""
+        return cls(dict(enabled))
+
+    def _on(self, destination: str) -> bool:
+        # A known destination (in the registry-derived set) returns its enablement;
+        # an UNKNOWN name raises rather than degrading to "disabled". This is what
+        # makes the registry the real source of truth for behavior, not just the
+        # summary: if a publisher's `destination` is renamed without updating the
+        # finding logic that asks for it by name, reconcile fails loudly here
+        # instead of silently skipping that destination's findings/actions.
+        if destination not in self.enabled:
+            raise KeyError(
+                f"Unknown reconcile destination {destination!r}; registry "
+                f"destinations are {sorted(self.enabled)}. The finding logic and the "
+                "publisher registry have drifted."
+            )
+        return self.enabled[destination]
+
+    @property
+    def youtube(self) -> bool:
+        return self._on("youtube")
+
+    @property
+    def google_docs(self) -> bool:
+        return self._on("google_docs")
+
+    @property
+    def wiki(self) -> bool:
+        return self._on("wiki")
+
     def summary(self) -> str:
-        on = [
-            label
-            for label, enabled in (
-                ("youtube", self.youtube),
-                ("google_docs", self.google_docs),
-                ("wiki", self.wiki),
-            )
-            if enabled
-        ]
-        off = [
-            label
-            for label, enabled in (
-                ("youtube", self.youtube),
-                ("google_docs", self.google_docs),
-                ("wiki", self.wiki),
-            )
-            if not enabled
-        ]
+        # Canonical order: handled destinations first (stable, operator-familiar),
+        # then any extras alphabetically.
+        order = [d for d in _HANDLED_DESTINATIONS if d in self.enabled]
+        order += sorted(d for d in self.enabled if d not in _HANDLED_DESTINATIONS)
+        on = [d for d in order if self.enabled[d]]
+        off = [d for d in order if not self.enabled[d]]
         return (
             f"in scope: {', '.join(on) or 'none'}; disabled: {', '.join(off) or 'none'}"
         )
@@ -856,6 +894,13 @@ def main() -> None:
     args = parser.parse_args()
 
     scope = Scope.from_config()
+    unhandled = scope.unhandled()
+    if unhandled:
+        print(
+            f"WARNING: enabled destination(s) {', '.join(unhandled)} have no "
+            "reconcile checks — their assets are NOT audited. Add finding logic "
+            "before relying on this report for them.\n"
+        )
     # Only reach out to a destination when it is configured — a disk-only install
     # has no YouTube/Drive credentials to authenticate with.
     if scope.youtube:
@@ -890,25 +935,39 @@ def main() -> None:
         f"Cross-checking {channel_note} and {drive_note} against the files on disk "
         "and the pointers in Redis, per meeting type.\n"
     )
-    print(
-        "What the findings mean:\n"
-        "  STALE_VIDEO_LINK   Redis points a meeting's 'Video Backup' at a video "
-        "that is no longer on the channel — the wiki link is broken.\n"
-        "  MISSING_VIDEO_LINK a video is uploaded but no Redis pointer references "
-        "it, so the wiki shows no backup link for that part.\n"
-        "  MISSING_UPLOAD     a compressed video part is on disk but was never "
-        "uploaded to YouTube.\n"
+    # Only document the finding types a run can actually produce: the YouTube/Drive
+    # lines are omitted when that destination is out of scope (e.g. a disk-only run).
+    legend: list[str] = []
+    if scope.youtube:
+        legend += [
+            "  STALE_VIDEO_LINK   Redis points a meeting's 'Video Backup' at a video "
+            "that is no longer on the channel — the wiki link is broken.",
+            "  MISSING_VIDEO_LINK a video is uploaded but no Redis pointer references "
+            "it, so the wiki shows no backup link for that part.",
+            "  MISSING_UPLOAD     a compressed video part is on disk but was never "
+            "uploaded to YouTube.",
+        ]
+    legend.append(
         "  NO_DETAIL          the meeting has files/uploads but no Redis 'detail' "
-        "record (usually an older meeting already on the wiki; informational).\n"
-        "  MISSING_TRANSCRIPT a transcript file is on disk but no Drive link is set.\n"
-        "  STALE_TRANSCRIPT_LINK the transcript_link points at a Drive file that no "
-        "longer exists — the wiki transcript link is broken.\n"
-        "  MISSING_DOC        documents are on disk but none are archived to Drive.\n"
-        "  STALE_DOC_LINK     an archived-document pointer references a dead Drive "
-        "file.\n"
-        "  ORPHAN_LINK        a dead pointer with no matching meeting in this type — "
-        "leftover cross-type contamination; never shown on the wiki.\n"
+        "record (usually an older meeting already on the wiki; informational)."
     )
+    if scope.google_docs:
+        legend += [
+            "  MISSING_TRANSCRIPT a transcript file is on disk but no Drive link is "
+            "set.",
+            "  STALE_TRANSCRIPT_LINK the transcript_link points at a Drive file that "
+            "no longer exists — the wiki transcript link is broken.",
+            "  MISSING_DOC        documents are on disk but none are archived to "
+            "Drive.",
+            "  STALE_DOC_LINK     an archived-document pointer references a dead Drive "
+            "file.",
+        ]
+    if scope.youtube:
+        legend.append(
+            "  ORPHAN_LINK        a dead pointer with no matching meeting in this "
+            "type — leftover cross-type contamination; never shown on the wiki."
+        )
+    print("What the findings mean:\n" + "\n".join(legend) + "\n")
 
     total_issue_meetings = 0
     total_orphan_links = 0
