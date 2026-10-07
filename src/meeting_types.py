@@ -57,10 +57,6 @@ class MeetingType:
     def doc_link_key_template(self) -> str:
         return f"doc_link.{self.key}.{{meeting_key}}"
 
-    @property
-    def video_playlist_key_template(self) -> str:
-        return f"video_playlist.{self.key}.{{}}"
-
     # --- filenames + media titles ---
     @property
     def file_stub(self) -> str:

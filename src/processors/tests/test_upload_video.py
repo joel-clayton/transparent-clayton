@@ -195,7 +195,7 @@ class TestProcessForDateFailsLoudly(unittest.TestCase):
 
         uploader = make_uploader(VideoUploader)
         uploader.service = MagicMock()  # truthy: skip re-auth
-        uploader.playlists = ["existing"]  # truthy: skip get_playlists()
+        uploader.playlists_by_year = {"2026": "cc26"}  # non-empty: skip get_playlists()
         date = "/vol/Clayton CA City Council Meeting 2026-05-08 07_00 PM - 000.mp4"
         err = HttpError(MagicMock(status=403), b"dailyLimitExceeded")
 
@@ -232,11 +232,11 @@ class TestPlaylistBucketing(unittest.TestCase):
         uploader = self._uploader_with_playlists(items)
         uploader.get_playlists()
         # Only the City Council playlist is recorded — never the PC one.
-        self.assertEqual(uploader.playlists, [{"cc26": "2026"}])
+        self.assertEqual(uploader.playlists_by_year, {"2026": "cc26"})
 
     def test_get_playlist_for_year_resolves_from_type_list_else_creates(self):
         uploader = make_uploader(VideoUploader)
-        uploader.playlists = [{"cc26": "2026"}, {"cc25": "2025"}]
+        uploader.playlists_by_year = {"2026": "cc26", "2025": "cc25"}
         # A year present in this type's list resolves without creating.
         with patch.object(uploader, "create_playlist_for_year") as create:
             self.assertEqual(uploader.get_playlist_for_year("2026"), "cc26")
