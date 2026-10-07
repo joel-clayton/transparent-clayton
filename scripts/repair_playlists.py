@@ -41,6 +41,7 @@ from src.processors.upload_video import (  # noqa: E402
     CLIENT_SECRETS_FILE,
     MAX_UPLOADS_PAGES,
     RESULT_COUNT,
+    RETRIABLE_EXCEPTIONS,
     RETRIABLE_STATUS_CODES,
     SCOPES,
     YOUTUBE_TOKEN_FILE,
@@ -122,9 +123,14 @@ def _all_playlists(service: Any) -> dict[str, str]:
         request = service.playlists().list_next(request, response)
         pages += 1
     if request is not None:
-        print(
-            f"    WARNING: hit the {MAX_UPLOADS_PAGES}-page cap while listing "
-            "playlists; the channel has more and this audit/repair may be incomplete."
+        # Refuse to proceed on a truncated listing: incomplete data would drive
+        # wrong moves (duplicate playlists) AND destructive pointer deletions
+        # (_drop_stale_pointers would treat a never-loaded playlist's valid pointer
+        # as stale and delete it). Fail loudly instead.
+        raise RuntimeError(
+            f"Hit the {MAX_UPLOADS_PAGES}-page cap while listing playlists; the "
+            "channel has more than this tool loaded, so the audit/repair cannot run "
+            "safely. Raise MAX_UPLOADS_PAGES and re-run."
         )
     return out
 
@@ -150,9 +156,12 @@ def _playlist_items(service: Any, playlist_id: str) -> list[dict[str, str]]:
         request = service.playlistItems().list_next(request, response)
         pages += 1
     if request is not None:
-        print(
-            f"    WARNING: hit the {MAX_UPLOADS_PAGES}-page cap while listing items "
-            f"of playlist {playlist_id}; it has more and this may be incomplete."
+        # A truncated item listing would under-seed the dedup set and let a move
+        # re-insert a video already in the playlist (duplicate); fail loudly.
+        raise RuntimeError(
+            f"Hit the {MAX_UPLOADS_PAGES}-page cap while listing items of playlist "
+            f"{playlist_id}; it has more than this tool loaded. Raise "
+            "MAX_UPLOADS_PAGES and re-run."
         )
     return out
 
@@ -178,14 +187,20 @@ def _insert_video(
         }
     }
     for attempt in range(_INSERT_RETRY_ATTEMPTS):
+        last = attempt == _INSERT_RETRY_ATTEMPTS - 1
         try:
             service.playlistItems().insert(part="snippet", body=body).execute()
             return
+        except RETRIABLE_EXCEPTIONS:
+            # Transient network error (socket timeout, broken pipe, etc.).
+            if retry_transient and not last:
+                time.sleep(_INSERT_RETRY_DELAY_SECONDS)
+                continue
+            raise
         except HttpError as exc:
             resp = getattr(exc, "resp", None)
             status = resp.status if resp is not None else None
             retriable = status == 404 or status in RETRIABLE_STATUS_CODES
-            last = attempt == _INSERT_RETRY_ATTEMPTS - 1
             if retry_transient and retriable and not last:
                 time.sleep(_INSERT_RETRY_DELAY_SECONDS)
                 continue
@@ -228,20 +243,30 @@ def _perform_move(
     dest_name: str,
     name_to_id: dict[str, str],
     dest_members: dict[str, set[str]],
+    created_dests: set[str],
 ) -> None:
     """Insert ``item`` into ``dest_name`` (creating that playlist if needed), then
     delete it from its source. A playlist created this run is known-empty and is not
     listed; a pre-existing one is listed so a video already present is not inserted
-    again (a partial-run re-run can't duplicate). ``name_to_id``/``dest_members`` are
-    updated in place; API failures raise so the caller can record them."""
+    again (a partial-run re-run can't duplicate). ``name_to_id``/``dest_members``/
+    ``created_dests`` are updated in place; API failures raise so the caller can
+    record them."""
     dest_id, created = _ensure_playlist(service, dest_name, name_to_id)
+    if created:
+        created_dests.add(dest_id)
     if dest_id not in dest_members:
         dest_members[dest_id] = (
             set() if created else _playlist_video_ids(service, dest_id)
         )
     if item["video_id"] not in dest_members[dest_id]:
-        # Only tolerate a lagging insert for a playlist we just created this run.
-        _insert_video(service, dest_id, item["video_id"], retry_transient=created)
+        # Tolerate a lagging insert for any playlist created this run (not just the
+        # creating call): all its videos may hit the same propagation window.
+        _insert_video(
+            service,
+            dest_id,
+            item["video_id"],
+            retry_transient=dest_id in created_dests,
+        )
         dest_members[dest_id].add(item["video_id"])
     service.playlistItems().delete(id=item["item_id"]).execute()
 
@@ -283,6 +308,7 @@ def main() -> None:
     skips: list[str] = []
     failures: list[str] = []
     dest_members: dict[str, set[str]] = {}  # dest playlist id -> its video ids
+    created_dests: set[str] = set()  # playlist ids created during this run
 
     def _move(item: dict[str, str], src_title: str, dest: MeetingType) -> None:
         """Plan/perform moving one item into dest's correct year playlist: resolve
@@ -301,7 +327,9 @@ def main() -> None:
             moves += 1
             return
         try:
-            _perform_move(service, item, dest_name, name_to_id, dest_members)
+            _perform_move(
+                service, item, dest_name, name_to_id, dest_members, created_dests
+            )
             moves += 1
         except Exception as exc:
             failures.append(f"move {item['video_id']} -> {dest_name!r}: {exc}")

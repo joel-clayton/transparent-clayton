@@ -1,5 +1,3 @@
-import contextlib
-import io
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -108,7 +106,7 @@ class TestPlaylistHelpers(unittest.TestCase):
         dest_members: dict[str, set[str]] = {}
         item = {"video_id": "vid", "item_id": "itemid", "title": "t"}
 
-        _perform_move(svc, item, "2026 X Meetings", name_to_id, dest_members)
+        _perform_move(svc, item, "2026 X Meetings", name_to_id, dest_members, set())
 
         svc.playlistItems.return_value.list.assert_not_called()  # never lists the new one
         svc.playlistItems.return_value.insert.assert_called_once()
@@ -130,7 +128,7 @@ class TestPlaylistHelpers(unittest.TestCase):
         svc.playlistItems.return_value.list_next.return_value = None
         item = {"video_id": "vid", "item_id": "itemid", "title": "t"}
 
-        _perform_move(svc, item, "2026 X Meetings", name_to_id, dest_members)
+        _perform_move(svc, item, "2026 X Meetings", name_to_id, dest_members, set())
 
         # Already in the destination -> no second insert, but still removed from source.
         svc.playlistItems.return_value.insert.assert_not_called()
@@ -173,34 +171,29 @@ class TestInsertVideoRetry(unittest.TestCase):
             _insert_video(svc, "PID", "vid", retry_transient=True)
 
 
-class TestPaginationCapWarning(unittest.TestCase):
-    def test_all_playlists_warns_when_cap_hit(self):
+class TestPaginationCapRaises(unittest.TestCase):
+    """A truncated listing can't drive a safe repair (wrong moves / deleting valid
+    pointers), so hitting the page cap raises rather than proceeding."""
+
+    def test_all_playlists_raises_when_cap_hit(self):
         svc = MagicMock()
         svc.playlists.return_value.list.return_value.execute.return_value = {
             "items": []
         }
         svc.playlists.return_value.list_next.return_value = MagicMock()  # always more
-        buf = io.StringIO()
-        with (
-            patch("scripts.repair_playlists.MAX_UPLOADS_PAGES", 1),
-            contextlib.redirect_stdout(buf),
-        ):
-            _all_playlists(svc)
-        self.assertIn("cap", buf.getvalue())
+        with patch("scripts.repair_playlists.MAX_UPLOADS_PAGES", 1):
+            with self.assertRaises(RuntimeError):
+                _all_playlists(svc)
 
-    def test_playlist_items_warns_when_cap_hit(self):
+    def test_playlist_items_raises_when_cap_hit(self):
         svc = MagicMock()
         svc.playlistItems.return_value.list.return_value.execute.return_value = {
             "items": []
         }
         svc.playlistItems.return_value.list_next.return_value = MagicMock()  # more
-        buf = io.StringIO()
-        with (
-            patch("scripts.repair_playlists.MAX_UPLOADS_PAGES", 1),
-            contextlib.redirect_stdout(buf),
-        ):
-            _playlist_items(svc, "PID")
-        self.assertIn("cap", buf.getvalue())
+        with patch("scripts.repair_playlists.MAX_UPLOADS_PAGES", 1):
+            with self.assertRaises(RuntimeError):
+                _playlist_items(svc, "PID")
 
 
 if __name__ == "__main__":
