@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 from typing import Any
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -31,6 +32,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from googleapiclient.discovery import build  # noqa: E402
+from googleapiclient.errors import HttpError  # noqa: E402
 
 from celery_app import r  # noqa: E402
 from src.meeting_types import MEETING_TYPES, MeetingType  # noqa: E402
@@ -39,6 +41,8 @@ from src.processors.upload_video import (  # noqa: E402
     CLIENT_SECRETS_FILE,
     MAX_UPLOADS_PAGES,
     RESULT_COUNT,
+    RETRIABLE_EXCEPTIONS,
+    RETRIABLE_STATUS_CODES,
     SCOPES,
     YOUTUBE_TOKEN_FILE,
 )
@@ -105,6 +109,22 @@ def classify_item(
     return ("move", vtype)
 
 
+class _TruncatedListingError(RuntimeError):
+    """A listing hit the page cap, so the tool loaded only part of the channel. The
+    repair can't run safely on incomplete data (wrong moves, and deleting valid
+    pointers), so this must abort the whole run — never be downgraded to one move's
+    recorded failure."""
+
+
+def _check_not_capped(request: Any, context: str) -> None:
+    """Raise if a paginated listing stopped at the cap with pages still remaining."""
+    if request is not None:
+        raise _TruncatedListingError(
+            f"Hit the {MAX_UPLOADS_PAGES}-page cap while {context}; the channel has "
+            "more than this tool loaded. Raise MAX_UPLOADS_PAGES and re-run."
+        )
+
+
 def _all_playlists(service: Any) -> dict[str, str]:
     """{playlist_id: title} for every playlist on the channel (all pages)."""
     out: dict[str, str] = {}
@@ -118,6 +138,7 @@ def _all_playlists(service: Any) -> dict[str, str]:
             out[item["id"]] = item["snippet"]["title"]
         request = service.playlists().list_next(request, response)
         pages += 1
+    _check_not_capped(request, "listing playlists")
     return out
 
 
@@ -141,7 +162,47 @@ def _playlist_items(service: Any, playlist_id: str) -> list[dict[str, str]]:
             )
         request = service.playlistItems().list_next(request, response)
         pages += 1
+    _check_not_capped(request, f"listing items of playlist {playlist_id}")
     return out
+
+
+# A just-created playlist can briefly be not-yet-writable (the same propagation lag
+# that makes its item listing 404); retry the insert a few times before giving up.
+_INSERT_RETRY_ATTEMPTS = 5
+_INSERT_RETRY_DELAY_SECONDS = 2.0
+
+
+def _insert_video(service: Any, dest_id: str, video_id: str, created: bool) -> None:
+    """Insert a video into a playlist with a few backoff retries. Transient 5xx and
+    network errors are always retried (they're unrelated to the playlist). A 404 is
+    retried ONLY when ``created`` — i.e. the playlist was made this run, so the 404 is
+    propagation lag; for a pre-existing playlist a 404 means it is genuinely gone and
+    surfaces immediately rather than wasting retries/quota."""
+    body = {
+        "snippet": {
+            "playlistId": dest_id,
+            "resourceId": {"kind": "youtube#video", "videoId": video_id},
+        }
+    }
+    for attempt in range(_INSERT_RETRY_ATTEMPTS):
+        last = attempt == _INSERT_RETRY_ATTEMPTS - 1
+        try:
+            service.playlistItems().insert(part="snippet", body=body).execute()
+            return
+        except RETRIABLE_EXCEPTIONS:
+            # Transient network error (socket timeout, broken pipe, etc.).
+            if not last:
+                time.sleep(_INSERT_RETRY_DELAY_SECONDS)
+                continue
+            raise
+        except HttpError as exc:
+            resp = getattr(exc, "resp", None)
+            status = resp.status if resp is not None else None
+            retriable = status in RETRIABLE_STATUS_CODES or (status == 404 and created)
+            if retriable and not last:
+                time.sleep(_INSERT_RETRY_DELAY_SECONDS)
+                continue
+            raise
 
 
 def _ensure_playlist(
@@ -180,30 +241,27 @@ def _perform_move(
     dest_name: str,
     name_to_id: dict[str, str],
     dest_members: dict[str, set[str]],
+    created_dests: set[str],
 ) -> None:
     """Insert ``item`` into ``dest_name`` (creating that playlist if needed), then
     delete it from its source. A playlist created this run is known-empty and is not
     listed; a pre-existing one is listed so a video already present is not inserted
-    again (a partial-run re-run can't duplicate). ``name_to_id``/``dest_members`` are
-    updated in place; API failures raise so the caller can record them."""
+    again (a partial-run re-run can't duplicate). ``name_to_id``/``dest_members``/
+    ``created_dests`` are updated in place; API failures raise so the caller can
+    record them."""
     dest_id, created = _ensure_playlist(service, dest_name, name_to_id)
+    if created:
+        created_dests.add(dest_id)
     if dest_id not in dest_members:
         dest_members[dest_id] = (
             set() if created else _playlist_video_ids(service, dest_id)
         )
     if item["video_id"] not in dest_members[dest_id]:
-        service.playlistItems().insert(
-            part="snippet",
-            body={
-                "snippet": {
-                    "playlistId": dest_id,
-                    "resourceId": {
-                        "kind": "youtube#video",
-                        "videoId": item["video_id"],
-                    },
-                }
-            },
-        ).execute()
+        # A 404 is retried only for a playlist created this run (propagation lag);
+        # transient 5xx/network errors retry regardless.
+        _insert_video(
+            service, dest_id, item["video_id"], created=dest_id in created_dests
+        )
         dest_members[dest_id].add(item["video_id"])
     service.playlistItems().delete(id=item["item_id"]).execute()
 
@@ -245,6 +303,7 @@ def main() -> None:
     skips: list[str] = []
     failures: list[str] = []
     dest_members: dict[str, set[str]] = {}  # dest playlist id -> its video ids
+    created_dests: set[str] = set()  # playlist ids created during this run
 
     def _move(item: dict[str, str], src_title: str, dest: MeetingType) -> None:
         """Plan/perform moving one item into dest's correct year playlist: resolve
@@ -263,8 +322,14 @@ def main() -> None:
             moves += 1
             return
         try:
-            _perform_move(service, item, dest_name, name_to_id, dest_members)
+            _perform_move(
+                service, item, dest_name, name_to_id, dest_members, created_dests
+            )
             moves += 1
+        except _TruncatedListingError:
+            # A truncated listing (hit while seeding dedup) must abort the whole run,
+            # not be downgraded to one recorded move failure.
+            raise
         except Exception as exc:
             failures.append(f"move {item['video_id']} -> {dest_name!r}: {exc}")
 

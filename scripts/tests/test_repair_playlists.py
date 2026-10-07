@@ -1,10 +1,15 @@
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
+from googleapiclient.errors import HttpError
 
 from scripts.repair_playlists import (
     SKIP_VIDEO_IDS,
+    _all_playlists,
     _ensure_playlist,
+    _insert_video,
     _perform_move,
+    _playlist_items,
     classify_item,
     owner_type,
     video_type,
@@ -101,7 +106,7 @@ class TestPlaylistHelpers(unittest.TestCase):
         dest_members: dict[str, set[str]] = {}
         item = {"video_id": "vid", "item_id": "itemid", "title": "t"}
 
-        _perform_move(svc, item, "2026 X Meetings", name_to_id, dest_members)
+        _perform_move(svc, item, "2026 X Meetings", name_to_id, dest_members, set())
 
         svc.playlistItems.return_value.list.assert_not_called()  # never lists the new one
         svc.playlistItems.return_value.insert.assert_called_once()
@@ -123,11 +128,83 @@ class TestPlaylistHelpers(unittest.TestCase):
         svc.playlistItems.return_value.list_next.return_value = None
         item = {"video_id": "vid", "item_id": "itemid", "title": "t"}
 
-        _perform_move(svc, item, "2026 X Meetings", name_to_id, dest_members)
+        _perform_move(svc, item, "2026 X Meetings", name_to_id, dest_members, set())
 
         # Already in the destination -> no second insert, but still removed from source.
         svc.playlistItems.return_value.insert.assert_not_called()
         svc.playlistItems.return_value.delete.assert_called_once_with(id="itemid")
+
+
+class TestInsertVideoRetry(unittest.TestCase):
+    def test_created_playlist_retries_404_then_succeeds(self):
+        svc = MagicMock()
+        execute = svc.playlistItems.return_value.insert.return_value.execute
+        execute.side_effect = [HttpError(MagicMock(status=404), b"not found"), None]
+        with patch("scripts.repair_playlists.time.sleep"):
+            _insert_video(svc, "PID", "vid", created=True)
+        self.assertEqual(execute.call_count, 2)  # 404 retried for a just-created pl
+
+    def test_transient_5xx_retried_even_for_preexisting_playlist(self):
+        svc = MagicMock()
+        execute = svc.playlistItems.return_value.insert.return_value.execute
+        execute.side_effect = [HttpError(MagicMock(status=503), b"busy"), None]
+        with patch("scripts.repair_playlists.time.sleep"):
+            _insert_video(svc, "PID", "vid", created=False)
+        self.assertEqual(execute.call_count, 2)  # 5xx always transient -> retried
+
+    def test_network_error_retried_even_for_preexisting_playlist(self):
+        svc = MagicMock()
+        execute = svc.playlistItems.return_value.insert.return_value.execute
+        execute.side_effect = [
+            IOError("socket timeout"),
+            None,
+        ]  # in RETRIABLE_EXCEPTIONS
+        with patch("scripts.repair_playlists.time.sleep"):
+            _insert_video(svc, "PID", "vid", created=False)
+        self.assertEqual(execute.call_count, 2)
+
+    def test_preexisting_playlist_fails_fast_on_404(self):
+        # A pre-existing (not just-created) playlist that 404s is genuinely gone;
+        # surface it immediately instead of wasting retries.
+        svc = MagicMock()
+        execute = svc.playlistItems.return_value.insert.return_value.execute
+        execute.side_effect = HttpError(MagicMock(status=404), b"gone")
+        with self.assertRaises(HttpError):
+            _insert_video(svc, "PID", "vid", created=False)
+        self.assertEqual(execute.call_count, 1)  # no retries
+
+    def test_reraises_a_non_retriable_status(self):
+        svc = MagicMock()
+        svc.playlistItems.return_value.insert.return_value.execute.side_effect = (
+            HttpError(MagicMock(status=403), b"forbidden")
+        )
+        with self.assertRaises(HttpError):
+            _insert_video(svc, "PID", "vid", created=True)
+
+
+class TestPaginationCapRaises(unittest.TestCase):
+    """A truncated listing can't drive a safe repair (wrong moves / deleting valid
+    pointers), so hitting the page cap raises rather than proceeding."""
+
+    def test_all_playlists_raises_when_cap_hit(self):
+        svc = MagicMock()
+        svc.playlists.return_value.list.return_value.execute.return_value = {
+            "items": []
+        }
+        svc.playlists.return_value.list_next.return_value = MagicMock()  # always more
+        with patch("scripts.repair_playlists.MAX_UPLOADS_PAGES", 1):
+            with self.assertRaises(RuntimeError):
+                _all_playlists(svc)
+
+    def test_playlist_items_raises_when_cap_hit(self):
+        svc = MagicMock()
+        svc.playlistItems.return_value.list.return_value.execute.return_value = {
+            "items": []
+        }
+        svc.playlistItems.return_value.list_next.return_value = MagicMock()  # more
+        with patch("scripts.repair_playlists.MAX_UPLOADS_PAGES", 1):
+            with self.assertRaises(RuntimeError):
+                _playlist_items(svc, "PID")
 
 
 if __name__ == "__main__":
