@@ -745,9 +745,11 @@ def reconcile_type(
         cleared_d = 0
         for key in drive_affected:
             m = report.rows[key]
-            # Clearing the transcript pointer is enough: the transcript stage
-            # re-uploads when the Drive file is missing (its idempotency is the
-            # live Drive-folder listing), which re-sets the pointer.
+            # Clear the dead transcript pointer so the broken wiki link goes away.
+            # It self-heals only when the transcript is still on disk: the transcript
+            # stage then re-uploads (its idempotency is the live Drive-folder
+            # listing) and re-sets the pointer. With no on-disk transcript the link
+            # is simply removed (it was already dead and is unrecoverable).
             if m.transcript_link and _is_stale_drive_link(m.transcript_link, drive_ids):
                 r.delete(mt.transcript_link_key_template.format(meeting_key=key))
                 cleared_t += 1
