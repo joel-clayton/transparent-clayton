@@ -136,20 +136,31 @@ class TestPlaylistHelpers(unittest.TestCase):
 
 
 class TestInsertVideoRetry(unittest.TestCase):
-    def test_just_created_retries_404_then_succeeds(self):
+    def test_created_playlist_retries_404_then_succeeds(self):
         svc = MagicMock()
         execute = svc.playlistItems.return_value.insert.return_value.execute
         execute.side_effect = [HttpError(MagicMock(status=404), b"not found"), None]
         with patch("scripts.repair_playlists.time.sleep"):
-            _insert_video(svc, "PID", "vid", retry_transient=True)
-        self.assertEqual(execute.call_count, 2)  # retried once, then succeeded
+            _insert_video(svc, "PID", "vid", created=True)
+        self.assertEqual(execute.call_count, 2)  # 404 retried for a just-created pl
 
-    def test_just_created_retries_transient_5xx(self):
+    def test_transient_5xx_retried_even_for_preexisting_playlist(self):
         svc = MagicMock()
         execute = svc.playlistItems.return_value.insert.return_value.execute
         execute.side_effect = [HttpError(MagicMock(status=503), b"busy"), None]
         with patch("scripts.repair_playlists.time.sleep"):
-            _insert_video(svc, "PID", "vid", retry_transient=True)
+            _insert_video(svc, "PID", "vid", created=False)
+        self.assertEqual(execute.call_count, 2)  # 5xx always transient -> retried
+
+    def test_network_error_retried_even_for_preexisting_playlist(self):
+        svc = MagicMock()
+        execute = svc.playlistItems.return_value.insert.return_value.execute
+        execute.side_effect = [
+            IOError("socket timeout"),
+            None,
+        ]  # in RETRIABLE_EXCEPTIONS
+        with patch("scripts.repair_playlists.time.sleep"):
+            _insert_video(svc, "PID", "vid", created=False)
         self.assertEqual(execute.call_count, 2)
 
     def test_preexisting_playlist_fails_fast_on_404(self):
@@ -159,7 +170,7 @@ class TestInsertVideoRetry(unittest.TestCase):
         execute = svc.playlistItems.return_value.insert.return_value.execute
         execute.side_effect = HttpError(MagicMock(status=404), b"gone")
         with self.assertRaises(HttpError):
-            _insert_video(svc, "PID", "vid", retry_transient=False)
+            _insert_video(svc, "PID", "vid", created=False)
         self.assertEqual(execute.call_count, 1)  # no retries
 
     def test_reraises_a_non_retriable_status(self):
@@ -168,7 +179,7 @@ class TestInsertVideoRetry(unittest.TestCase):
             HttpError(MagicMock(status=403), b"forbidden")
         )
         with self.assertRaises(HttpError):
-            _insert_video(svc, "PID", "vid", retry_transient=True)
+            _insert_video(svc, "PID", "vid", created=True)
 
 
 class TestPaginationCapRaises(unittest.TestCase):

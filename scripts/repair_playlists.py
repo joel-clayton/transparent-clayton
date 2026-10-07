@@ -109,6 +109,22 @@ def classify_item(
     return ("move", vtype)
 
 
+class _TruncatedListingError(RuntimeError):
+    """A listing hit the page cap, so the tool loaded only part of the channel. The
+    repair can't run safely on incomplete data (wrong moves, and deleting valid
+    pointers), so this must abort the whole run — never be downgraded to one move's
+    recorded failure."""
+
+
+def _check_not_capped(request: Any, context: str) -> None:
+    """Raise if a paginated listing stopped at the cap with pages still remaining."""
+    if request is not None:
+        raise _TruncatedListingError(
+            f"Hit the {MAX_UPLOADS_PAGES}-page cap while {context}; the channel has "
+            "more than this tool loaded. Raise MAX_UPLOADS_PAGES and re-run."
+        )
+
+
 def _all_playlists(service: Any) -> dict[str, str]:
     """{playlist_id: title} for every playlist on the channel (all pages)."""
     out: dict[str, str] = {}
@@ -122,16 +138,7 @@ def _all_playlists(service: Any) -> dict[str, str]:
             out[item["id"]] = item["snippet"]["title"]
         request = service.playlists().list_next(request, response)
         pages += 1
-    if request is not None:
-        # Refuse to proceed on a truncated listing: incomplete data would drive
-        # wrong moves (duplicate playlists) AND destructive pointer deletions
-        # (_drop_stale_pointers would treat a never-loaded playlist's valid pointer
-        # as stale and delete it). Fail loudly instead.
-        raise RuntimeError(
-            f"Hit the {MAX_UPLOADS_PAGES}-page cap while listing playlists; the "
-            "channel has more than this tool loaded, so the audit/repair cannot run "
-            "safely. Raise MAX_UPLOADS_PAGES and re-run."
-        )
+    _check_not_capped(request, "listing playlists")
     return out
 
 
@@ -155,14 +162,7 @@ def _playlist_items(service: Any, playlist_id: str) -> list[dict[str, str]]:
             )
         request = service.playlistItems().list_next(request, response)
         pages += 1
-    if request is not None:
-        # A truncated item listing would under-seed the dedup set and let a move
-        # re-insert a video already in the playlist (duplicate); fail loudly.
-        raise RuntimeError(
-            f"Hit the {MAX_UPLOADS_PAGES}-page cap while listing items of playlist "
-            f"{playlist_id}; it has more than this tool loaded. Raise "
-            "MAX_UPLOADS_PAGES and re-run."
-        )
+    _check_not_capped(request, f"listing items of playlist {playlist_id}")
     return out
 
 
@@ -172,14 +172,12 @@ _INSERT_RETRY_ATTEMPTS = 5
 _INSERT_RETRY_DELAY_SECONDS = 2.0
 
 
-def _insert_video(
-    service: Any, dest_id: str, video_id: str, retry_transient: bool
-) -> None:
-    """Insert a video into a playlist. ``retry_transient`` enables a few backoff
-    retries on a 404 or a transient 5xx — set it only for a just-created playlist,
-    whose propagation lag those absorb. For a pre-existing playlist it's False, so a
-    404 (the playlist is genuinely gone) or any error surfaces immediately rather
-    than wasting retries/quota."""
+def _insert_video(service: Any, dest_id: str, video_id: str, created: bool) -> None:
+    """Insert a video into a playlist with a few backoff retries. Transient 5xx and
+    network errors are always retried (they're unrelated to the playlist). A 404 is
+    retried ONLY when ``created`` — i.e. the playlist was made this run, so the 404 is
+    propagation lag; for a pre-existing playlist a 404 means it is genuinely gone and
+    surfaces immediately rather than wasting retries/quota."""
     body = {
         "snippet": {
             "playlistId": dest_id,
@@ -193,15 +191,15 @@ def _insert_video(
             return
         except RETRIABLE_EXCEPTIONS:
             # Transient network error (socket timeout, broken pipe, etc.).
-            if retry_transient and not last:
+            if not last:
                 time.sleep(_INSERT_RETRY_DELAY_SECONDS)
                 continue
             raise
         except HttpError as exc:
             resp = getattr(exc, "resp", None)
             status = resp.status if resp is not None else None
-            retriable = status == 404 or status in RETRIABLE_STATUS_CODES
-            if retry_transient and retriable and not last:
+            retriable = status in RETRIABLE_STATUS_CODES or (status == 404 and created)
+            if retriable and not last:
                 time.sleep(_INSERT_RETRY_DELAY_SECONDS)
                 continue
             raise
@@ -259,13 +257,10 @@ def _perform_move(
             set() if created else _playlist_video_ids(service, dest_id)
         )
     if item["video_id"] not in dest_members[dest_id]:
-        # Tolerate a lagging insert for any playlist created this run (not just the
-        # creating call): all its videos may hit the same propagation window.
+        # A 404 is retried only for a playlist created this run (propagation lag);
+        # transient 5xx/network errors retry regardless.
         _insert_video(
-            service,
-            dest_id,
-            item["video_id"],
-            retry_transient=dest_id in created_dests,
+            service, dest_id, item["video_id"], created=dest_id in created_dests
         )
         dest_members[dest_id].add(item["video_id"])
     service.playlistItems().delete(id=item["item_id"]).execute()
@@ -331,6 +326,10 @@ def main() -> None:
                 service, item, dest_name, name_to_id, dest_members, created_dests
             )
             moves += 1
+        except _TruncatedListingError:
+            # A truncated listing (hit while seeding dedup) must abort the whole run,
+            # not be downgraded to one recorded move failure.
+            raise
         except Exception as exc:
             failures.append(f"move {item['video_id']} -> {dest_name!r}: {exc}")
 
