@@ -108,8 +108,9 @@ class DocumentUploader:
 
     def _archive_meeting(self, meeting_key: str, detail: dict) -> None:
         folder_id = self._ensure_meeting_folder(meeting_key)
+        wanted = docs_to_archive(detail)
         links: dict[str, str] = {}
-        for label, url in docs_to_archive(detail).items():
+        for label, url in wanted.items():
             link = self._archive_one(folder_id, meeting_key, label, url)
             if link:
                 links[label] = link
@@ -118,10 +119,23 @@ class DocumentUploader:
                 self.meeting_type.doc_link_key_template.format(meeting_key=meeting_key),
                 mapping=cast("Mapping[str | bytes, str]", links),
             )
-        # Mark archived only after the uploads succeeded (a raise above skips
-        # this, so the meeting is retried next run).
-        r.sadd(self.meeting_type.redis_key(DOCS_ARCHIVED_KEY), meeting_key)
-        self.logger.info("Archived %d document(s) for %s", len(links), meeting_key)
+        # Mark archived only when EVERY wanted document got a link. A raise above
+        # already skips this; but _archive_one can also return "" without raising
+        # (e.g. a create that yields no webViewLink), so a partial/zero result must
+        # leave the meeting unarchived so the next run retries the rest — otherwise
+        # it stays in DOCS_ARCHIVED with an empty doc_link hash and reconcile reports
+        # MISSING_DOC forever with no path to recover.
+        if len(links) == len(wanted):
+            r.sadd(self.meeting_type.redis_key(DOCS_ARCHIVED_KEY), meeting_key)
+            self.logger.info("Archived %d document(s) for %s", len(links), meeting_key)
+        else:
+            self.logger.warning(
+                "Archived %d of %d document(s) for %s; leaving unarchived to retry "
+                "the rest next run",
+                len(links),
+                len(wanted),
+                meeting_key,
+            )
 
     def _archive_one(
         self, folder_id: str, meeting_key: str, label: str, url: str

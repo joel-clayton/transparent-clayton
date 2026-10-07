@@ -1,3 +1,4 @@
+import logging
 import unittest
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -51,6 +52,41 @@ class TestArchiveOneUploadsFromDisk(unittest.TestCase):
         self.assertEqual(link, "https://drive/view")
         # Uploaded with the type derived from the file, not a hardcoded PDF.
         self.assertEqual(media.call_args.kwargs["mimetype"], "image/png")
+
+
+class TestArchiveMeetingMarksArchivedOnlyWhenComplete(unittest.TestCase):
+    """A meeting is added to DOCS_ARCHIVED only when every document got a link;
+    a partial/zero result leaves it unarchived so the next run retries — otherwise
+    reconcile reports MISSING_DOC forever with no recovery path (TRA-154)."""
+
+    DETAIL = {
+        "agenda_packet": "https://x/packet.pdf",
+        "minutes_and_supplemental_materials": {"Staff Report": "https://x/s.pdf"},
+    }
+
+    def _archiver(self):
+        archiver = DocumentUploader.__new__(DocumentUploader)
+        archiver.meeting_type = CITY_COUNCIL
+        archiver.logger = logging.getLogger("test")
+        archiver._ensure_meeting_folder = lambda key: "FOLDER"
+        return archiver
+
+    def test_all_succeed_marks_archived(self):
+        archiver = self._archiver()
+        archiver._archive_one = lambda folder, key, label, url: f"link:{label}"
+        with patch("src.processors.upload_docs.r") as r:
+            archiver._archive_meeting("2026-06-02", self.DETAIL)
+        r.sadd.assert_called_once()
+
+    def test_soft_failure_leaves_unarchived_for_retry(self):
+        archiver = self._archiver()
+        # One document returns "" (create succeeded but no link) — not a raise.
+        archiver._archive_one = lambda folder, key, label, url: (
+            "" if label == "Staff Report" else f"link:{label}"
+        )
+        with patch("src.processors.upload_docs.r") as r:
+            archiver._archive_meeting("2026-06-02", self.DETAIL)
+        r.sadd.assert_not_called()  # retried next run
 
 
 if __name__ == "__main__":
