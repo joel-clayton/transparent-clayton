@@ -41,6 +41,7 @@ from src.processors.upload_video import (  # noqa: E402
     CLIENT_SECRETS_FILE,
     MAX_UPLOADS_PAGES,
     RESULT_COUNT,
+    RETRIABLE_STATUS_CODES,
     SCOPES,
     YOUTUBE_TOKEN_FILE,
 )
@@ -162,8 +163,14 @@ _INSERT_RETRY_ATTEMPTS = 5
 _INSERT_RETRY_DELAY_SECONDS = 2.0
 
 
-def _insert_video(service: Any, dest_id: str, video_id: str) -> None:
-    """Insert a video into a playlist, retrying a 404 a few times (see above)."""
+def _insert_video(
+    service: Any, dest_id: str, video_id: str, retry_transient: bool
+) -> None:
+    """Insert a video into a playlist. ``retry_transient`` enables a few backoff
+    retries on a 404 or a transient 5xx — set it only for a just-created playlist,
+    whose propagation lag those absorb. For a pre-existing playlist it's False, so a
+    404 (the playlist is genuinely gone) or any error surfaces immediately rather
+    than wasting retries/quota."""
     body = {
         "snippet": {
             "playlistId": dest_id,
@@ -176,8 +183,10 @@ def _insert_video(service: Any, dest_id: str, video_id: str) -> None:
             return
         except HttpError as exc:
             resp = getattr(exc, "resp", None)
+            status = resp.status if resp is not None else None
+            retriable = status == 404 or status in RETRIABLE_STATUS_CODES
             last = attempt == _INSERT_RETRY_ATTEMPTS - 1
-            if resp is not None and resp.status == 404 and not last:
+            if retry_transient and retriable and not last:
                 time.sleep(_INSERT_RETRY_DELAY_SECONDS)
                 continue
             raise
@@ -231,7 +240,8 @@ def _perform_move(
             set() if created else _playlist_video_ids(service, dest_id)
         )
     if item["video_id"] not in dest_members[dest_id]:
-        _insert_video(service, dest_id, item["video_id"])
+        # Only tolerate a lagging insert for a playlist we just created this run.
+        _insert_video(service, dest_id, item["video_id"], retry_transient=created)
         dest_members[dest_id].add(item["video_id"])
     service.playlistItems().delete(id=item["item_id"]).execute()
 

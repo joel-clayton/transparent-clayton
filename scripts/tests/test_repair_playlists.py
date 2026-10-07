@@ -11,6 +11,7 @@ from scripts.repair_playlists import (
     _ensure_playlist,
     _insert_video,
     _perform_move,
+    _playlist_items,
     classify_item,
     owner_type,
     video_type,
@@ -137,21 +138,39 @@ class TestPlaylistHelpers(unittest.TestCase):
 
 
 class TestInsertVideoRetry(unittest.TestCase):
-    def test_retries_a_404_then_succeeds(self):
+    def test_just_created_retries_404_then_succeeds(self):
         svc = MagicMock()
         execute = svc.playlistItems.return_value.insert.return_value.execute
         execute.side_effect = [HttpError(MagicMock(status=404), b"not found"), None]
         with patch("scripts.repair_playlists.time.sleep"):
-            _insert_video(svc, "PID", "vid")
+            _insert_video(svc, "PID", "vid", retry_transient=True)
         self.assertEqual(execute.call_count, 2)  # retried once, then succeeded
 
-    def test_reraises_a_non_404(self):
+    def test_just_created_retries_transient_5xx(self):
+        svc = MagicMock()
+        execute = svc.playlistItems.return_value.insert.return_value.execute
+        execute.side_effect = [HttpError(MagicMock(status=503), b"busy"), None]
+        with patch("scripts.repair_playlists.time.sleep"):
+            _insert_video(svc, "PID", "vid", retry_transient=True)
+        self.assertEqual(execute.call_count, 2)
+
+    def test_preexisting_playlist_fails_fast_on_404(self):
+        # A pre-existing (not just-created) playlist that 404s is genuinely gone;
+        # surface it immediately instead of wasting retries.
+        svc = MagicMock()
+        execute = svc.playlistItems.return_value.insert.return_value.execute
+        execute.side_effect = HttpError(MagicMock(status=404), b"gone")
+        with self.assertRaises(HttpError):
+            _insert_video(svc, "PID", "vid", retry_transient=False)
+        self.assertEqual(execute.call_count, 1)  # no retries
+
+    def test_reraises_a_non_retriable_status(self):
         svc = MagicMock()
         svc.playlistItems.return_value.insert.return_value.execute.side_effect = (
             HttpError(MagicMock(status=403), b"forbidden")
         )
         with self.assertRaises(HttpError):
-            _insert_video(svc, "PID", "vid")
+            _insert_video(svc, "PID", "vid", retry_transient=True)
 
 
 class TestPaginationCapWarning(unittest.TestCase):
@@ -167,6 +186,20 @@ class TestPaginationCapWarning(unittest.TestCase):
             contextlib.redirect_stdout(buf),
         ):
             _all_playlists(svc)
+        self.assertIn("cap", buf.getvalue())
+
+    def test_playlist_items_warns_when_cap_hit(self):
+        svc = MagicMock()
+        svc.playlistItems.return_value.list.return_value.execute.return_value = {
+            "items": []
+        }
+        svc.playlistItems.return_value.list_next.return_value = MagicMock()  # more
+        buf = io.StringIO()
+        with (
+            patch("scripts.repair_playlists.MAX_UPLOADS_PAGES", 1),
+            contextlib.redirect_stdout(buf),
+        ):
+            _playlist_items(svc, "PID")
         self.assertIn("cap", buf.getvalue())
 
 
