@@ -54,6 +54,13 @@ logger = logging.getLogger(__name__)
 __all__ = ["DocumentUploader", "docs_to_archive"]
 
 
+def _drive_view_link(file_id: str) -> str:
+    """The canonical Drive view link for a file id — used when a create/list
+    response omits ``webViewLink``, so a reused or just-created file still yields a
+    usable, reconcile-parseable link instead of an empty string."""
+    return f"https://drive.google.com/file/d/{file_id}/view"
+
+
 class DocumentUploader:
     def __init__(self, meeting_type: MeetingType = CITY_COUNCIL) -> None:
         self.meeting_type = meeting_type
@@ -140,7 +147,9 @@ class DocumentUploader:
     def _archive_one(
         self, folder_id: str, meeting_key: str, label: str, url: str
     ) -> str:
-        # Idempotent: if a retry already uploaded this doc, reuse it.
+        # Idempotent: if a retry already uploaded this doc, reuse it (by id, so a
+        # file that exists but whose listing omitted webViewLink is still reused
+        # rather than re-created into a duplicate).
         existing = self._find_file(folder_id, label)
         if existing:
             return existing
@@ -164,7 +173,7 @@ class DocumentUploader:
             )
             .execute()
         )
-        return created.get("webViewLink", "")
+        return created.get("webViewLink") or _drive_view_link(created["id"])
 
     def _ensure_meeting_folder(self, meeting_key: str) -> str:
         name = f"{self.meeting_type.file_stub} {meeting_key}"
@@ -206,10 +215,15 @@ class DocumentUploader:
             .list(
                 q=query,
                 spaces="drive",
-                fields="files(webViewLink)",
+                fields="files(id, webViewLink)",
                 supportsAllDrives=True,
             )
             .execute()
         )
         files = results.get("files", [])
-        return files[0].get("webViewLink", "") if files else None
+        if not files:
+            return None
+        # Reuse by id so a retry never re-creates (duplicates) an already-uploaded
+        # file; fall back to the canonical view link when the listing omits one.
+        found = files[0]
+        return found.get("webViewLink") or _drive_view_link(found["id"])
