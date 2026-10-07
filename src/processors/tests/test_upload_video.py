@@ -234,16 +234,6 @@ class TestPlaylistBucketing(unittest.TestCase):
         # Only the City Council playlist is recorded — never the PC one.
         self.assertEqual(uploader.playlists_by_year, {"2026": "cc26"})
 
-    def test_get_playlists_matches_despite_title_whitespace_or_casing(self):
-        # An externally-renamed playlist (trailing space, casing) is still reused
-        # rather than duplicated.
-        items = [
-            {"id": "cc26", "snippet": {"title": " 2026 city council meetings "}},
-        ]
-        uploader = self._uploader_with_playlists(items)
-        uploader.get_playlists()
-        self.assertEqual(uploader.playlists_by_year, {"2026": "cc26"})
-
     def test_get_playlist_for_year_resolves_from_type_list_else_creates(self):
         uploader = make_uploader(VideoUploader)
         uploader.playlists_by_year = {"2026": "cc26", "2025": "cc25"}

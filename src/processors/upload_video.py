@@ -76,12 +76,6 @@ RESULT_COUNT = 50  # page size for the uploads list (see get_recent_video_titles
 MAX_UPLOADS_PAGES = 200  # safety cap on pagination (~10k videos at 50/page)
 
 
-def _normalize_playlist_title(title: str) -> str:
-    """Collapse whitespace and casing so a playlist whose title drifted from the
-    template (trailing space, casing) still matches rather than spawning a duplicate."""
-    return " ".join(title.split()).casefold()
-
-
 class VideoUploader(Processor):
     source_dir: str
     job_type: JobType
@@ -128,12 +122,9 @@ class VideoUploader(Processor):
                 # Previously EVERY year-titled playlist (e.g. all the City Council
                 # ones) was mapped to this type's video_playlist key, so a
                 # non-City-Council upload resolved to a City Council playlist.
-                # Matched tolerantly (whitespace/case) so an externally-renamed
-                # playlist is reused rather than duplicated.
-                expected = self.meeting_type.playlist_name_template.format(year_str)
-                if _normalize_playlist_title(title) != _normalize_playlist_title(
-                    expected
-                ):
+                # Exact title match, kept identical to scripts/repair_playlists.py
+                # so the uploader and the audit/repair tool agree on ownership.
+                if title != self.meeting_type.playlist_name_template.format(year_str):
                     continue
                 self._cache_playlist(item["id"], year_str)
             request = self.service.playlists().list_next(request, response)
@@ -143,7 +134,9 @@ class VideoUploader(Processor):
         # Kept only in-memory for this run. get_playlists re-lists every run, so
         # the old video_playlist Redis pointer never actually saved an API call;
         # it's dropped here (nothing reads it) rather than left as dead state.
-        self.playlists_by_year[year_str] = playlist_id
+        # setdefault keeps the first playlist seen for a year if the channel somehow
+        # has two with the same title (deterministic, matching the prior list order).
+        self.playlists_by_year.setdefault(year_str, playlist_id)
 
     def create_playlist_for_year(self, year_str: str) -> str:
         request = self.service.playlists().insert(
