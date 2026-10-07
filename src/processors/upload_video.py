@@ -481,13 +481,17 @@ class VideoUploader(Processor):
         if publish_date:
             options.update(recording_date=publish_date)
 
+        # Resolve (and if needed create) the year playlist BEFORE uploading, so a
+        # truncated listing raises here rather than orphaning an already-uploaded
+        # video (which channel-level idempotency would then skip forever).
+        year_str = datetime.strftime(dt, "%Y")
+        playlist_id = self.get_playlist_for_year(year_str)
+
         try:
             self.logger.info(f"Uploading video for {dt}")
             video_id = self.initialize_upload(options)
             if not video_id:
                 raise Exception("No Video ID returned")
-            year_str = datetime.strftime(dt, "%Y")
-            playlist_id = self.get_playlist_for_year(year_str)
             self.add_video_to_playlist(playlist_id, video_id)
         except HttpError as e:
             # Do NOT report success on a failed upload (e.g. hitting YouTube's
