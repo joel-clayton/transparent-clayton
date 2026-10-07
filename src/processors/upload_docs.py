@@ -61,6 +61,12 @@ def _drive_view_link(file_id: str) -> str:
     return f"https://drive.google.com/file/d/{file_id}/view"
 
 
+def _escape_drive_query_value(value: str) -> str:
+    """Escape a value for a Drive ``q`` string literal. Without this a name with an
+    apostrophe (e.g. "Mayor's Report") produces an invalid query and a 400."""
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
 class DocumentUploader:
     def __init__(self, meeting_type: MeetingType = CITY_COUNCIL) -> None:
         self.meeting_type = meeting_type
@@ -115,34 +121,23 @@ class DocumentUploader:
 
     def _archive_meeting(self, meeting_key: str, detail: dict) -> None:
         folder_id = self._ensure_meeting_folder(meeting_key)
-        wanted = docs_to_archive(detail)
         links: dict[str, str] = {}
-        for label, url in wanted.items():
-            link = self._archive_one(folder_id, meeting_key, label, url)
-            if link:
-                links[label] = link
+        for label, url in docs_to_archive(detail).items():
+            links[label] = self._archive_one(folder_id, meeting_key, label, url)
         if links:
             r.hset(
                 self.meeting_type.doc_link_key_template.format(meeting_key=meeting_key),
                 mapping=cast("Mapping[str | bytes, str]", links),
             )
-        # Mark archived only when EVERY wanted document got a link. A raise above
-        # already skips this; but _archive_one can also return "" without raising
-        # (e.g. a create that yields no webViewLink), so a partial/zero result must
-        # leave the meeting unarchived so the next run retries the rest — otherwise
-        # it stays in DOCS_ARCHIVED with an empty doc_link hash and reconcile reports
-        # MISSING_DOC forever with no path to recover.
-        if len(links) == len(wanted):
-            r.sadd(self.meeting_type.redis_key(DOCS_ARCHIVED_KEY), meeting_key)
-            self.logger.info("Archived %d document(s) for %s", len(links), meeting_key)
-        else:
-            self.logger.warning(
-                "Archived %d of %d document(s) for %s; leaving unarchived to retry "
-                "the rest next run",
-                len(links),
-                len(wanted),
-                meeting_key,
-            )
+        # Reaching here means every document archived: _archive_one returns a usable
+        # link for each (reusing an existing file by id, or constructing one) or
+        # raises — and a raise aborts above (caught in process()), leaving the
+        # meeting unarchived so the next run retries. So a meeting is marked archived
+        # only when its doc_link hash is complete, never with gaps (the bug TRA-154
+        # set out to fix: a meeting stuck in DOCS_ARCHIVED with empty/partial links
+        # that reconcile reported as MISSING_DOC forever).
+        r.sadd(self.meeting_type.redis_key(DOCS_ARCHIVED_KEY), meeting_key)
+        self.logger.info("Archived %d document(s) for %s", len(links), meeting_key)
 
     def _archive_one(
         self, folder_id: str, meeting_key: str, label: str, url: str
@@ -173,7 +168,17 @@ class DocumentUploader:
             )
             .execute()
         )
-        return created.get("webViewLink") or _drive_view_link(created["id"])
+        link = created.get("webViewLink")
+        if link:
+            return link
+        file_id = created.get("id")
+        if file_id:
+            return _drive_view_link(file_id)
+        # Never return a falsy link (that would mark the meeting archived with an
+        # incomplete doc_link hash); fail loudly so the meeting is retried instead.
+        raise RuntimeError(
+            f"Drive create for {label!r} returned neither id nor webViewLink"
+        )
 
     def _ensure_meeting_folder(self, meeting_key: str) -> str:
         name = f"{self.meeting_type.file_stub} {meeting_key}"
@@ -197,7 +202,8 @@ class DocumentUploader:
 
     def _find_folder(self, name: str) -> str | None:
         query = (
-            f"name = '{name}' and '{self.docs_parent_id}' in parents and "
+            f"name = '{_escape_drive_query_value(name)}' and "
+            f"'{self.docs_parent_id}' in parents and "
             "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
         )
         results = (
@@ -209,7 +215,10 @@ class DocumentUploader:
         return folders[0]["id"] if folders else None
 
     def _find_file(self, folder_id: str, name: str) -> str | None:
-        query = f"name = '{name}' and '{folder_id}' in parents and trashed = false"
+        query = (
+            f"name = '{_escape_drive_query_value(name)}' and "
+            f"'{folder_id}' in parents and trashed = false"
+        )
         results = (
             self.service.files()
             .list(

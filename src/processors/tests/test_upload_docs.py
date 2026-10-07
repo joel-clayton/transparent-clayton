@@ -96,10 +96,12 @@ class TestFindFileReusesById(unittest.TestCase):
         archiver.service.files.return_value.create.assert_not_called()  # no duplicate
 
 
-class TestArchiveMeetingMarksArchivedOnlyWhenComplete(unittest.TestCase):
-    """A meeting is added to DOCS_ARCHIVED only when every document got a link;
-    a partial/zero result leaves it unarchived so the next run retries — otherwise
-    reconcile reports MISSING_DOC forever with no recovery path (TRA-154)."""
+class TestArchiveMeetingMarksArchived(unittest.TestCase):
+    """A meeting is added to DOCS_ARCHIVED only after every document archived.
+    _archive_one returns a usable link for each or raises; a raise aborts before the
+    sadd so the meeting stays unarchived and the next run retries — never stuck in
+    DOCS_ARCHIVED with gaps that reconcile would report as MISSING_DOC forever
+    (TRA-154)."""
 
     DETAIL = {
         "agenda_packet": "https://x/packet.pdf",
@@ -120,15 +122,19 @@ class TestArchiveMeetingMarksArchivedOnlyWhenComplete(unittest.TestCase):
             archiver._archive_meeting("2026-06-02", self.DETAIL)
         r.sadd.assert_called_once()
 
-    def test_soft_failure_leaves_unarchived_for_retry(self):
+    def test_failure_aborts_before_marking_archived(self):
         archiver = self._archiver()
-        # One document returns "" (create succeeded but no link) — not a raise.
-        archiver._archive_one = lambda folder, key, label, url: (
-            "" if label == "Staff Report" else f"link:{label}"
-        )
+
+        def one(folder, key, label, url):
+            if label == "Staff Report":
+                raise RuntimeError("drive 500")
+            return f"link:{label}"
+
+        archiver._archive_one = one
         with patch("src.processors.upload_docs.r") as r:
-            archiver._archive_meeting("2026-06-02", self.DETAIL)
-        r.sadd.assert_not_called()  # retried next run
+            with self.assertRaises(RuntimeError):
+                archiver._archive_meeting("2026-06-02", self.DETAIL)
+        r.sadd.assert_not_called()  # not archived -> retried next run
 
 
 if __name__ == "__main__":
