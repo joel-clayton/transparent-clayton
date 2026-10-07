@@ -67,6 +67,20 @@ def _escape_drive_query_value(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
+def _file_link_or_raise(resource: dict, name: str) -> str:
+    """A usable view link for a Drive file resource (found or just created): its
+    ``webViewLink``, else one constructed from its id, else a loud error — never a
+    falsy link (that would mark a meeting archived with an incomplete doc_link
+    hash)."""
+    link = resource.get("webViewLink")
+    if link:
+        return link
+    file_id = resource.get("id")
+    if file_id:
+        return _drive_view_link(file_id)
+    raise RuntimeError(f"Drive file {name!r} has neither id nor webViewLink")
+
+
 class DocumentUploader:
     def __init__(self, meeting_type: MeetingType = CITY_COUNCIL) -> None:
         self.meeting_type = meeting_type
@@ -168,17 +182,7 @@ class DocumentUploader:
             )
             .execute()
         )
-        link = created.get("webViewLink")
-        if link:
-            return link
-        file_id = created.get("id")
-        if file_id:
-            return _drive_view_link(file_id)
-        # Never return a falsy link (that would mark the meeting archived with an
-        # incomplete doc_link hash); fail loudly so the meeting is retried instead.
-        raise RuntimeError(
-            f"Drive create for {label!r} returned neither id nor webViewLink"
-        )
+        return _file_link_or_raise(created, label)
 
     def _ensure_meeting_folder(self, meeting_key: str) -> str:
         name = f"{self.meeting_type.file_stub} {meeting_key}"
@@ -234,5 +238,4 @@ class DocumentUploader:
             return None
         # Reuse by id so a retry never re-creates (duplicates) an already-uploaded
         # file; fall back to the canonical view link when the listing omits one.
-        found = files[0]
-        return found.get("webViewLink") or _drive_view_link(found["id"])
+        return _file_link_or_raise(files[0], name)
