@@ -1,9 +1,15 @@
+import contextlib
+import io
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
+from googleapiclient.errors import HttpError
 
 from scripts.repair_playlists import (
     SKIP_VIDEO_IDS,
+    _all_playlists,
     _ensure_playlist,
+    _insert_video,
     _perform_move,
     classify_item,
     owner_type,
@@ -128,6 +134,40 @@ class TestPlaylistHelpers(unittest.TestCase):
         # Already in the destination -> no second insert, but still removed from source.
         svc.playlistItems.return_value.insert.assert_not_called()
         svc.playlistItems.return_value.delete.assert_called_once_with(id="itemid")
+
+
+class TestInsertVideoRetry(unittest.TestCase):
+    def test_retries_a_404_then_succeeds(self):
+        svc = MagicMock()
+        execute = svc.playlistItems.return_value.insert.return_value.execute
+        execute.side_effect = [HttpError(MagicMock(status=404), b"not found"), None]
+        with patch("scripts.repair_playlists.time.sleep"):
+            _insert_video(svc, "PID", "vid")
+        self.assertEqual(execute.call_count, 2)  # retried once, then succeeded
+
+    def test_reraises_a_non_404(self):
+        svc = MagicMock()
+        svc.playlistItems.return_value.insert.return_value.execute.side_effect = (
+            HttpError(MagicMock(status=403), b"forbidden")
+        )
+        with self.assertRaises(HttpError):
+            _insert_video(svc, "PID", "vid")
+
+
+class TestPaginationCapWarning(unittest.TestCase):
+    def test_all_playlists_warns_when_cap_hit(self):
+        svc = MagicMock()
+        svc.playlists.return_value.list.return_value.execute.return_value = {
+            "items": []
+        }
+        svc.playlists.return_value.list_next.return_value = MagicMock()  # always more
+        buf = io.StringIO()
+        with (
+            patch("scripts.repair_playlists.MAX_UPLOADS_PAGES", 1),
+            contextlib.redirect_stdout(buf),
+        ):
+            _all_playlists(svc)
+        self.assertIn("cap", buf.getvalue())
 
 
 if __name__ == "__main__":

@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 from typing import Any
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -31,6 +32,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from googleapiclient.discovery import build  # noqa: E402
+from googleapiclient.errors import HttpError  # noqa: E402
 
 from celery_app import r  # noqa: E402
 from src.meeting_types import MEETING_TYPES, MeetingType  # noqa: E402
@@ -118,6 +120,11 @@ def _all_playlists(service: Any) -> dict[str, str]:
             out[item["id"]] = item["snippet"]["title"]
         request = service.playlists().list_next(request, response)
         pages += 1
+    if request is not None:
+        print(
+            f"    WARNING: hit the {MAX_UPLOADS_PAGES}-page cap while listing "
+            "playlists; the channel has more and this audit/repair may be incomplete."
+        )
     return out
 
 
@@ -141,7 +148,39 @@ def _playlist_items(service: Any, playlist_id: str) -> list[dict[str, str]]:
             )
         request = service.playlistItems().list_next(request, response)
         pages += 1
+    if request is not None:
+        print(
+            f"    WARNING: hit the {MAX_UPLOADS_PAGES}-page cap while listing items "
+            f"of playlist {playlist_id}; it has more and this may be incomplete."
+        )
     return out
+
+
+# A just-created playlist can briefly be not-yet-writable (the same propagation lag
+# that makes its item listing 404); retry the insert a few times before giving up.
+_INSERT_RETRY_ATTEMPTS = 5
+_INSERT_RETRY_DELAY_SECONDS = 2.0
+
+
+def _insert_video(service: Any, dest_id: str, video_id: str) -> None:
+    """Insert a video into a playlist, retrying a 404 a few times (see above)."""
+    body = {
+        "snippet": {
+            "playlistId": dest_id,
+            "resourceId": {"kind": "youtube#video", "videoId": video_id},
+        }
+    }
+    for attempt in range(_INSERT_RETRY_ATTEMPTS):
+        try:
+            service.playlistItems().insert(part="snippet", body=body).execute()
+            return
+        except HttpError as exc:
+            resp = getattr(exc, "resp", None)
+            last = attempt == _INSERT_RETRY_ATTEMPTS - 1
+            if resp is not None and resp.status == 404 and not last:
+                time.sleep(_INSERT_RETRY_DELAY_SECONDS)
+                continue
+            raise
 
 
 def _ensure_playlist(
@@ -192,18 +231,7 @@ def _perform_move(
             set() if created else _playlist_video_ids(service, dest_id)
         )
     if item["video_id"] not in dest_members[dest_id]:
-        service.playlistItems().insert(
-            part="snippet",
-            body={
-                "snippet": {
-                    "playlistId": dest_id,
-                    "resourceId": {
-                        "kind": "youtube#video",
-                        "videoId": item["video_id"],
-                    },
-                }
-            },
-        ).execute()
+        _insert_video(service, dest_id, item["video_id"])
         dest_members[dest_id].add(item["video_id"])
     service.playlistItems().delete(id=item["item_id"]).execute()
 
