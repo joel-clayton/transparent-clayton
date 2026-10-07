@@ -265,6 +265,16 @@ class TestScope(unittest.TestCase):
     def test_known_but_disabled_destination_returns_false(self):
         self.assertFalse(Scope.of(youtube=False, google_docs=True, wiki=True).youtube)
 
+    def test_assert_handled_present_raises_on_rename(self):
+        # A handled destination renamed in the registry must fail loudly up front.
+        with self.assertRaises(KeyError):
+            Scope.of(video=True, google_docs=True, wiki=True).assert_handled_present()
+
+    def test_assert_handled_present_ok_when_all_handled_known(self):
+        Scope.of(
+            youtube=False, google_docs=True, wiki=True
+        ).assert_handled_present()  # no raise even when some are disabled
+
     def test_accessor_for_unregistered_destination_raises(self):
         # A registry rename that leaves a named accessor dangling must fail loudly,
         # not silently disable that destination's findings.

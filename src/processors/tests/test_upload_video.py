@@ -55,6 +55,22 @@ class TestGetRecentVideoTitlesPaginates(unittest.TestCase):
         )
 
 
+class TestPlaylistsFetchedOnce(unittest.TestCase):
+    """A type with no playlists yet must not re-list the whole channel on every
+    resolve: _playlists_fetched guards that (TRA-163)."""
+
+    def test_lists_at_most_once_per_run(self):
+        uploader = make_uploader(VideoUploader)
+        uploader.service = MagicMock()
+        pl = uploader.service.playlists.return_value
+        pl.list.return_value.execute.return_value = {"items": []}  # none for this type
+        pl.list_next.return_value = None
+        with patch.object(uploader, "create_playlist_for_year", return_value="new"):
+            uploader.get_playlist_for_year("2026")  # fetches once
+            uploader.get_playlist_for_year("2027")  # must not re-fetch
+        pl.list.assert_called_once()
+
+
 class TestVideoUploaderGatherDedup(TempDirTestCase):
     """During the flat->bucket transition a compressed file can exist in both the
     per-type bucket and the legacy flat dir; gather_dates must return it once (the
@@ -195,7 +211,8 @@ class TestProcessForDateFailsLoudly(unittest.TestCase):
 
         uploader = make_uploader(VideoUploader)
         uploader.service = MagicMock()  # truthy: skip re-auth
-        uploader.playlists_by_year = {"2026": "cc26"}  # non-empty: skip get_playlists()
+        uploader.playlists_by_year = {"2026": "cc26"}
+        uploader._playlists_fetched = True  # skip get_playlists()
         date = "/vol/Clayton CA City Council Meeting 2026-05-08 07_00 PM - 000.mp4"
         err = HttpError(MagicMock(status=403), b"dailyLimitExceeded")
 
@@ -237,6 +254,7 @@ class TestPlaylistBucketing(unittest.TestCase):
     def test_get_playlist_for_year_resolves_from_type_list_else_creates(self):
         uploader = make_uploader(VideoUploader)
         uploader.playlists_by_year = {"2026": "cc26", "2025": "cc25"}
+        uploader._playlists_fetched = True  # already listed; don't re-fetch
         # A year present in this type's list resolves without creating.
         with patch.object(uploader, "create_playlist_for_year") as create:
             self.assertEqual(uploader.get_playlist_for_year("2026"), "cc26")

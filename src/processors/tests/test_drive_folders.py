@@ -40,5 +40,20 @@ class TestFindOrCreateTypeFolder(unittest.TestCase):
         svc.files.return_value.list.assert_not_called()
 
 
+class TestEscapeDriveQueryValue(unittest.TestCase):
+    def test_escapes_apostrophe_and_backslash(self):
+        self.assertEqual(
+            drive_folders.escape_drive_query_value("Mayor's Report"),
+            "Mayor\\'s Report",
+        )
+        self.assertEqual(drive_folders.escape_drive_query_value("a\\b"), "a\\\\b")
+
+    def test_leaves_plain_value_unchanged(self):
+        self.assertEqual(
+            drive_folders.escape_drive_query_value("City Council Meetings"),
+            "City Council Meetings",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

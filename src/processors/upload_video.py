@@ -92,6 +92,10 @@ class VideoUploader(Processor):
         self.service = self.authenticate()
         # year -> playlist id, for this meeting type only; populated by get_playlists.
         self.playlists_by_year: dict[str, str] = {}
+        # Whether get_playlists has run this instance. An empty playlists_by_year is
+        # ambiguous (not-fetched vs. this type has none yet), so track fetched
+        # explicitly to avoid re-listing the whole channel on every resolve.
+        self._playlists_fetched = False
         self.videos: dict = {}
         super().__init__()
 
@@ -129,6 +133,7 @@ class VideoUploader(Processor):
                 self._cache_playlist(item["id"], year_str)
             request = self.service.playlists().list_next(request, response)
             pages += 1
+        self._playlists_fetched = True
 
     def _cache_playlist(self, playlist_id: str, year_str: str) -> None:
         # Kept only in-memory for this run. get_playlists re-lists every run, so
@@ -154,7 +159,7 @@ class VideoUploader(Processor):
         return playlist_id
 
     def get_playlist_for_year(self, year_str: str) -> str:
-        if not self.playlists_by_year:
+        if not self._playlists_fetched:
             self.get_playlists()
         # Resolve only from playlists get_playlists confirmed belong to this type
         # this run, so a stale/mismapped video_playlist pointer (from the old
@@ -441,7 +446,7 @@ class VideoUploader(Processor):
     def process_for_date(self, date: str) -> None:
         if not self.service:
             self.authenticate()
-        if not self.playlists_by_year:
+        if not self._playlists_fetched:
             self.get_playlists()
         if get_file_size_in_mb(date) < MIN_COMPRESSED_VIDEO_MB:
             self.logger.info(f"Skipping {date}, video file size is below minimum")

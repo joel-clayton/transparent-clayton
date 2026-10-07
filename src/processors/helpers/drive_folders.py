@@ -20,6 +20,13 @@ _FOLDER_MIME = "application/vnd.google-apps.folder"
 _cache: dict[tuple[str, str], str] = {}
 
 
+def escape_drive_query_value(value: str) -> str:
+    """Escape a value for a Drive ``q`` string literal (backslash then single quote).
+    Without it a name with an apostrophe (e.g. "Mayor's Report") produces an invalid
+    query and a 400. Use at every site that interpolates a name into a Drive query."""
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
 def find_or_create_type_folder(
     service: Any, meeting_type: MeetingType, parent_id: str = SOURCE_MATERIAL_PARENT_ID
 ) -> str:
@@ -33,7 +40,7 @@ def find_or_create_type_folder(
         return _cache[cache_key]
 
     query = (
-        f"name = '{name}' and '{parent_id}' in parents "
+        f"name = '{escape_drive_query_value(name)}' and '{parent_id}' in parents "
         f"and mimeType = '{_FOLDER_MIME}' and trashed = false"
     )
     results = (
