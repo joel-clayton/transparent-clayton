@@ -96,6 +96,9 @@ class VideoUploader(Processor):
         # ambiguous (not-fetched vs. this type has none yet), so track fetched
         # explicitly to avoid re-listing the whole channel on every resolve.
         self._playlists_fetched = False
+        # Whether the last listing hit the page cap (so a not-found year can't be
+        # safely created — the real playlist may be on an unlisted page).
+        self._playlists_truncated = False
         self.videos: dict = {}
         super().__init__()
 
@@ -133,14 +136,11 @@ class VideoUploader(Processor):
                 self._cache_playlist(item["id"], year_str)
             request = self.service.playlists().list_next(request, response)
             pages += 1
-        if request is not None:
-            # Truncated listing: this type's playlist could be on a dropped page, so
-            # get_playlist_for_year would create a duplicate. Fail loudly rather than
-            # cache an incomplete result (matches scripts/repair_playlists.py).
-            raise RuntimeError(
-                f"Hit the {MAX_UPLOADS_PAGES}-page cap listing playlists; the channel "
-                "has more than this loaded. Raise MAX_UPLOADS_PAGES and re-run."
-            )
+        # Record truncation rather than raising here: a found playlist is still
+        # usable, so only CREATING one for a not-found year is unsafe when truncated
+        # (that is guarded in get_playlist_for_year) — don't abort uploads for a type
+        # whose playlist was already listed.
+        self._playlists_truncated = request is not None
         self._playlists_fetched = True
 
     def _cache_playlist(self, playlist_id: str, year_str: str) -> None:
@@ -174,6 +174,14 @@ class VideoUploader(Processor):
         # cross-type bug) is ignored rather than used. If none matches, create it.
         if year_str in self.playlists_by_year:
             return self.playlists_by_year[year_str]
+        if self._playlists_truncated:
+            # The listing was capped, so this year's playlist may already exist on an
+            # unlisted page; refuse to create a possible duplicate.
+            raise RuntimeError(
+                f"Playlist listing hit the {MAX_UPLOADS_PAGES}-page cap, so the "
+                f"{year_str} playlist can't be safely created (it may exist on an "
+                "unlisted page). Raise MAX_UPLOADS_PAGES and re-run."
+            )
         return self.create_playlist_for_year(year_str)
 
     def add_video_to_playlist(self, playlist_id: str, video_id: str) -> str:

@@ -70,16 +70,24 @@ class TestPlaylistsFetchedOnce(unittest.TestCase):
             uploader.get_playlist_for_year("2027")  # must not re-fetch
         pl.list.assert_called_once()
 
-    def test_get_playlists_raises_on_page_cap(self):
-        # A truncated listing could miss this type's playlist and duplicate it.
+    def test_truncated_listing_blocks_create_but_not_a_found_year(self):
+        # A capped listing must not abort a type whose playlist was found, but must
+        # refuse to create one for a not-found year (it may exist on an unlisted page).
         uploader = make_uploader(VideoUploader)
         uploader.service = MagicMock()
         pl = uploader.service.playlists.return_value
-        pl.list.return_value.execute.return_value = {"items": []}
-        pl.list_next.return_value = MagicMock()  # always more pages
+        pl.list.return_value.execute.return_value = {
+            "items": [
+                {"id": "cc26", "snippet": {"title": "2026 City Council Meetings"}}
+            ]
+        }
+        pl.list_next.return_value = MagicMock()  # more pages -> truncated
         with patch("src.processors.upload_video.MAX_UPLOADS_PAGES", 1):
-            with self.assertRaises(RuntimeError):
-                uploader.get_playlists()
+            uploader.get_playlists()
+        self.assertTrue(uploader._playlists_truncated)
+        self.assertEqual(uploader.get_playlist_for_year("2026"), "cc26")  # found: ok
+        with self.assertRaises(RuntimeError):
+            uploader.get_playlist_for_year("2027")  # not found + truncated: refuse
 
 
 class TestVideoUploaderGatherDedup(TempDirTestCase):
