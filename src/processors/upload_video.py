@@ -166,9 +166,8 @@ class VideoUploader(Processor):
         # Resolve only from playlists get_playlists confirmed belong to this type
         # this run, so a stale/mismapped video_playlist pointer (from the old
         # cross-type bug) is ignored rather than used. If none matches, create it.
-        existing = self.playlists_by_year.get(year_str)
-        if existing:
-            return existing
+        if year_str in self.playlists_by_year:
+            return self.playlists_by_year[year_str]
         return self.create_playlist_for_year(year_str)
 
     def add_video_to_playlist(self, playlist_id: str, video_id: str) -> str:

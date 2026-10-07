@@ -195,7 +195,7 @@ class TestProcessForDateFailsLoudly(unittest.TestCase):
 
         uploader = make_uploader(VideoUploader)
         uploader.service = MagicMock()  # truthy: skip re-auth
-        uploader.playlists = ["existing"]  # truthy: skip get_playlists()
+        uploader.playlists_by_year = {"2026": "cc26"}  # non-empty: skip get_playlists()
         date = "/vol/Clayton CA City Council Meeting 2026-05-08 07_00 PM - 000.mp4"
         err = HttpError(MagicMock(status=403), b"dailyLimitExceeded")
 
