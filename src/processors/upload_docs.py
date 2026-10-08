@@ -13,15 +13,14 @@ transcript uploader's Drive client/token, so this shares one Drive consent with
 transcripts.
 
 Runs unattended only once the OAuth consent screen is published (see
-``google_auth``). Per-meeting document folders are created under the meeting
-type's own folder (e.g. "GHAD Meetings") in the shared Source Material parent;
-setting ``DOCS_DRIVE_PARENT_ID`` overrides that with a fixed folder.
+``google_auth``). Each meeting's documents are created in its folder under the
+meeting type's own folder (e.g. "GHAD Meetings") in the shared Source Material
+parent, alongside that meeting's transcript (TRA-166).
 """
 
 import io
 import json
 import logging
-import os
 from typing import Mapping, cast
 
 from googleapiclient.discovery import build
@@ -40,8 +39,11 @@ from src.processors.helpers.document_store import (
     ensure_document_on_disk,
 )
 from src.processors.helpers.drive_folders import (
+    document_file_name,
     escape_drive_query_value,
+    find_or_create_meeting_folder,
     find_or_create_type_folder,
+    meeting_folder_name,
 )
 from src.processors.helpers.google_auth import load_credentials
 from src.processors.upload_transcript import (
@@ -49,6 +51,7 @@ from src.processors.upload_transcript import (
     DRIVE_TOKEN_FILE,
     SCOPES,
 )
+from src.util import get_year_string_from_string
 
 logger = logging.getLogger(__name__)
 
@@ -88,12 +91,13 @@ class DocumentUploader:
             token_path=DRIVE_TOKEN_FILE,
         )
         self.service = build("drive", "v3", credentials=credentials)
-        # Per-meeting document folders live under this type's own folder (e.g.
-        # "GHAD Meetings") in the shared Source Material parent. An explicit
-        # DOCS_DRIVE_PARENT_ID still overrides, for one-off relocations.
-        self.docs_parent_id = os.environ.get(
-            "DOCS_DRIVE_PARENT_ID"
-        ) or find_or_create_type_folder(self.service, self.meeting_type)
+        # This type's folder (e.g. "GHAD Meetings") under the shared Source Material
+        # parent — the SAME folder the transcript uploader uses, so a meeting's docs
+        # and transcript share one <year>/<meeting> folder (TRA-166). No override
+        # here: a different parent would split docs from the transcript.
+        self.type_parent_id = find_or_create_type_folder(
+            self.service, self.meeting_type
+        )
 
     def process(self) -> None:
         for meeting_key, detail in self._unarchived_meetings():
@@ -153,10 +157,13 @@ class DocumentUploader:
     def _archive_one(
         self, folder_id: str, meeting_key: str, label: str, url: str
     ) -> str:
+        # Explicit, type-tagged Drive name: "<meeting display> - <city label>", so
+        # each document's existence is verifiable by name (TRA-166).
+        doc_name = document_file_name(self.meeting_type, meeting_key, label)
         # Idempotent: if a retry already uploaded this doc, reuse it (by id, so a
         # file that exists but whose listing omitted webViewLink is still reused
         # rather than re-created into a duplicate).
-        existing = self._find_file(folder_id, label)
+        existing = self._find_file(folder_id, doc_name)
         if existing:
             return existing
         # Source from the on-disk copy (downloaded once, shared with the
@@ -172,48 +179,27 @@ class DocumentUploader:
         created = (
             self.service.files()
             .create(
-                body={"name": label, "parents": [folder_id]},
+                body={"name": doc_name, "parents": [folder_id]},
                 media_body=media,
                 fields="id, webViewLink",
                 supportsAllDrives=True,
             )
             .execute()
         )
-        return _file_link_or_raise(created, label)
+        return _file_link_or_raise(created, doc_name)
 
     def _ensure_meeting_folder(self, meeting_key: str) -> str:
-        name = f"{self.meeting_type.file_stub} {meeting_key}"
-        existing = self._find_folder(name)
-        if existing:
-            return existing
-        folder = (
-            self.service.files()
-            .create(
-                body={
-                    "name": name,
-                    "mimeType": "application/vnd.google-apps.folder",
-                    "parents": [self.docs_parent_id],
-                },
-                fields="id",
-                supportsAllDrives=True,
-            )
-            .execute()
+        # The meeting's documents share one folder with its transcript, under the
+        # year: <type>/<year>/<meeting folder> (TRA-166).
+        year = get_year_string_from_string(meeting_key)
+        if not year:
+            # Don't create a folder named "" under the type folder; a key with no
+            # parseable year is a data error, not something to file blindly.
+            raise ValueError(f"No parseable year in meeting key {meeting_key!r}")
+        name = meeting_folder_name(self.meeting_type, meeting_key)
+        return find_or_create_meeting_folder(
+            self.service, self.type_parent_id, year, name
         )
-        return folder["id"]
-
-    def _find_folder(self, name: str) -> str | None:
-        query = (
-            f"name = '{escape_drive_query_value(name)}' and "
-            f"'{self.docs_parent_id}' in parents and "
-            "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-        )
-        results = (
-            self.service.files()
-            .list(q=query, spaces="drive", fields="files(id)", supportsAllDrives=True)
-            .execute()
-        )
-        folders = results.get("files", [])
-        return folders[0]["id"] if folders else None
 
     def _find_file(self, folder_id: str, name: str) -> str | None:
         query = (
@@ -227,6 +213,7 @@ class DocumentUploader:
                 spaces="drive",
                 fields="files(id, webViewLink)",
                 supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
             )
             .execute()
         )

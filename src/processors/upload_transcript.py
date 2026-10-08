@@ -1,7 +1,6 @@
 import os
 import re
 import time
-from datetime import datetime
 from time import sleep
 from typing import List
 
@@ -16,8 +15,13 @@ from src.constants import (
 )
 from src.processors.constants import EARLIEST
 from src.processors.helpers.drive_folders import (
+    ASSET_SEP,
+    TRANSCRIPT_ASSET,
     escape_drive_query_value,
+    find_or_create_meeting_folder,
     find_or_create_type_folder,
+    meeting_folder_name,
+    transcript_file_name,
 )
 from src.processors.helpers.google_auth import load_credentials
 from src.processors.process import Processor
@@ -102,6 +106,7 @@ class TranscriptUploader(Processor):
                 spaces="drive",
                 fields="files(id, name)",
                 supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
             )
             .execute()
         )
@@ -115,16 +120,12 @@ class TranscriptUploader(Processor):
         return folders[0]["id"]
 
     def create_file(self, parent_id: str, date: str) -> str:  # type: ignore
-        source_filename = self.meeting_type.file_template.format(date, ".txt")
-        parsed = self.extract_date_or_datetime(date)
-        if not parsed:
+        if not self.extract_date_or_datetime(date):
             raise Exception(f"Could not extract date or datetime from {date}")
-        title_format = (
-            self.meeting_type.transcript_title_datetime_format
-            if isinstance(parsed, datetime)
-            else self.meeting_type.transcript_title_date_format
-        )
-        destination_filename = parsed.strftime(title_format)
+        source_filename = self.meeting_type.file_template.format(date, ".txt")
+        # Type-tag the Drive name ("... - Transcript") so existence is verifiable by
+        # name rather than by mimeType (which the city controls) (TRA-166).
+        destination_filename = transcript_file_name(self.meeting_type, date)
         file_metadata = {
             "name": destination_filename,
             "parents": [parent_id],
@@ -197,7 +198,7 @@ class TranscriptUploader(Processor):
 
                 return file_id
         except Exception as e:
-            raise Exception(f"Could not upload transcript for {parsed}: {e}")
+            raise Exception(f"Could not upload transcript for {date}: {e}")
 
     def retrieve_and_store_files_in_folder(self, folder_id: str) -> List:
         """Lists files in a specific Google Drive folder."""
@@ -217,6 +218,8 @@ class TranscriptUploader(Processor):
                     spaces="drive",
                     fields="nextPageToken, files(id, name, mimeType, webViewLink)",
                     pageToken=page_token,
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True,
                 )
                 .execute()
             )
@@ -228,48 +231,43 @@ class TranscriptUploader(Processor):
                 break
 
         dates = []
+        transcript_suffix = f"{ASSET_SEP}{TRANSCRIPT_ASSET}"
         for file in files:
-            name = file.get("name")
-            # All meeting types currently share one Drive folder, so filter to
-            # this type's transcripts by filename prefix — otherwise every type
-            # would claim every file and file its link under the wrong namespace.
-            if self.meeting_type.file_stub not in (name or ""):
+            # Skip the per-meeting subfolders themselves (a folder is not an asset;
+            # this is unrelated to the transcript-vs-document distinction below).
+            if file.get("mimeType") == "application/vnd.google-apps.folder":
                 continue
-            link = file.get("webViewLink")
+            name = file.get("name") or ""
+            if self.meeting_type.file_stub not in name:
+                continue
+            # Derive the meeting key (underscore form) from the name's datetime/date.
             datetime_match = re.search(DATETIME_OUTPUT_PATTERN, name)
             if datetime_match:
-                dt_str = datetime_match.group(0)
-                dt_str_internal = dt_str.replace(":", "_")
-                dates.append(dt_str_internal)
+                key = datetime_match.group(0).replace(":", "_")
+            else:
+                date_match = re.search(DATE_PATTERN, name)
+                if not date_match:
+                    continue
+                key = date_match.group(0)
+            # Transcript ⇔ the name is exactly the meeting display (legacy, untagged —
+            # the transition fallback for not-yet-migrated files) OR display plus the
+            # "- Transcript" tag (new). "<display> - <label>" is a document and is
+            # excluded. Name-based, never mimeType (which the city controls).
+            display = meeting_folder_name(self.meeting_type, key)
+            if name != display and name != f"{display}{transcript_suffix}":
+                continue
+            # Count the date for idempotency regardless; only record a link when one
+            # is present (r.set(key, None) would raise and abort the whole run).
+            dates.append(key)
+            link = file.get("webViewLink")
+            if link:
                 r.set(
                     self.meeting_type.transcript_link_key_template.format(
-                        meeting_key=dt_str_internal
+                        meeting_key=key
                     ),
                     link,
                 )
-            else:
-                date_match = re.search(DATE_PATTERN, name)
-                if date_match:
-                    date = date_match.group(0)
-                    dates.append(date)
-                    r.set(
-                        self.meeting_type.transcript_link_key_template.format(
-                            meeting_key=date
-                        ),
-                        link,
-                    )
         return dates
-
-    def create_folder(self, name: str) -> str:
-        folder_metadata = {
-            "name": name,
-            "mimeType": "application/vnd.google-apps.folder",
-            "parents": [self.type_parent_id],
-        }
-        folder = (
-            self.service.files().create(body=folder_metadata, fields="id").execute()
-        )
-        return folder["id"]
 
     def authenticate(self):  # type: ignore
         credentials = load_credentials(
@@ -278,10 +276,6 @@ class TranscriptUploader(Processor):
             token_path=DRIVE_TOKEN_FILE,
         )
         return googleapiclient.discovery.build("drive", "v3", credentials=credentials)
-
-    def get_year_from_date(self, date: str) -> str:
-        dt = datetime.strptime(date, "%Y-%m-%d")
-        return dt.strftime("%Y")
 
     def gather_input_dates(self) -> List:
         return sorted(self.gather_dates(TRANSCRIBED_DIR))
@@ -302,9 +296,45 @@ class TranscriptUploader(Processor):
             if not folder_id:
                 self.logger.warning(f"No folder ID found for {folder_name}")
                 continue
+            # Transcripts now live in per-meeting subfolders of the year folder
+            # (TRA-166). List those, plus the year folder itself so a not-yet-migrated
+            # transcript is still recognized (transition fallback) and never
+            # re-uploaded — which would mint a new Doc URL. Drop the year-folder scan
+            # once the Drive migration has run.
             files_list += self.retrieve_and_store_files_in_folder(folder_id)
+            for meeting_folder_id in self._child_folder_ids(folder_id):
+                files_list += self.retrieve_and_store_files_in_folder(meeting_folder_id)
 
         return sorted(files_list)
+
+    def _child_folder_ids(self, parent_id: str) -> List:
+        """Ids of the immediate subfolders of ``parent_id`` (the per-meeting folders
+        under a year folder), across all pages — an unpaginated listing would miss
+        meetings past the first page and re-upload their transcripts (new URLs)."""
+        query = (
+            f"'{parent_id}' in parents and "
+            "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        )
+        ids: List = []
+        page_token = None
+        while True:
+            results = (
+                self.service.files()
+                .list(
+                    q=query,
+                    spaces="drive",
+                    fields="nextPageToken, files(id)",
+                    pageToken=page_token,
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True,
+                )
+                .execute()
+            )
+            ids += [f["id"] for f in results.get("files", [])]
+            page_token = results.get("nextPageToken")
+            if not page_token:
+                break
+        return ids
 
     def process_for_date(self, date: str) -> None:
         dt = self.extract_datetime_object(date)
@@ -314,10 +344,13 @@ class TranscriptUploader(Processor):
         elif not dt:
             raise Exception(f"Could not parse date from {date} for {self.job_type}")
         self.logger.debug(f"Uploading transcript for {date}")
+        # Upload into this meeting's folder under the year: <type>/<year>/<meeting>/,
+        # shared with the meeting's documents (TRA-166).
         year_folder_name = dt.strftime("%Y")
-        parent_id = self.find_folder_id(year_folder_name)
-        if not parent_id:
-            parent_id = self.create_folder(year_folder_name)
+        folder = meeting_folder_name(self.meeting_type, date)
+        parent_id = find_or_create_meeting_folder(
+            self.service, self.type_parent_id, year_folder_name, folder
+        )
         file_id = self.create_file(parent_id, date)
 
         for email in SHARE_LIST:
