@@ -104,6 +104,7 @@ class TranscriptUploader(Processor):
                 spaces="drive",
                 fields="files(id, name)",
                 supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
             )
             .execute()
         )

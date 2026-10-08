@@ -100,29 +100,8 @@ def find_or_create_type_folder(
     cache_key = (parent_id, name)
     if cache_key in _cache:
         return _cache[cache_key]
-
-    query = (
-        f"name = '{escape_drive_query_value(name)}' and '{parent_id}' in parents "
-        f"and mimeType = '{_FOLDER_MIME}' and trashed = false"
-    )
-    results = (
-        service.files()
-        .list(q=query, spaces="drive", fields="files(id)", supportsAllDrives=True)
-        .execute()
-    )
-    folders = results.get("files", [])
-    if folders:
-        folder_id = folders[0]["id"]
-    else:
-        created = (
-            service.files()
-            .create(
-                body={"name": name, "mimeType": _FOLDER_MIME, "parents": [parent_id]},
-                fields="id",
-                supportsAllDrives=True,
-            )
-            .execute()
-        )
-        folder_id = created["id"]
+    # Reuse the shared find-or-create (one source of the query/create + all-drives
+    # flags); only the per-type result is cached here.
+    folder_id = find_or_create_child_folder(service, parent_id, name)
     _cache[cache_key] = folder_id
     return folder_id

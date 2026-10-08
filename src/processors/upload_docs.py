@@ -188,6 +188,10 @@ class DocumentUploader:
         # The meeting's documents share one folder with its transcript, under the
         # year: <type>/<year>/<meeting folder> (TRA-166).
         year = get_year_string_from_string(meeting_key)
+        if not year:
+            # Don't create a folder named "" under the type folder; a key with no
+            # parseable year is a data error, not something to file blindly.
+            raise ValueError(f"No parseable year in meeting key {meeting_key!r}")
         name = meeting_folder_name(self.meeting_type, meeting_key)
         return find_or_create_meeting_folder(
             self.service, self.type_parent_id, year, name
@@ -205,6 +209,7 @@ class DocumentUploader:
                 spaces="drive",
                 fields="files(id, webViewLink)",
                 supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
             )
             .execute()
         )
