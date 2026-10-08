@@ -39,7 +39,10 @@ from src.processors.helpers.document_store import (
     document_mimetype,
     ensure_document_on_disk,
 )
-from src.processors.helpers.drive_folders import find_or_create_type_folder
+from src.processors.helpers.drive_folders import (
+    escape_drive_query_value,
+    find_or_create_type_folder,
+)
 from src.processors.helpers.google_auth import load_credentials
 from src.processors.upload_transcript import (
     DESKTOP_APP_CLIENT_SECRET,
@@ -59,12 +62,6 @@ def _drive_view_link(file_id: str) -> str:
     response omits ``webViewLink``, so a reused or just-created file still yields a
     usable, reconcile-parseable link instead of an empty string."""
     return f"https://drive.google.com/file/d/{file_id}/view"
-
-
-def _escape_drive_query_value(value: str) -> str:
-    """Escape a value for a Drive ``q`` string literal. Without this a name with an
-    apostrophe (e.g. "Mayor's Report") produces an invalid query and a 400."""
-    return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
 def _file_link_or_raise(resource: dict, name: str) -> str:
@@ -206,7 +203,7 @@ class DocumentUploader:
 
     def _find_folder(self, name: str) -> str | None:
         query = (
-            f"name = '{_escape_drive_query_value(name)}' and "
+            f"name = '{escape_drive_query_value(name)}' and "
             f"'{self.docs_parent_id}' in parents and "
             "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
         )
@@ -220,7 +217,7 @@ class DocumentUploader:
 
     def _find_file(self, folder_id: str, name: str) -> str | None:
         query = (
-            f"name = '{_escape_drive_query_value(name)}' and "
+            f"name = '{escape_drive_query_value(name)}' and "
             f"'{folder_id}' in parents and trashed = false"
         )
         results = (

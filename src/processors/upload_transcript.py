@@ -15,7 +15,10 @@ from src.constants import (
     DATETIME_OUTPUT_PATTERN,
 )
 from src.processors.constants import EARLIEST
-from src.processors.helpers.drive_folders import find_or_create_type_folder
+from src.processors.helpers.drive_folders import (
+    escape_drive_query_value,
+    find_or_create_type_folder,
+)
 from src.processors.helpers.google_auth import load_credentials
 from src.processors.process import Processor
 from src.settings import (
@@ -85,7 +88,11 @@ class TranscriptUploader(Processor):
         """Search for a year folder by name under this type's parent folder."""
         parent_id = self.type_parent_id
         # Define the search query
-        query = f"name = '{folder_name}' and '{parent_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        query = (
+            f"name = '{escape_drive_query_value(folder_name)}' and "
+            f"'{parent_id}' in parents and "
+            "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        )
 
         # Execute the list request
         results = (

@@ -92,6 +92,13 @@ class VideoUploader(Processor):
         self.service = self.authenticate()
         # year -> playlist id, for this meeting type only; populated by get_playlists.
         self.playlists_by_year: dict[str, str] = {}
+        # Whether get_playlists has run this instance. An empty playlists_by_year is
+        # ambiguous (not-fetched vs. this type has none yet), so track fetched
+        # explicitly to avoid re-listing the whole channel on every resolve.
+        self._playlists_fetched = False
+        # Whether the last listing hit the page cap (so a not-found year can't be
+        # safely created — the real playlist may be on an unlisted page).
+        self._playlists_truncated = False
         self.videos: dict = {}
         super().__init__()
 
@@ -129,6 +136,12 @@ class VideoUploader(Processor):
                 self._cache_playlist(item["id"], year_str)
             request = self.service.playlists().list_next(request, response)
             pages += 1
+        # Record truncation rather than raising here: a found playlist is still
+        # usable, so only CREATING one for a not-found year is unsafe when truncated
+        # (that is guarded in get_playlist_for_year) — don't abort uploads for a type
+        # whose playlist was already listed.
+        self._playlists_truncated = request is not None
+        self._playlists_fetched = True
 
     def _cache_playlist(self, playlist_id: str, year_str: str) -> None:
         # Kept only in-memory for this run. get_playlists re-lists every run, so
@@ -154,13 +167,21 @@ class VideoUploader(Processor):
         return playlist_id
 
     def get_playlist_for_year(self, year_str: str) -> str:
-        if not self.playlists_by_year:
+        if not self._playlists_fetched:
             self.get_playlists()
         # Resolve only from playlists get_playlists confirmed belong to this type
         # this run, so a stale/mismapped video_playlist pointer (from the old
         # cross-type bug) is ignored rather than used. If none matches, create it.
         if year_str in self.playlists_by_year:
             return self.playlists_by_year[year_str]
+        if self._playlists_truncated:
+            # The listing was capped, so this year's playlist may already exist on an
+            # unlisted page; refuse to create a possible duplicate.
+            raise RuntimeError(
+                f"Playlist listing hit the {MAX_UPLOADS_PAGES}-page cap, so the "
+                f"{year_str} playlist can't be safely created (it may exist on an "
+                "unlisted page). Raise MAX_UPLOADS_PAGES and re-run."
+            )
         return self.create_playlist_for_year(year_str)
 
     def add_video_to_playlist(self, playlist_id: str, video_id: str) -> str:
@@ -440,8 +461,8 @@ class VideoUploader(Processor):
 
     def process_for_date(self, date: str) -> None:
         if not self.service:
-            self.authenticate()
-        if not self.playlists_by_year:
+            self.service = self.authenticate()  # reassign, not a no-op
+        if not self._playlists_fetched:
             self.get_playlists()
         if get_file_size_in_mb(date) < MIN_COMPRESSED_VIDEO_MB:
             self.logger.info(f"Skipping {date}, video file size is below minimum")
@@ -460,13 +481,17 @@ class VideoUploader(Processor):
         if publish_date:
             options.update(recording_date=publish_date)
 
+        # Resolve (and if needed create) the year playlist BEFORE uploading, so a
+        # truncated listing raises here rather than orphaning an already-uploaded
+        # video (which channel-level idempotency would then skip forever).
+        year_str = datetime.strftime(dt, "%Y")
+        playlist_id = self.get_playlist_for_year(year_str)
+
         try:
             self.logger.info(f"Uploading video for {dt}")
             video_id = self.initialize_upload(options)
             if not video_id:
                 raise Exception("No Video ID returned")
-            year_str = datetime.strftime(dt, "%Y")
-            playlist_id = self.get_playlist_for_year(year_str)
             self.add_video_to_playlist(playlist_id, video_id)
         except HttpError as e:
             # Do NOT report success on a failed upload (e.g. hitting YouTube's

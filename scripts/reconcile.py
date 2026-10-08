@@ -475,6 +475,14 @@ class Scope:
             d for d, on in self.enabled.items() if on and d not in _HANDLED_DESTINATIONS
         )
 
+    def assert_handled_present(self) -> None:
+        """Raise if a handled destination name isn't in the registry-derived set
+        (i.e. it was renamed in the registry without updating the finding logic).
+        Called up front so that drift fails loudly with a clear message, before the
+        `unhandled()` warning would mislabel the renamed destination as 'no checks'."""
+        for destination in _HANDLED_DESTINATIONS:
+            self._on(destination)
+
     @classmethod
     def of(cls, **enabled: bool) -> "Scope":
         """A scope with destinations set explicitly (for tests and callers that
@@ -896,6 +904,10 @@ def main() -> None:
     args = parser.parse_args()
 
     scope = Scope.from_config()
+    # Fail loudly first if a handled destination was renamed in the registry, so the
+    # drift error is what the operator sees rather than a misleading "no checks"
+    # warning for the renamed name.
+    scope.assert_handled_present()
     unhandled = scope.unhandled()
     if unhandled:
         print(
