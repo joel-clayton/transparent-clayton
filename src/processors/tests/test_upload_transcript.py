@@ -133,6 +133,38 @@ class TestRetrieveAndStoreFilesInFolder(unittest.TestCase):
         )
         self.mock_r.set.assert_not_called()
 
+    def test_legacy_untagged_transcript_still_recognized(self):
+        # Transition fallback: a not-yet-migrated transcript (named as the bare
+        # meeting display, no "- Transcript" tag) must still be recognized, or it
+        # would be re-uploaded with a new Doc URL.
+        self._stub_drive_response(
+            [("City Council Meeting 2026-05-08 07:00 PM", "https://drive/legacy")]
+        )
+        self.assertEqual(
+            self.uploader.retrieve_and_store_files_in_folder("folder_id"),
+            ["2026-05-08 07_00 PM"],
+        )
+        self.mock_r.set.assert_called_once_with(
+            "transcript_link.cc_mtg.2026-05-08 07_00 PM", "https://drive/legacy"
+        )
+
+    def test_meeting_subfolder_is_not_recorded_as_a_transcript(self):
+        # A per-meeting subfolder's name equals the meeting display; it must be
+        # skipped (it's a folder), not recorded as the transcript.
+        self._stub_drive_response(
+            [
+                (
+                    "City Council Meeting 2026-05-08",
+                    "https://drive/folder",
+                    "application/vnd.google-apps.folder",
+                ),
+            ]
+        )
+        self.assertEqual(
+            self.uploader.retrieve_and_store_files_in_folder("folder_id"), []
+        )
+        self.mock_r.set.assert_not_called()
+
     def test_documents_co_located_are_not_mistaken_for_the_transcript(self):
         # A document sits alongside the transcript in the meeting folder; only the
         # "- Transcript"-tagged file is the transcript (name-based, not mimeType).

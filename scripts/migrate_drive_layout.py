@@ -206,6 +206,11 @@ def _migrate_type(service: Any, mt: MeetingType, execute: bool) -> tuple[int, in
                 continue
             folder = meeting_folder_name(mt, key)
             new_name = transcript_file_name(mt, key)
+            # Only a legacy transcript (named exactly the meeting display, or already
+            # tagged) — never a stray "<display> - <label>" document misfiled directly
+            # in the year folder.
+            if item["name"] != folder and item["name"] != new_name:
+                continue
             print(
                 f"  move transcript {item['name']!r} -> "
                 f"{child['name']}/{folder}/ (as {new_name!r})"

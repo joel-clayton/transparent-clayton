@@ -120,6 +120,8 @@ class TranscriptUploader(Processor):
         return folders[0]["id"]
 
     def create_file(self, parent_id: str, date: str) -> str:  # type: ignore
+        if not self.extract_date_or_datetime(date):
+            raise Exception(f"Could not extract date or datetime from {date}")
         source_filename = self.meeting_type.file_template.format(date, ".txt")
         # Type-tag the Drive name ("... - Transcript") so existence is verifiable by
         # name rather than by mimeType (which the city controls) (TRA-166).
@@ -231,39 +233,34 @@ class TranscriptUploader(Processor):
         dates = []
         transcript_suffix = f"{ASSET_SEP}{TRANSCRIPT_ASSET}"
         for file in files:
-            name = file.get("name") or ""
-            # A transcript is identified by its explicit type-tagged name — NOT by
-            # mimeType, which the city controls and could change. This excludes the
-            # per-meeting subfolders and the meeting's documents ("... - <label>")
-            # that share the folder.
-            if not name.endswith(transcript_suffix):
+            # Skip the per-meeting subfolders themselves (a folder is not an asset;
+            # this is unrelated to the transcript-vs-document distinction below).
+            if file.get("mimeType") == "application/vnd.google-apps.folder":
                 continue
-            # Filter to this type's transcripts by filename prefix.
+            name = file.get("name") or ""
             if self.meeting_type.file_stub not in name:
                 continue
-            link = file.get("webViewLink")
+            # Derive the meeting key (underscore form) from the name's datetime/date.
             datetime_match = re.search(DATETIME_OUTPUT_PATTERN, name)
             if datetime_match:
-                dt_str = datetime_match.group(0)
-                dt_str_internal = dt_str.replace(":", "_")
-                dates.append(dt_str_internal)
-                r.set(
-                    self.meeting_type.transcript_link_key_template.format(
-                        meeting_key=dt_str_internal
-                    ),
-                    link,
-                )
+                key = datetime_match.group(0).replace(":", "_")
             else:
                 date_match = re.search(DATE_PATTERN, name)
-                if date_match:
-                    date = date_match.group(0)
-                    dates.append(date)
-                    r.set(
-                        self.meeting_type.transcript_link_key_template.format(
-                            meeting_key=date
-                        ),
-                        link,
-                    )
+                if not date_match:
+                    continue
+                key = date_match.group(0)
+            # Transcript ⇔ the name is exactly the meeting display (legacy, untagged —
+            # the transition fallback for not-yet-migrated files) OR display plus the
+            # "- Transcript" tag (new). "<display> - <label>" is a document and is
+            # excluded. Name-based, never mimeType (which the city controls).
+            display = meeting_folder_name(self.meeting_type, key)
+            if name != display and name != f"{display}{transcript_suffix}":
+                continue
+            dates.append(key)
+            r.set(
+                self.meeting_type.transcript_link_key_template.format(meeting_key=key),
+                file.get("webViewLink"),
+            )
         return dates
 
     def authenticate(self):  # type: ignore
