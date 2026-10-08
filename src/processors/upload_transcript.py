@@ -1,7 +1,6 @@
 import os
 import re
 import time
-from datetime import datetime
 from time import sleep
 from typing import List
 
@@ -16,10 +15,13 @@ from src.constants import (
 )
 from src.processors.constants import EARLIEST
 from src.processors.helpers.drive_folders import (
+    ASSET_SEP,
+    TRANSCRIPT_ASSET,
     escape_drive_query_value,
     find_or_create_meeting_folder,
     find_or_create_type_folder,
     meeting_folder_name,
+    transcript_file_name,
 )
 from src.processors.helpers.google_auth import load_credentials
 from src.processors.process import Processor
@@ -119,15 +121,9 @@ class TranscriptUploader(Processor):
 
     def create_file(self, parent_id: str, date: str) -> str:  # type: ignore
         source_filename = self.meeting_type.file_template.format(date, ".txt")
-        parsed = self.extract_date_or_datetime(date)
-        if not parsed:
-            raise Exception(f"Could not extract date or datetime from {date}")
-        title_format = (
-            self.meeting_type.transcript_title_datetime_format
-            if isinstance(parsed, datetime)
-            else self.meeting_type.transcript_title_date_format
-        )
-        destination_filename = parsed.strftime(title_format)
+        # Type-tag the Drive name ("... - Transcript") so existence is verifiable by
+        # name rather than by mimeType (which the city controls) (TRA-166).
+        destination_filename = transcript_file_name(self.meeting_type, date)
         file_metadata = {
             "name": destination_filename,
             "parents": [parent_id],
@@ -200,7 +196,7 @@ class TranscriptUploader(Processor):
 
                 return file_id
         except Exception as e:
-            raise Exception(f"Could not upload transcript for {parsed}: {e}")
+            raise Exception(f"Could not upload transcript for {date}: {e}")
 
     def retrieve_and_store_files_in_folder(self, folder_id: str) -> List:
         """Lists files in a specific Google Drive folder."""
@@ -233,16 +229,17 @@ class TranscriptUploader(Processor):
                 break
 
         dates = []
+        transcript_suffix = f"{ASSET_SEP}{TRANSCRIPT_ASSET}"
         for file in files:
-            name = file.get("name")
-            # A transcript is a Google Doc. This excludes both the per-meeting
-            # SUBfolders (whose names also carry the stub+datetime) and the meeting's
-            # DOCUMENTS (PDFs etc., named by label) that now sit in the same folder —
-            # neither must be mistaken for the transcript.
-            if file.get("mimeType") != "application/vnd.google-apps.document":
+            name = file.get("name") or ""
+            # A transcript is identified by its explicit type-tagged name — NOT by
+            # mimeType, which the city controls and could change. This excludes the
+            # per-meeting subfolders and the meeting's documents ("... - <label>")
+            # that share the folder.
+            if not name.endswith(transcript_suffix):
                 continue
             # Filter to this type's transcripts by filename prefix.
-            if self.meeting_type.file_stub not in (name or ""):
+            if self.meeting_type.file_stub not in name:
                 continue
             link = file.get("webViewLink")
             datetime_match = re.search(DATETIME_OUTPUT_PATTERN, name)

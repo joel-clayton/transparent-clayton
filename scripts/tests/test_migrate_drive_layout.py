@@ -16,6 +16,13 @@ class TestMeetingKeyFromDriveName(unittest.TestCase):
             "2026-05-26 07_00 PM",
         )
 
+    def test_legacy_underscore_form_also_parsed(self):
+        # Old on-disk-derived folder names use the underscore time form.
+        self.assertEqual(
+            m.meeting_key_from_drive_name("City Council Meeting 2026-05-26 07_00 PM"),
+            "2026-05-26 07_00 PM",
+        )
+
     def test_date_only(self):
         self.assertEqual(
             m.meeting_key_from_drive_name("City Council Meeting 2026-05-08"),
@@ -53,20 +60,29 @@ class TestMigrateTypeAudit(unittest.TestCase):
             },
         ]
 
+        # a bare-labelled document inside the legacy doc folder (to be retagged)
+        docf_children = [
+            {"id": "d1", "name": "Agenda Packet", "mimeType": _DOC},
+        ]
+
         def fake_list(service, parent_id):
             if parent_id == "TYPE":
                 return type_children
             if parent_id == "y26":
                 return year_children
+            if parent_id == "docf":
+                return docf_children
             return []
 
         with (
             patch.object(m, "find_type_folder", return_value="TYPE"),  # audit path
             patch.object(m, "_list_children", side_effect=fake_list),
         ):
-            folders, transcripts = m._migrate_type(svc, CITY_COUNCIL, execute=False)
+            folders, transcripts, docs = m._migrate_type(
+                svc, CITY_COUNCIL, execute=False
+            )
 
-        self.assertEqual((folders, transcripts), (1, 1))
+        self.assertEqual((folders, transcripts, docs), (1, 1, 1))
         svc.files.return_value.update.assert_not_called()  # audit mode: no writes
 
 

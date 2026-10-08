@@ -39,6 +39,7 @@ from src.processors.helpers.document_store import (
     ensure_document_on_disk,
 )
 from src.processors.helpers.drive_folders import (
+    document_file_name,
     escape_drive_query_value,
     find_or_create_meeting_folder,
     find_or_create_type_folder,
@@ -156,10 +157,13 @@ class DocumentUploader:
     def _archive_one(
         self, folder_id: str, meeting_key: str, label: str, url: str
     ) -> str:
+        # Explicit, type-tagged Drive name: "<meeting display> - <city label>", so
+        # each document's existence is verifiable by name (TRA-166).
+        doc_name = document_file_name(self.meeting_type, meeting_key, label)
         # Idempotent: if a retry already uploaded this doc, reuse it (by id, so a
         # file that exists but whose listing omitted webViewLink is still reused
         # rather than re-created into a duplicate).
-        existing = self._find_file(folder_id, label)
+        existing = self._find_file(folder_id, doc_name)
         if existing:
             return existing
         # Source from the on-disk copy (downloaded once, shared with the
@@ -175,14 +179,14 @@ class DocumentUploader:
         created = (
             self.service.files()
             .create(
-                body={"name": label, "parents": [folder_id]},
+                body={"name": doc_name, "parents": [folder_id]},
                 media_body=media,
                 fields="id, webViewLink",
                 supportsAllDrives=True,
             )
             .execute()
         )
-        return _file_link_or_raise(created, label)
+        return _file_link_or_raise(created, doc_name)
 
     def _ensure_meeting_folder(self, meeting_key: str) -> str:
         # The meeting's documents share one folder with its transcript, under the

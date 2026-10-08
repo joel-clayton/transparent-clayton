@@ -48,7 +48,7 @@ class TestRetrieveAndStoreFilesInFolder(unittest.TestCase):
 
     def test_extracts_date_only_filename(self):
         self._stub_drive_response(
-            [("City Council Meeting 2026-05-08", "https://drive/abc")]
+            [("City Council Meeting 2026-05-08 - Transcript", "https://drive/abc")]
         )
         self.assertEqual(
             self.uploader.retrieve_and_store_files_in_folder("folder_id"),
@@ -60,7 +60,12 @@ class TestRetrieveAndStoreFilesInFolder(unittest.TestCase):
 
     def test_normalizes_datetime_filename_colon_to_underscore(self):
         self._stub_drive_response(
-            [("City Council Meeting 2026-05-08 07:00 PM", "https://drive/xyz")]
+            [
+                (
+                    "City Council Meeting 2026-05-08 07:00 PM - Transcript",
+                    "https://drive/xyz",
+                )
+            ]
         )
         self.assertEqual(
             self.uploader.retrieve_and_store_files_in_folder("folder_id"),
@@ -73,9 +78,12 @@ class TestRetrieveAndStoreFilesInFolder(unittest.TestCase):
     def test_handles_mixed_filenames(self):
         self._stub_drive_response(
             [
-                ("City Council Meeting 2026-05-08", "https://drive/date-only"),
                 (
-                    "City Council Meeting 2026-06-01 07:00 PM",
+                    "City Council Meeting 2026-05-08 - Transcript",
+                    "https://drive/date-only",
+                ),
+                (
+                    "City Council Meeting 2026-06-01 07:00 PM - Transcript",
                     "https://drive/datetime",
                 ),
             ]
@@ -103,8 +111,11 @@ class TestRetrieveAndStoreFilesInFolder(unittest.TestCase):
         # under cc_mtg.
         self._stub_drive_response(
             [
-                ("City Council Meeting 2026-05-08", "https://drive/cc"),
-                ("General Meeting 2026-05-26 07:00 PM", "https://drive/gen"),
+                ("City Council Meeting 2026-05-08 - Transcript", "https://drive/cc"),
+                (
+                    "General Meeting 2026-05-26 07:00 PM - Transcript",
+                    "https://drive/gen",
+                ),
             ]
         )
         self.assertEqual(
@@ -122,16 +133,18 @@ class TestRetrieveAndStoreFilesInFolder(unittest.TestCase):
         )
         self.mock_r.set.assert_not_called()
 
-    def test_skips_non_doc_documents_co_located_in_the_meeting_folder(self):
-        # A document (PDF) now sits alongside the transcript; even if its name
-        # contains the stub + a date it must not be recorded as the transcript.
+    def test_documents_co_located_are_not_mistaken_for_the_transcript(self):
+        # A document sits alongside the transcript in the meeting folder; only the
+        # "- Transcript"-tagged file is the transcript (name-based, not mimeType).
         self._stub_drive_response(
             [
-                ("City Council Meeting 2026-05-08", "https://drive/transcript"),
                 (
-                    "City Council Meeting Summary 2026-05-08",
+                    "City Council Meeting 2026-05-08 - Transcript",
+                    "https://drive/transcript",
+                ),
+                (
+                    "City Council Meeting 2026-05-08 - Agenda Packet",
                     "https://drive/doc",
-                    "application/pdf",
                 ),
             ]
         )
@@ -162,24 +175,24 @@ class TestCreateFileFormatDispatch(unittest.TestCase):
     @patch("src.processors.upload_transcript.MediaFileUpload")
     @patch("src.processors.upload_transcript.time.sleep", return_value=None)
     @patch("src.processors.upload_transcript.sleep", return_value=None)
-    def test_date_only_input_omits_time_suffix(self, _sleep1, _sleep2, _media):
+    def test_date_only_name_is_type_tagged(self, _sleep1, _sleep2, _media):
         self.uploader.create_file("parent_id", "2026-05-08")
-        self.assertEqual(self._captured_filename(), "City Council Meeting 2026-05-08")
+        self.assertEqual(
+            self._captured_filename(),
+            "City Council Meeting 2026-05-08 - Transcript",
+        )
 
     @patch("src.processors.upload_transcript.MediaFileUpload")
     @patch("src.processors.upload_transcript.time.sleep", return_value=None)
     @patch("src.processors.upload_transcript.sleep", return_value=None)
-    def test_datetime_input_includes_time_suffix(self, _sleep1, _sleep2, _media):
+    def test_datetime_name_uses_colon_and_transcript_tag(
+        self, _sleep1, _sleep2, _media
+    ):
         self.uploader.create_file("parent_id", "2026-05-08 07_00 PM")
         self.assertEqual(
             self._captured_filename(),
-            "City Council Meeting 2026-05-08 07:00 PM",
+            "City Council Meeting 2026-05-08 07:00 PM - Transcript",
         )
-
-    @patch("src.processors.upload_transcript.MediaFileUpload")
-    def test_unparseable_input_raises(self, _media):
-        with self.assertRaises(Exception):
-            self.uploader.create_file("parent_id", "nothing parseable")
 
 
 if __name__ == "__main__":

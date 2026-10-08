@@ -56,10 +56,25 @@ class TestEscapeDriveQueryValue(unittest.TestCase):
 
 
 class TestMeetingFolder(unittest.TestCase):
-    def test_meeting_folder_name(self):
+    def test_meeting_folder_name_uses_colon_display(self):
+        # The underscore in the key is an on-disk/ffmpeg artifact; Drive uses colon.
         self.assertEqual(
             drive_folders.meeting_folder_name(CITY_COUNCIL, "2026-05-26 07_00 PM"),
-            "City Council Meeting 2026-05-26 07_00 PM",
+            "City Council Meeting 2026-05-26 07:00 PM",
+        )
+
+    def test_transcript_file_name(self):
+        self.assertEqual(
+            drive_folders.transcript_file_name(CITY_COUNCIL, "2026-05-26 07_00 PM"),
+            "City Council Meeting 2026-05-26 07:00 PM - Transcript",
+        )
+
+    def test_document_file_name_keeps_city_label(self):
+        self.assertEqual(
+            drive_folders.document_file_name(
+                CITY_COUNCIL, "2026-05-26 07_00 PM", "Agenda Packet"
+            ),
+            "City Council Meeting 2026-05-26 07:00 PM - Agenda Packet",
         )
 
     def test_find_or_create_meeting_folder_creates_year_then_meeting(self):

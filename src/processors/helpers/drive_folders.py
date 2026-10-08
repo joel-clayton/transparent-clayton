@@ -27,11 +27,39 @@ def escape_drive_query_value(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
+# Separator between a meeting's display name and an asset's type in a Drive file
+# name, e.g. "City Council Meeting 2026-05-26 07:00 PM - Transcript".
+ASSET_SEP = " - "
+TRANSCRIPT_ASSET = "Transcript"
+
+
+def _display_datetime(meeting_key: str) -> str:
+    """The meeting key with its time rendered human-readably (colon). The underscore
+    in a key ("07_00 PM") is an on-disk/ffmpeg filename artifact; Drive uses the
+    readable colon form ("07:00 PM"). Date-only keys are unaffected."""
+    return meeting_key.replace("_", ":")
+
+
 def meeting_folder_name(meeting_type: MeetingType, meeting_key: str) -> str:
     """The per-meeting Drive folder name shared by this meeting's transcript and its
-    documents (TRA-166), e.g. "City Council Meeting 2026-05-26 07_00 PM". The two
-    uploaders must agree on this exactly so both land in the same folder."""
-    return f"{meeting_type.file_stub} {meeting_key}"
+    documents (TRA-166), e.g. "City Council Meeting 2026-05-26 07:00 PM". Both
+    uploaders must agree on this exactly so they land in the same folder."""
+    return f"{meeting_type.file_stub} {_display_datetime(meeting_key)}"
+
+
+def transcript_file_name(meeting_type: MeetingType, meeting_key: str) -> str:
+    """Drive name for a meeting's transcript, type-tagged so existence is verifiable
+    by name (not by mimeType, which the city controls), e.g.
+    "City Council Meeting 2026-05-26 07:00 PM - Transcript"."""
+    return (
+        f"{meeting_folder_name(meeting_type, meeting_key)}{ASSET_SEP}{TRANSCRIPT_ASSET}"
+    )
+
+
+def document_file_name(meeting_type: MeetingType, meeting_key: str, label: str) -> str:
+    """Drive name for one of a meeting's documents: the meeting display plus the
+    city's own label, e.g. "City Council Meeting 2026-05-26 07:00 PM - Agenda Packet"."""
+    return f"{meeting_folder_name(meeting_type, meeting_key)}{ASSET_SEP}{label}"
 
 
 def find_type_folder(
