@@ -219,6 +219,8 @@ class TranscriptUploader(Processor):
                     spaces="drive",
                     fields="nextPageToken, files(id, name, mimeType, webViewLink)",
                     pageToken=page_token,
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True,
                 )
                 .execute()
             )
@@ -274,10 +276,6 @@ class TranscriptUploader(Processor):
         )
         return googleapiclient.discovery.build("drive", "v3", credentials=credentials)
 
-    def get_year_from_date(self, date: str) -> str:
-        dt = datetime.strptime(date, "%Y-%m-%d")
-        return dt.strftime("%Y")
-
     def gather_input_dates(self) -> List:
         return sorted(self.gather_dates(TRANSCRIBED_DIR))
 
@@ -327,6 +325,7 @@ class TranscriptUploader(Processor):
                     fields="nextPageToken, files(id)",
                     pageToken=page_token,
                     supportsAllDrives=True,
+                    includeItemsFromAllDrives=True,
                 )
                 .execute()
             )

@@ -13,15 +13,14 @@ transcript uploader's Drive client/token, so this shares one Drive consent with
 transcripts.
 
 Runs unattended only once the OAuth consent screen is published (see
-``google_auth``). Per-meeting document folders are created under the meeting
-type's own folder (e.g. "GHAD Meetings") in the shared Source Material parent;
-setting ``DOCS_DRIVE_PARENT_ID`` overrides that with a fixed folder.
+``google_auth``). Each meeting's documents are created in its folder under the
+meeting type's own folder (e.g. "GHAD Meetings") in the shared Source Material
+parent, alongside that meeting's transcript (TRA-166).
 """
 
 import io
 import json
 import logging
-import os
 from typing import Mapping, cast
 
 from googleapiclient.discovery import build
@@ -91,12 +90,13 @@ class DocumentUploader:
             token_path=DRIVE_TOKEN_FILE,
         )
         self.service = build("drive", "v3", credentials=credentials)
-        # Per-meeting document folders live under this type's own folder (e.g.
-        # "GHAD Meetings") in the shared Source Material parent. An explicit
-        # DOCS_DRIVE_PARENT_ID still overrides, for one-off relocations.
-        self.type_parent_id = os.environ.get(
-            "DOCS_DRIVE_PARENT_ID"
-        ) or find_or_create_type_folder(self.service, self.meeting_type)
+        # This type's folder (e.g. "GHAD Meetings") under the shared Source Material
+        # parent — the SAME folder the transcript uploader uses, so a meeting's docs
+        # and transcript share one <year>/<meeting> folder (TRA-166). No override
+        # here: a different parent would split docs from the transcript.
+        self.type_parent_id = find_or_create_type_folder(
+            self.service, self.meeting_type
+        )
 
     def process(self) -> None:
         for meeting_key, detail in self._unarchived_meetings():

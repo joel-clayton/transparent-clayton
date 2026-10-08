@@ -14,14 +14,6 @@ def _make_uploader():
         return make_uploader(TranscriptUploader, auth_return=MagicMock())
 
 
-class TestGetYearFromDate(unittest.TestCase):
-    def setUp(self):
-        self.uploader = _make_uploader()
-
-    def test_extracts_year(self):
-        self.assertEqual(self.uploader.get_year_from_date("2026-05-08"), "2026")
-
-
 class TestRetrieveAndStoreFilesInFolder(unittest.TestCase):
     """The function lists transcript files in a Drive folder AND stores each
     file's webViewLink in Redis under TRANSCRIPT_LINK_CC_MTG_KEY_TEMPLATE,

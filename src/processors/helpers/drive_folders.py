@@ -49,7 +49,13 @@ def _find_child_folder(service: Any, parent_id: str, name: str) -> str | None:
     )
     results = (
         service.files()
-        .list(q=query, spaces="drive", fields="files(id)", supportsAllDrives=True)
+        .list(
+            q=query,
+            spaces="drive",
+            fields="files(id)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+        )
         .execute()
     )
     folders = results.get("files", [])
