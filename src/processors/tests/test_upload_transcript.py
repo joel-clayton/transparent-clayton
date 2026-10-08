@@ -226,6 +226,10 @@ class TestCreateFileFormatDispatch(unittest.TestCase):
             "City Council Meeting 2026-05-08 07:00 PM - Transcript",
         )
 
+    def test_unparseable_input_raises(self):
+        with self.assertRaises(Exception):
+            self.uploader.create_file("parent_id", "nothing parseable")
+
 
 if __name__ == "__main__":
     unittest.main()
