@@ -256,11 +256,17 @@ class TranscriptUploader(Processor):
             display = meeting_folder_name(self.meeting_type, key)
             if name != display and name != f"{display}{transcript_suffix}":
                 continue
+            # Count the date for idempotency regardless; only record a link when one
+            # is present (r.set(key, None) would raise and abort the whole run).
             dates.append(key)
-            r.set(
-                self.meeting_type.transcript_link_key_template.format(meeting_key=key),
-                file.get("webViewLink"),
-            )
+            link = file.get("webViewLink")
+            if link:
+                r.set(
+                    self.meeting_type.transcript_link_key_template.format(
+                        meeting_key=key
+                    ),
+                    link,
+                )
         return dates
 
     def authenticate(self):  # type: ignore

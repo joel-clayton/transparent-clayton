@@ -106,11 +106,14 @@ def _list_children(service: Any, parent_id: str) -> list[dict]:
     return out
 
 
-def _reparent(service: Any, file_id: str, add: str, remove: str) -> None:
+def _move(service: Any, file_id: str, add: str, remove: str, new_name: str) -> None:
+    """Reparent AND rename in one update so an interruption can't strand a file/folder
+    half-migrated (reparented but not renamed). Preserves the id/URL."""
     service.files().update(
         fileId=file_id,
         addParents=add,
         removeParents=remove,
+        body={"name": new_name},
         fields="id",
         supportsAllDrives=True,
     ).execute()
@@ -186,9 +189,9 @@ def _migrate_type(service: Any, mt: MeetingType, execute: bool) -> tuple[int, in
         print(f"  move doc folder {name!r} -> {year}/{new_folder}/")
         if execute:
             year_id = find_or_create_child_folder(service, type_id, year)
-            _reparent(service, child["id"], add=year_id, remove=type_id)
-            if name != new_folder:
-                _rename(service, child["id"], new_folder)
+            _move(
+                service, child["id"], add=year_id, remove=type_id, new_name=new_folder
+            )
         folders_moved += 1
         docs_renamed += _retag_documents(service, child["id"], mt, key, execute)
 
@@ -217,9 +220,13 @@ def _migrate_type(service: Any, mt: MeetingType, execute: bool) -> tuple[int, in
             )
             if execute:
                 meeting_id = find_or_create_child_folder(service, year_id, folder)
-                _reparent(service, item["id"], add=meeting_id, remove=year_id)
-                if item["name"] != new_name:
-                    _rename(service, item["id"], new_name)
+                _move(
+                    service,
+                    item["id"],
+                    add=meeting_id,
+                    remove=year_id,
+                    new_name=new_name,
+                )
             transcripts_moved += 1
 
     return folders_moved, transcripts_moved, docs_renamed
