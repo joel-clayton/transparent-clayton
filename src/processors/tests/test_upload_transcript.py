@@ -34,12 +34,18 @@ class TestRetrieveAndStoreFilesInFolder(unittest.TestCase):
         self.mock_r = self.r_patcher.start()
         self.addCleanup(self.r_patcher.stop)
 
+    _DOC_MIME = "application/vnd.google-apps.document"
+
     def _stub_drive_response(self, files):
-        """files: list of (name, webViewLink) tuples."""
-        drive_files = [
-            {"id": str(i), "name": n, "mimeType": "x", "webViewLink": link}
-            for i, (n, link) in enumerate(files)
-        ]
+        """files: (name, webViewLink) or (name, webViewLink, mimeType) tuples;
+        entries default to the Google Doc type (a transcript)."""
+        drive_files = []
+        for i, entry in enumerate(files):
+            name, link = entry[0], entry[1]
+            mime = entry[2] if len(entry) > 2 else self._DOC_MIME
+            drive_files.append(
+                {"id": str(i), "name": name, "mimeType": mime, "webViewLink": link}
+            )
         execute = MagicMock(return_value={"files": drive_files, "nextPageToken": None})
         list_request = MagicMock()
         list_request.execute = execute
@@ -123,6 +129,27 @@ class TestRetrieveAndStoreFilesInFolder(unittest.TestCase):
             self.uploader.retrieve_and_store_files_in_folder("folder_id"), []
         )
         self.mock_r.set.assert_not_called()
+
+    def test_skips_non_doc_documents_co_located_in_the_meeting_folder(self):
+        # A document (PDF) now sits alongside the transcript; even if its name
+        # contains the stub + a date it must not be recorded as the transcript.
+        self._stub_drive_response(
+            [
+                ("City Council Meeting 2026-05-08", "https://drive/transcript"),
+                (
+                    "City Council Meeting Summary 2026-05-08",
+                    "https://drive/doc",
+                    "application/pdf",
+                ),
+            ]
+        )
+        self.assertEqual(
+            self.uploader.retrieve_and_store_files_in_folder("folder_id"),
+            ["2026-05-08"],
+        )
+        self.mock_r.set.assert_called_once_with(
+            "transcript_link.cc_mtg.2026-05-08", "https://drive/transcript"
+        )
 
 
 class TestCreateFileFormatDispatch(unittest.TestCase):

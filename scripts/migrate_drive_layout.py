@@ -37,6 +37,7 @@ from src.meeting_types import MEETING_TYPES, MeetingType  # noqa: E402
 from src.processors.helpers.drive_folders import (  # noqa: E402
     find_or_create_child_folder,
     find_or_create_type_folder,
+    find_type_folder,
     meeting_folder_name,
 )
 from src.processors.helpers.google_auth import load_credentials  # noqa: E402
@@ -112,7 +113,15 @@ def _migrate_type(service: Any, mt: MeetingType, execute: bool) -> tuple[int, in
     """Returns (folders_moved, transcripts_moved) for one meeting type."""
     folders_moved = 0
     transcripts_moved = 0
-    type_id = find_or_create_type_folder(service, mt)
+    # Audit must not write: only create the type folder under --execute; if it
+    # doesn't exist yet there is nothing to migrate for this type.
+    if execute:
+        type_id = find_or_create_type_folder(service, mt)
+    else:
+        found = find_type_folder(service, mt)
+        if found is None:
+            return 0, 0
+        type_id = found
     type_children = _list_children(service, type_id)
 
     # Pass A: a legacy document folder sits at the type level named

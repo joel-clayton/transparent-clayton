@@ -232,15 +232,13 @@ class TranscriptUploader(Processor):
         dates = []
         for file in files:
             name = file.get("name")
-            # Skip subfolders: a year folder now holds per-meeting folders (whose
-            # names also contain the stub+datetime), and a meeting folder holds the
-            # transcript alongside document files — only the transcript Doc is a
-            # transcript, never a folder.
-            if file.get("mimeType") == "application/vnd.google-apps.folder":
+            # A transcript is a Google Doc. This excludes both the per-meeting
+            # SUBfolders (whose names also carry the stub+datetime) and the meeting's
+            # DOCUMENTS (PDFs etc., named by label) that now sit in the same folder —
+            # neither must be mistaken for the transcript.
+            if file.get("mimeType") != "application/vnd.google-apps.document":
                 continue
-            # Filter to this type's transcripts by filename prefix — the meeting
-            # folder also contains documents (named by label), which must not be
-            # mistaken for transcripts.
+            # Filter to this type's transcripts by filename prefix.
             if self.meeting_type.file_stub not in (name or ""):
                 continue
             link = file.get("webViewLink")
@@ -267,17 +265,6 @@ class TranscriptUploader(Processor):
                         link,
                     )
         return dates
-
-    def create_folder(self, name: str) -> str:
-        folder_metadata = {
-            "name": name,
-            "mimeType": "application/vnd.google-apps.folder",
-            "parents": [self.type_parent_id],
-        }
-        folder = (
-            self.service.files().create(body=folder_metadata, fields="id").execute()
-        )
-        return folder["id"]
 
     def authenticate(self):  # type: ignore
         credentials = load_credentials(
@@ -323,17 +310,31 @@ class TranscriptUploader(Processor):
 
     def _child_folder_ids(self, parent_id: str) -> List:
         """Ids of the immediate subfolders of ``parent_id`` (the per-meeting folders
-        under a year folder)."""
+        under a year folder), across all pages — an unpaginated listing would miss
+        meetings past the first page and re-upload their transcripts (new URLs)."""
         query = (
             f"'{parent_id}' in parents and "
             "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
         )
-        results = (
-            self.service.files()
-            .list(q=query, spaces="drive", fields="files(id)", supportsAllDrives=True)
-            .execute()
-        )
-        return [f["id"] for f in results.get("files", [])]
+        ids: List = []
+        page_token = None
+        while True:
+            results = (
+                self.service.files()
+                .list(
+                    q=query,
+                    spaces="drive",
+                    fields="nextPageToken, files(id)",
+                    pageToken=page_token,
+                    supportsAllDrives=True,
+                )
+                .execute()
+            )
+            ids += [f["id"] for f in results.get("files", [])]
+            page_token = results.get("nextPageToken")
+            if not page_token:
+                break
+        return ids
 
     def process_for_date(self, date: str) -> None:
         dt = self.extract_datetime_object(date)

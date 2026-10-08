@@ -34,6 +34,14 @@ def meeting_folder_name(meeting_type: MeetingType, meeting_key: str) -> str:
     return f"{meeting_type.file_stub} {meeting_key}"
 
 
+def find_type_folder(
+    service: Any, meeting_type: MeetingType, parent_id: str = SOURCE_MATERIAL_PARENT_ID
+) -> str | None:
+    """The type's Drive folder id if it already exists, else None — a find-only
+    lookup (no creation), for read-only callers like the migration audit."""
+    return _find_child_folder(service, parent_id, meeting_type.drive_folder_name)
+
+
 def _find_child_folder(service: Any, parent_id: str, name: str) -> str | None:
     query = (
         f"name = '{escape_drive_query_value(name)}' and '{parent_id}' in parents "

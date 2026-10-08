@@ -61,7 +61,7 @@ class TestMigrateTypeAudit(unittest.TestCase):
             return []
 
         with (
-            patch.object(m, "find_or_create_type_folder", return_value="TYPE"),
+            patch.object(m, "find_type_folder", return_value="TYPE"),  # audit path
             patch.object(m, "_list_children", side_effect=fake_list),
         ):
             folders, transcripts = m._migrate_type(svc, CITY_COUNCIL, execute=False)
