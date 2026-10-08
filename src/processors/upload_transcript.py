@@ -17,7 +17,9 @@ from src.constants import (
 from src.processors.constants import EARLIEST
 from src.processors.helpers.drive_folders import (
     escape_drive_query_value,
+    find_or_create_meeting_folder,
     find_or_create_type_folder,
+    meeting_folder_name,
 )
 from src.processors.helpers.google_auth import load_credentials
 from src.processors.process import Processor
@@ -230,9 +232,15 @@ class TranscriptUploader(Processor):
         dates = []
         for file in files:
             name = file.get("name")
-            # All meeting types currently share one Drive folder, so filter to
-            # this type's transcripts by filename prefix — otherwise every type
-            # would claim every file and file its link under the wrong namespace.
+            # Skip subfolders: a year folder now holds per-meeting folders (whose
+            # names also contain the stub+datetime), and a meeting folder holds the
+            # transcript alongside document files — only the transcript Doc is a
+            # transcript, never a folder.
+            if file.get("mimeType") == "application/vnd.google-apps.folder":
+                continue
+            # Filter to this type's transcripts by filename prefix — the meeting
+            # folder also contains documents (named by label), which must not be
+            # mistaken for transcripts.
             if self.meeting_type.file_stub not in (name or ""):
                 continue
             link = file.get("webViewLink")
@@ -302,9 +310,30 @@ class TranscriptUploader(Processor):
             if not folder_id:
                 self.logger.warning(f"No folder ID found for {folder_name}")
                 continue
+            # Transcripts now live in per-meeting subfolders of the year folder
+            # (TRA-166). List those, plus the year folder itself so a not-yet-migrated
+            # transcript is still recognized (transition fallback) and never
+            # re-uploaded — which would mint a new Doc URL. Drop the year-folder scan
+            # once the Drive migration has run.
             files_list += self.retrieve_and_store_files_in_folder(folder_id)
+            for meeting_folder_id in self._child_folder_ids(folder_id):
+                files_list += self.retrieve_and_store_files_in_folder(meeting_folder_id)
 
         return sorted(files_list)
+
+    def _child_folder_ids(self, parent_id: str) -> List:
+        """Ids of the immediate subfolders of ``parent_id`` (the per-meeting folders
+        under a year folder)."""
+        query = (
+            f"'{parent_id}' in parents and "
+            "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+        )
+        results = (
+            self.service.files()
+            .list(q=query, spaces="drive", fields="files(id)", supportsAllDrives=True)
+            .execute()
+        )
+        return [f["id"] for f in results.get("files", [])]
 
     def process_for_date(self, date: str) -> None:
         dt = self.extract_datetime_object(date)
@@ -314,10 +343,13 @@ class TranscriptUploader(Processor):
         elif not dt:
             raise Exception(f"Could not parse date from {date} for {self.job_type}")
         self.logger.debug(f"Uploading transcript for {date}")
+        # Upload into this meeting's folder under the year: <type>/<year>/<meeting>/,
+        # shared with the meeting's documents (TRA-166).
         year_folder_name = dt.strftime("%Y")
-        parent_id = self.find_folder_id(year_folder_name)
-        if not parent_id:
-            parent_id = self.create_folder(year_folder_name)
+        folder = meeting_folder_name(self.meeting_type, date)
+        parent_id = find_or_create_meeting_folder(
+            self.service, self.type_parent_id, year_folder_name, folder
+        )
         file_id = self.create_file(parent_id, date)
 
         for email in SHARE_LIST:

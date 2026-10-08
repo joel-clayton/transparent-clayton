@@ -41,7 +41,9 @@ from src.processors.helpers.document_store import (
 )
 from src.processors.helpers.drive_folders import (
     escape_drive_query_value,
+    find_or_create_meeting_folder,
     find_or_create_type_folder,
+    meeting_folder_name,
 )
 from src.processors.helpers.google_auth import load_credentials
 from src.processors.upload_transcript import (
@@ -49,6 +51,7 @@ from src.processors.upload_transcript import (
     DRIVE_TOKEN_FILE,
     SCOPES,
 )
+from src.util import get_year_string_from_string
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +94,7 @@ class DocumentUploader:
         # Per-meeting document folders live under this type's own folder (e.g.
         # "GHAD Meetings") in the shared Source Material parent. An explicit
         # DOCS_DRIVE_PARENT_ID still overrides, for one-off relocations.
-        self.docs_parent_id = os.environ.get(
+        self.type_parent_id = os.environ.get(
             "DOCS_DRIVE_PARENT_ID"
         ) or find_or_create_type_folder(self.service, self.meeting_type)
 
@@ -182,38 +185,13 @@ class DocumentUploader:
         return _file_link_or_raise(created, label)
 
     def _ensure_meeting_folder(self, meeting_key: str) -> str:
-        name = f"{self.meeting_type.file_stub} {meeting_key}"
-        existing = self._find_folder(name)
-        if existing:
-            return existing
-        folder = (
-            self.service.files()
-            .create(
-                body={
-                    "name": name,
-                    "mimeType": "application/vnd.google-apps.folder",
-                    "parents": [self.docs_parent_id],
-                },
-                fields="id",
-                supportsAllDrives=True,
-            )
-            .execute()
+        # The meeting's documents share one folder with its transcript, under the
+        # year: <type>/<year>/<meeting folder> (TRA-166).
+        year = get_year_string_from_string(meeting_key)
+        name = meeting_folder_name(self.meeting_type, meeting_key)
+        return find_or_create_meeting_folder(
+            self.service, self.type_parent_id, year, name
         )
-        return folder["id"]
-
-    def _find_folder(self, name: str) -> str | None:
-        query = (
-            f"name = '{escape_drive_query_value(name)}' and "
-            f"'{self.docs_parent_id}' in parents and "
-            "mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-        )
-        results = (
-            self.service.files()
-            .list(q=query, spaces="drive", fields="files(id)", supportsAllDrives=True)
-            .execute()
-        )
-        folders = results.get("files", [])
-        return folders[0]["id"] if folders else None
 
     def _find_file(self, folder_id: str, name: str) -> str | None:
         query = (

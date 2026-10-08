@@ -27,6 +27,54 @@ def escape_drive_query_value(value: str) -> str:
     return value.replace("\\", "\\\\").replace("'", "\\'")
 
 
+def meeting_folder_name(meeting_type: MeetingType, meeting_key: str) -> str:
+    """The per-meeting Drive folder name shared by this meeting's transcript and its
+    documents (TRA-166), e.g. "City Council Meeting 2026-05-26 07_00 PM". The two
+    uploaders must agree on this exactly so both land in the same folder."""
+    return f"{meeting_type.file_stub} {meeting_key}"
+
+
+def _find_child_folder(service: Any, parent_id: str, name: str) -> str | None:
+    query = (
+        f"name = '{escape_drive_query_value(name)}' and '{parent_id}' in parents "
+        f"and mimeType = '{_FOLDER_MIME}' and trashed = false"
+    )
+    results = (
+        service.files()
+        .list(q=query, spaces="drive", fields="files(id)", supportsAllDrives=True)
+        .execute()
+    )
+    folders = results.get("files", [])
+    return folders[0]["id"] if folders else None
+
+
+def find_or_create_child_folder(service: Any, parent_id: str, name: str) -> str:
+    """Folder id for ``name`` directly under ``parent_id``, creating it if absent."""
+    existing = _find_child_folder(service, parent_id, name)
+    if existing:
+        return existing
+    created = (
+        service.files()
+        .create(
+            body={"name": name, "mimeType": _FOLDER_MIME, "parents": [parent_id]},
+            fields="id",
+            supportsAllDrives=True,
+        )
+        .execute()
+    )
+    return created["id"]
+
+
+def find_or_create_meeting_folder(
+    service: Any, type_folder_id: str, year: str, folder_name: str
+) -> str:
+    """Folder id for ``<type_folder>/<year>/<folder_name>``, creating the year and
+    meeting folders as needed (TRA-166). Both the transcript and document uploaders
+    call this so a meeting's transcript and documents share one folder."""
+    year_id = find_or_create_child_folder(service, type_folder_id, year)
+    return find_or_create_child_folder(service, year_id, folder_name)
+
+
 def find_or_create_type_folder(
     service: Any, meeting_type: MeetingType, parent_id: str = SOURCE_MATERIAL_PARENT_ID
 ) -> str:
