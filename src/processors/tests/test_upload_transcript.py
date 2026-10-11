@@ -14,14 +14,6 @@ def _make_uploader():
         return make_uploader(TranscriptUploader, auth_return=MagicMock())
 
 
-class TestGetYearFromDate(unittest.TestCase):
-    def setUp(self):
-        self.uploader = _make_uploader()
-
-    def test_extracts_year(self):
-        self.assertEqual(self.uploader.get_year_from_date("2026-05-08"), "2026")
-
-
 class TestRetrieveAndStoreFilesInFolder(unittest.TestCase):
     """The function lists transcript files in a Drive folder AND stores each
     file's webViewLink in Redis under TRANSCRIPT_LINK_CC_MTG_KEY_TEMPLATE,
@@ -34,12 +26,18 @@ class TestRetrieveAndStoreFilesInFolder(unittest.TestCase):
         self.mock_r = self.r_patcher.start()
         self.addCleanup(self.r_patcher.stop)
 
+    _DOC_MIME = "application/vnd.google-apps.document"
+
     def _stub_drive_response(self, files):
-        """files: list of (name, webViewLink) tuples."""
-        drive_files = [
-            {"id": str(i), "name": n, "mimeType": "x", "webViewLink": link}
-            for i, (n, link) in enumerate(files)
-        ]
+        """files: (name, webViewLink) or (name, webViewLink, mimeType) tuples;
+        entries default to the Google Doc type (a transcript)."""
+        drive_files = []
+        for i, entry in enumerate(files):
+            name, link = entry[0], entry[1]
+            mime = entry[2] if len(entry) > 2 else self._DOC_MIME
+            drive_files.append(
+                {"id": str(i), "name": name, "mimeType": mime, "webViewLink": link}
+            )
         execute = MagicMock(return_value={"files": drive_files, "nextPageToken": None})
         list_request = MagicMock()
         list_request.execute = execute
@@ -50,7 +48,7 @@ class TestRetrieveAndStoreFilesInFolder(unittest.TestCase):
 
     def test_extracts_date_only_filename(self):
         self._stub_drive_response(
-            [("City Council Meeting 2026-05-08", "https://drive/abc")]
+            [("City Council Meeting 2026-05-08 - Transcript", "https://drive/abc")]
         )
         self.assertEqual(
             self.uploader.retrieve_and_store_files_in_folder("folder_id"),
@@ -62,7 +60,12 @@ class TestRetrieveAndStoreFilesInFolder(unittest.TestCase):
 
     def test_normalizes_datetime_filename_colon_to_underscore(self):
         self._stub_drive_response(
-            [("City Council Meeting 2026-05-08 07:00 PM", "https://drive/xyz")]
+            [
+                (
+                    "City Council Meeting 2026-05-08 07:00 PM - Transcript",
+                    "https://drive/xyz",
+                )
+            ]
         )
         self.assertEqual(
             self.uploader.retrieve_and_store_files_in_folder("folder_id"),
@@ -75,9 +78,12 @@ class TestRetrieveAndStoreFilesInFolder(unittest.TestCase):
     def test_handles_mixed_filenames(self):
         self._stub_drive_response(
             [
-                ("City Council Meeting 2026-05-08", "https://drive/date-only"),
                 (
-                    "City Council Meeting 2026-06-01 07:00 PM",
+                    "City Council Meeting 2026-05-08 - Transcript",
+                    "https://drive/date-only",
+                ),
+                (
+                    "City Council Meeting 2026-06-01 07:00 PM - Transcript",
                     "https://drive/datetime",
                 ),
             ]
@@ -105,8 +111,11 @@ class TestRetrieveAndStoreFilesInFolder(unittest.TestCase):
         # under cc_mtg.
         self._stub_drive_response(
             [
-                ("City Council Meeting 2026-05-08", "https://drive/cc"),
-                ("General Meeting 2026-05-26 07:00 PM", "https://drive/gen"),
+                ("City Council Meeting 2026-05-08 - Transcript", "https://drive/cc"),
+                (
+                    "General Meeting 2026-05-26 07:00 PM - Transcript",
+                    "https://drive/gen",
+                ),
             ]
         )
         self.assertEqual(
@@ -123,6 +132,61 @@ class TestRetrieveAndStoreFilesInFolder(unittest.TestCase):
             self.uploader.retrieve_and_store_files_in_folder("folder_id"), []
         )
         self.mock_r.set.assert_not_called()
+
+    def test_legacy_untagged_transcript_still_recognized(self):
+        # Transition fallback: a not-yet-migrated transcript (named as the bare
+        # meeting display, no "- Transcript" tag) must still be recognized, or it
+        # would be re-uploaded with a new Doc URL.
+        self._stub_drive_response(
+            [("City Council Meeting 2026-05-08 07:00 PM", "https://drive/legacy")]
+        )
+        self.assertEqual(
+            self.uploader.retrieve_and_store_files_in_folder("folder_id"),
+            ["2026-05-08 07_00 PM"],
+        )
+        self.mock_r.set.assert_called_once_with(
+            "transcript_link.cc_mtg.2026-05-08 07_00 PM", "https://drive/legacy"
+        )
+
+    def test_meeting_subfolder_is_not_recorded_as_a_transcript(self):
+        # A per-meeting subfolder's name equals the meeting display; it must be
+        # skipped (it's a folder), not recorded as the transcript.
+        self._stub_drive_response(
+            [
+                (
+                    "City Council Meeting 2026-05-08",
+                    "https://drive/folder",
+                    "application/vnd.google-apps.folder",
+                ),
+            ]
+        )
+        self.assertEqual(
+            self.uploader.retrieve_and_store_files_in_folder("folder_id"), []
+        )
+        self.mock_r.set.assert_not_called()
+
+    def test_documents_co_located_are_not_mistaken_for_the_transcript(self):
+        # A document sits alongside the transcript in the meeting folder; only the
+        # "- Transcript"-tagged file is the transcript (name-based, not mimeType).
+        self._stub_drive_response(
+            [
+                (
+                    "City Council Meeting 2026-05-08 - Transcript",
+                    "https://drive/transcript",
+                ),
+                (
+                    "City Council Meeting 2026-05-08 - Agenda Packet",
+                    "https://drive/doc",
+                ),
+            ]
+        )
+        self.assertEqual(
+            self.uploader.retrieve_and_store_files_in_folder("folder_id"),
+            ["2026-05-08"],
+        )
+        self.mock_r.set.assert_called_once_with(
+            "transcript_link.cc_mtg.2026-05-08", "https://drive/transcript"
+        )
 
 
 class TestCreateFileFormatDispatch(unittest.TestCase):
@@ -143,22 +207,26 @@ class TestCreateFileFormatDispatch(unittest.TestCase):
     @patch("src.processors.upload_transcript.MediaFileUpload")
     @patch("src.processors.upload_transcript.time.sleep", return_value=None)
     @patch("src.processors.upload_transcript.sleep", return_value=None)
-    def test_date_only_input_omits_time_suffix(self, _sleep1, _sleep2, _media):
+    def test_date_only_name_is_type_tagged(self, _sleep1, _sleep2, _media):
         self.uploader.create_file("parent_id", "2026-05-08")
-        self.assertEqual(self._captured_filename(), "City Council Meeting 2026-05-08")
+        self.assertEqual(
+            self._captured_filename(),
+            "City Council Meeting 2026-05-08 - Transcript",
+        )
 
     @patch("src.processors.upload_transcript.MediaFileUpload")
     @patch("src.processors.upload_transcript.time.sleep", return_value=None)
     @patch("src.processors.upload_transcript.sleep", return_value=None)
-    def test_datetime_input_includes_time_suffix(self, _sleep1, _sleep2, _media):
+    def test_datetime_name_uses_colon_and_transcript_tag(
+        self, _sleep1, _sleep2, _media
+    ):
         self.uploader.create_file("parent_id", "2026-05-08 07_00 PM")
         self.assertEqual(
             self._captured_filename(),
-            "City Council Meeting 2026-05-08 07:00 PM",
+            "City Council Meeting 2026-05-08 07:00 PM - Transcript",
         )
 
-    @patch("src.processors.upload_transcript.MediaFileUpload")
-    def test_unparseable_input_raises(self, _media):
+    def test_unparseable_input_raises(self):
         with self.assertRaises(Exception):
             self.uploader.create_file("parent_id", "nothing parseable")
 

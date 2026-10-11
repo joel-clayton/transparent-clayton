@@ -55,5 +55,49 @@ class TestEscapeDriveQueryValue(unittest.TestCase):
         )
 
 
+class TestMeetingFolder(unittest.TestCase):
+    def test_meeting_folder_name_uses_colon_display(self):
+        # The underscore in the key is an on-disk/ffmpeg artifact; Drive uses colon.
+        self.assertEqual(
+            drive_folders.meeting_folder_name(CITY_COUNCIL, "2026-05-26 07_00 PM"),
+            "City Council Meeting 2026-05-26 07:00 PM",
+        )
+
+    def test_transcript_file_name(self):
+        self.assertEqual(
+            drive_folders.transcript_file_name(CITY_COUNCIL, "2026-05-26 07_00 PM"),
+            "City Council Meeting 2026-05-26 07:00 PM - Transcript",
+        )
+
+    def test_document_file_name_keeps_city_label(self):
+        self.assertEqual(
+            drive_folders.document_file_name(
+                CITY_COUNCIL, "2026-05-26 07_00 PM", "Agenda Packet"
+            ),
+            "City Council Meeting 2026-05-26 07:00 PM - Agenda Packet",
+        )
+
+    def test_find_or_create_meeting_folder_creates_year_then_meeting(self):
+        svc = MagicMock()
+        svc.files.return_value.list.return_value.execute.return_value = {"files": []}
+        svc.files.return_value.create.return_value.execute.side_effect = [
+            {"id": "YEAR"},
+            {"id": "MEET"},
+        ]
+        fid = drive_folders.find_or_create_meeting_folder(svc, "TYPE", "2026", "M")
+        self.assertEqual(fid, "MEET")
+        self.assertEqual(svc.files.return_value.create.call_count, 2)  # year + meeting
+
+    def test_find_or_create_meeting_folder_reuses_existing(self):
+        svc = MagicMock()
+        svc.files.return_value.list.return_value.execute.side_effect = [
+            {"files": [{"id": "YEAR"}]},  # year found
+            {"files": [{"id": "MEET"}]},  # meeting found
+        ]
+        fid = drive_folders.find_or_create_meeting_folder(svc, "TYPE", "2026", "M")
+        self.assertEqual(fid, "MEET")
+        svc.files.return_value.create.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
