@@ -179,6 +179,18 @@ class TestRemapRedisKey(unittest.TestCase):
         )
 
 
+class TestDriveChildName(unittest.TestCase):
+    def test_swaps_folder_prefix_keeps_asset_tag(self):
+        self.assertEqual(
+            ck.drive_child_name(
+                "City Council Meeting 2024-05-30 - Transcript",
+                "City Council Meeting 2024-05-30",
+                "Budget and Audit Committee Meeting 2024-05-30 04:00 PM",
+            ),
+            "Budget and Audit Committee Meeting 2024-05-30 04:00 PM - Transcript",
+        )
+
+
 class TestInventoryDisk(unittest.TestCase):
     def setUp(self):
         td = tempfile.TemporaryDirectory()

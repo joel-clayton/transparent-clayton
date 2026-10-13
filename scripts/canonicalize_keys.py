@@ -32,6 +32,12 @@ from typing import Any
 from celery_app import r
 from src.constants import DATETIME_FORMAT
 from src.meeting_types import MEETING_TYPES, MeetingType
+from src.processors.helpers.drive_folders import (
+    find_or_create_child_folder,
+    find_or_create_type_folder,
+    find_type_folder,
+    meeting_folder_name,
+)
 from src.scrapers.civic_clerk_api import (
     effective_category,
     event_datetime,
@@ -44,8 +50,9 @@ from src.settings import STORAGE_ROOT
 # Stage directories keyed by meeting-type bucket (per-type subfolders, TRA-135).
 STAGES = ["Downloaded", "Compressed", "Audio", "Transcripts", "Documents"]
 
-# A datetime key carries a time ("07_00 PM"); a date-only key does not.
-_TIME = r"\d{2}_\d{2} [AP]M"
+# A datetime key carries a time; a date-only key does not. The separator is an
+# underscore on disk/Redis ("07_00 PM") and a colon on Drive ("07:00 PM").
+_TIME = r"\d{2}[:_]\d{2} [AP]M"
 _DATE = r"\d{4}-\d{2}-\d{2}"
 _DATETIME_RE = re.compile(rf"{_DATE} {_TIME}")
 _DATE_RE = re.compile(rf"({_DATE})")
@@ -333,6 +340,133 @@ def apply_redis(
     return renamed, present, flagged
 
 
+_DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
+
+
+def drive_child_name(child_name: str, old_folder: str, new_folder: str) -> str:
+    """A transcript/doc file carries its meeting folder's name as its prefix, so
+    retitling the folder means swapping that prefix (keeping the ' - <asset>' tag)."""
+    return child_name.replace(old_folder, new_folder, 1)
+
+
+def _drive_children(service: Any, parent_id: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    token: str | None = None
+    while True:
+        resp = (
+            service.files()
+            .list(
+                q=f"'{parent_id}' in parents and trashed = false",
+                fields="nextPageToken, files(id, name, mimeType)",
+                pageSize=1000,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+                pageToken=token,
+            )
+            .execute()
+        )
+        out.extend(resp.get("files", []))
+        token = resp.get("nextPageToken")
+        if not token:
+            break
+    return out
+
+
+def _drive_rename(
+    service: Any,
+    file_id: str,
+    new_name: str,
+    add_parent: str | None = None,
+    remove_parent: str | None = None,
+) -> None:
+    """Rename (and optionally reparent) a Drive file in one update — preserves the
+    id, so the URL never changes."""
+    kwargs: dict[str, Any] = {
+        "fileId": file_id,
+        "body": {"name": new_name},
+        "fields": "id",
+        "supportsAllDrives": True,
+    }
+    if add_parent:
+        kwargs["addParents"] = add_parent
+    if remove_parent:
+        kwargs["removeParents"] = remove_parent
+    service.files().update(**kwargs).execute()
+
+
+def apply_drive(
+    service: Any, index: dict[str, list[dict[str, Any]]], execute: bool
+) -> tuple[int, int, int]:
+    """Retitle each legacy date-only Drive meeting folder (and its transcript/doc
+    files) to the colon datetime name, moving the folder to the correct type's tree
+    on a rebucket. All renames preserve the Drive file id, so every URL is unchanged
+    (TRA-166). Returns (renamed, already-datetime, flagged)."""
+    renamed = present = flagged = 0
+    for mt in MEETING_TYPES:
+        type_folder = find_type_folder(service, mt)
+        if not type_folder:
+            continue
+        for year in _drive_children(service, type_folder):
+            if year.get("mimeType") != _DRIVE_FOLDER_MIME:
+                continue
+            year_name = year["name"]
+            for folder in _drive_children(service, year["id"]):
+                if folder.get("mimeType") != _DRIVE_FOLDER_MIME:
+                    continue
+                name = folder["name"]
+                if _DATETIME_RE.search(name):
+                    present += 1
+                    continue
+                m = _DATE_RE.search(name)
+                if not m:
+                    continue
+                plan = classify(mt.display_name, m.group(1), index.get(m.group(1), []))
+                if plan.classification not in (CLEAN, REBUCKET) or not plan.new_key:
+                    flagged += 1
+                    continue
+                assert plan.new_bucket is not None
+                new_mt = BUCKET_TO_TYPE[plan.new_bucket]
+                new_name = meeting_folder_name(new_mt, plan.new_key)
+                move = plan.classification == REBUCKET
+                print(
+                    f"  drive: {mt.display_name}/{year_name}/{name} -> "
+                    f"{new_mt.display_name}/{year_name}/{new_name}"
+                )
+                if not execute:
+                    renamed += 1
+                    continue
+                dest_year_id = year["id"]
+                if move:
+                    dest_type = find_or_create_type_folder(service, new_mt)
+                    dest_year_id = find_or_create_child_folder(
+                        service, dest_type, year_name
+                    )
+                    if any(
+                        c["name"] == new_name
+                        and c.get("mimeType") == _DRIVE_FOLDER_MIME
+                        for c in _drive_children(service, dest_year_id)
+                    ):
+                        print("    (skip: destination already has this meeting folder)")
+                        flagged += 1
+                        continue
+                for child in _drive_children(service, folder["id"]):
+                    child_new = drive_child_name(child["name"], name, new_name)
+                    if child_new != child["name"]:
+                        _drive_rename(service, child["id"], child_new)
+                if move:
+                    _drive_rename(
+                        service,
+                        folder["id"],
+                        new_name,
+                        add_parent=dest_year_id,
+                        remove_parent=year["id"],
+                    )
+                else:
+                    _drive_rename(service, folder["id"], new_name)
+                renamed += 1
+    return renamed, present, flagged
+
+
 def _print_audit(plans: list[Plan]) -> None:
     by_class: dict[str, list[Plan]] = defaultdict(list)
     for p in plans:
@@ -397,6 +531,15 @@ def main() -> None:
         print(
             f"redis: {renamed} key(s) {applied}, {present} already datetime-keyed, "
             f"{flagged} flagged (ambiguous/no-match, left for manual review)"
+        )
+
+    if args.surface in ("drive", "all"):
+        from scripts.reconcile import _drive_service
+
+        renamed, present, flagged = apply_drive(_drive_service(), index, args.execute)
+        print(
+            f"drive: {renamed} folder(s) {applied}, {present} already datetime-keyed, "
+            f"{flagged} flagged"
         )
 
 
