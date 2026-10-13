@@ -24,11 +24,12 @@ from __future__ import annotations
 import argparse
 import os
 import re
-from collections import defaultdict
-from dataclasses import dataclass, field
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any
 
+from celery_app import r
 from src.constants import DATETIME_FORMAT
 from src.meeting_types import MEETING_TYPES, MeetingType
 from src.scrapers.civic_clerk_api import (
@@ -51,11 +52,15 @@ _DATE_RE = re.compile(rf"({_DATE})")
 
 BUCKET_TO_TYPE = {mt.display_name: mt for mt in MEETING_TYPES}
 CATEGORY_TO_TYPE = {mt.category: mt for mt in MEETING_TYPES}
+TYPE_BY_KEY = {mt.key: mt for mt in MEETING_TYPES}
 
 CLEAN = "CLEAN"
 REBUCKET = "REBUCKET"
 AMBIGUOUS = "AMBIGUOUS"
 NOMATCH = "NOMATCH"
+# The same meeting is present under two buckets (a mis-filed copy alongside the
+# correctly-filed one), so both resolve to the same target — needs manual merge.
+COLLISION = "COLLISION"
 
 
 @dataclass(frozen=True)
@@ -146,15 +151,21 @@ def inventory_disk(root: str) -> dict[tuple[str, str], list[tuple[str, str]]]:
     return found
 
 
-def build_plan(root: str, events: list[dict[str, Any]]) -> list[Plan]:
-    """Classify every legacy date-only asset on disk against the OData events."""
+def index_events(
+    events: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Group OData events by their date (``YYYY-MM-DD``) for same-day lookup."""
     index: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for e in events:
         try:
             index[event_datetime(e).strftime("%Y-%m-%d")].append(e)
         except (ValueError, TypeError):
             continue
+    return index
 
+
+def build_plan(root: str, index: dict[str, list[dict[str, Any]]]) -> list[Plan]:
+    """Classify every legacy date-only asset on disk against the OData events."""
     disk = inventory_disk(root)
     plans: list[Plan] = []
     for bucket, date in sorted(disk):
@@ -171,7 +182,155 @@ def build_plan(root: str, events: list[dict[str, Any]]) -> list[Plan]:
                 files=sorted(disk[(bucket, date)]),
             )
         )
-    return plans
+    return mark_collisions(plans)
+
+
+def mark_collisions(plans: list[Plan]) -> list[Plan]:
+    """Flag meetings present under two buckets. When more than one CLEAN/REBUCKET
+    plan resolves to the same (bucket, datetime key) target — e.g. a meeting
+    mis-filed into City Council that also exists in its correct committee bucket —
+    canonicalizing both would create duplicate/partial assets, so mark them all
+    COLLISION for manual merge rather than guessing."""
+    by_target: dict[tuple[str | None, str | None], list[Plan]] = defaultdict(list)
+    for p in plans:
+        if p.classification in (CLEAN, REBUCKET):
+            by_target[(p.new_bucket, p.new_key)].append(p)
+    collided = {
+        (p.src_bucket, p.date)
+        for group in by_target.values()
+        if len(group) > 1
+        for p in group
+    }
+    return [
+        replace(
+            p,
+            classification=COLLISION,
+            note=f"also present as {p.new_bucket} {p.new_key} in another bucket",
+        )
+        if (p.src_bucket, p.date) in collided
+        else p
+        for p in plans
+    ]
+
+
+# --- pure name/key transforms (unit-tested) ---
+
+
+def rekey_filename(
+    old_name: str, date: str, new_key: str, src_display: str, new_display: str
+) -> str:
+    """Rewrite an on-disk filename to its datetime key (and new type stub on a
+    rebucket). Pure string surgery: swap the display-name stub when the type
+    changed, then expand the date to the full datetime key (``new_key`` begins
+    with ``date``, so this inserts the time)."""
+    name = old_name
+    if src_display != new_display:
+        name = name.replace(src_display, new_display, 1)
+    return name.replace(date, new_key, 1)
+
+
+def remap_redis_key(
+    old_key: str, date: str, new_key: str, src_type_key: str, new_type_key: str
+) -> str:
+    """Rewrite a per-meeting Redis key (``<family>.<type>.<date>[.<part>]``) to its
+    datetime key (and new type on a rebucket), preserving any trailing part."""
+    return old_key.replace(f".{src_type_key}.", f".{new_type_key}.", 1).replace(
+        date, new_key, 1
+    )
+
+
+# --- executors (apply the plan to each surface; read-only unless execute) ---
+
+
+def apply_disk(root: str, plans: list[Plan], execute: bool) -> tuple[int, int]:
+    """Rename each CLEAN/REBUCKET asset's files to the datetime key, moving to the
+    correct type bucket on a rebucket. Idempotent: skips when the target already
+    exists or the source is gone. Returns (renamed, already-present)."""
+    renamed = present = 0
+    for p in plans:
+        if p.classification not in (CLEAN, REBUCKET) or not p.new_key:
+            continue
+        assert p.new_bucket is not None
+        for stage, name in p.files:
+            src_dir = os.path.join(root, stage, p.src_bucket)
+            dst_dir = os.path.join(root, stage, p.new_bucket)
+            new_name = rekey_filename(
+                name, p.date, p.new_key, p.src_bucket, p.new_bucket
+            )
+            src, dst = os.path.join(src_dir, name), os.path.join(dst_dir, new_name)
+            if not os.path.exists(src):
+                continue
+            if os.path.exists(dst):
+                present += 1
+                continue
+            print(f"  disk {stage}: {p.src_bucket}/{name} -> {p.new_bucket}/{new_name}")
+            if execute:
+                os.makedirs(dst_dir, exist_ok=True)
+                os.rename(src, dst)
+                sidecar = os.path.join(src_dir, "._" + name)
+                if os.path.exists(sidecar):
+                    os.rename(sidecar, os.path.join(dst_dir, "._" + new_name))
+            renamed += 1
+    return renamed, present
+
+
+def plan_redis(
+    index: dict[str, list[dict[str, Any]]],
+) -> list[tuple[str, str | None, Plan]]:
+    """Find legacy date-only per-meeting Redis keys and resolve each to its new
+    (type, datetime) key via the same classifier. Returns (old_key, new_key|None,
+    plan); new_key is None for AMBIGUOUS/NOMATCH."""
+    out: list[tuple[str, str | None, Plan]] = []
+    for raw in r.scan_iter(match="*_link.*"):
+        key = raw.decode() if isinstance(raw, bytes) else raw
+        m = _DATE_RE.search(key)
+        if not m or _DATETIME_RE.search(key):
+            continue
+        date = m.group(1)
+        type_key = key.split(".")[1]
+        mt = TYPE_BY_KEY.get(type_key)
+        if mt is None:
+            continue
+        plan = classify(mt.display_name, date, index.get(date, []))
+        if plan.classification in (CLEAN, REBUCKET) and plan.new_key:
+            assert plan.new_type_key is not None
+            new = remap_redis_key(key, date, plan.new_key, type_key, plan.new_type_key)
+            out.append((key, new, plan))
+        else:
+            out.append((key, None, plan))
+
+    # Guard against two legacy keys resolving to the same target (a meeting present
+    # under two types): drop both so a rename can never clobber the other's value.
+    target_counts = Counter(new for _old, new, _p in out if new is not None)
+    return [
+        (old, (new if new is None or target_counts[new] == 1 else None), plan)
+        for old, new, plan in out
+    ]
+
+
+def apply_redis(
+    index: dict[str, list[dict[str, Any]]], execute: bool
+) -> tuple[int, int, int]:
+    """Rename legacy date-only per-meeting Redis keys to their datetime key.
+    ``RENAME`` is atomic and type-agnostic; guarded so an already-migrated key is
+    never clobbered. Returns (renamed, already-present, flagged)."""
+    renamed = present = flagged = 0
+    for old, new, plan in plan_redis(index):
+        if new is None:
+            flagged += 1
+            continue
+        if r.exists(new):
+            present += 1
+            continue
+        print(f"  redis: {old} -> {new}")
+        if execute:
+            try:
+                r.rename(old, new)
+            except Exception as exc:  # old vanished mid-run; next run retries
+                print(f"    (skipped: {exc})")
+                continue
+        renamed += 1
+    return renamed, present, flagged
 
 
 def _print_audit(plans: list[Plan]) -> None:
@@ -180,7 +339,7 @@ def _print_audit(plans: list[Plan]) -> None:
         by_class[p.classification].append(p)
 
     print(f"Legacy date-only assets: {len(plans)}")
-    for cls in (CLEAN, REBUCKET, AMBIGUOUS, NOMATCH):
+    for cls in (CLEAN, REBUCKET, COLLISION, AMBIGUOUS, NOMATCH):
         print(f"  {cls:<10} {len(by_class[cls])}")
 
     if by_class[REBUCKET]:
@@ -191,6 +350,7 @@ def _print_audit(plans: list[Plan]) -> None:
                 f"({len(p.files)} file(s))"
             )
     for cls, label in (
+        (COLLISION, "COLLISION (same meeting in two buckets — manual merge)"),
         (AMBIGUOUS, "AMBIGUOUS (needs a human decision)"),
         (NOMATCH, "NOMATCH (no OData event that date)"),
     ):
@@ -207,12 +367,37 @@ def main() -> None:
     parser.add_argument(
         "--root", default=STORAGE_ROOT, help="storage root (default: %(default)s)"
     )
+    parser.add_argument(
+        "--surface",
+        choices=["disk", "redis", "drive", "youtube", "all"],
+        default="all",
+        help="which surface to canonicalize (default: all)",
+    )
+    parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="apply the renames (default: audit / read-only dry run)",
+    )
     args = parser.parse_args()
+    applied = "applied" if args.execute else "planned"
 
-    print("Canonicalization audit — mode: AUDIT (read-only)")
+    mode = "EXECUTE (writes)" if args.execute else "AUDIT (read-only)"
+    print(f"Canonicalization — mode: {mode}  surface: {args.surface}")
     events = fetch_events(datetime(2000, 1, 1), datetime.now())
-    plans = build_plan(args.root, events)
-    _print_audit(plans)
+    index = index_events(events)
+
+    if args.surface in ("disk", "all"):
+        plans = build_plan(args.root, index)
+        _print_audit(plans)
+        renamed, present = apply_disk(args.root, plans, args.execute)
+        print(f"\ndisk: {renamed} file(s) {applied}, {present} already datetime-keyed")
+
+    if args.surface in ("redis", "all"):
+        renamed, present, flagged = apply_redis(index, args.execute)
+        print(
+            f"redis: {renamed} key(s) {applied}, {present} already datetime-keyed, "
+            f"{flagged} flagged (ambiguous/no-match, left for manual review)"
+        )
 
 
 if __name__ == "__main__":

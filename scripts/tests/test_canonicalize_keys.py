@@ -78,6 +78,107 @@ class TestClassify(unittest.TestCase):
         self.assertEqual(p.classification, ck.NOMATCH)
 
 
+class TestMarkCollisions(unittest.TestCase):
+    def test_two_plans_to_same_target_both_become_collision(self):
+        clean = ck.Plan(
+            "Budget and Audit Committee",
+            "2024-05-30",
+            ck.CLEAN,
+            "Budget and Audit Committee",
+            "2024-05-30 04_00 PM",
+            "bac_mtg",
+        )
+        rebucket = ck.Plan(
+            "City Council",
+            "2024-05-30",
+            ck.REBUCKET,
+            "Budget and Audit Committee",
+            "2024-05-30 04_00 PM",
+            "bac_mtg",
+        )
+        lone = ck.Plan(
+            "City Council",
+            "2025-08-11",
+            ck.CLEAN,
+            "City Council",
+            "2025-08-11 07_00 PM",
+            "cc_mtg",
+        )
+        out = {
+            (p.src_bucket, p.date): p.classification
+            for p in ck.mark_collisions([clean, rebucket, lone])
+        }
+        self.assertEqual(
+            out[("Budget and Audit Committee", "2024-05-30")], ck.COLLISION
+        )
+        self.assertEqual(out[("City Council", "2024-05-30")], ck.COLLISION)
+        self.assertEqual(out[("City Council", "2025-08-11")], ck.CLEAN)
+
+
+class TestRekeyFilename(unittest.TestCase):
+    def test_clean_inserts_time_only(self):
+        self.assertEqual(
+            ck.rekey_filename(
+                "City Council Meeting 2025-08-11 - City of Clayton.txt",
+                "2025-08-11",
+                "2025-08-11 07_00 PM",
+                "City Council",
+                "City Council",
+            ),
+            "City Council Meeting 2025-08-11 07_00 PM - City of Clayton.txt",
+        )
+
+    def test_clean_compressed_part_suffix_preserved(self):
+        self.assertEqual(
+            ck.rekey_filename(
+                "Clayton CA City Council Meeting 2025-08-11 - 000.mp4",
+                "2025-08-11",
+                "2025-08-11 07_00 PM",
+                "City Council",
+                "City Council",
+            ),
+            "Clayton CA City Council Meeting 2025-08-11 07_00 PM - 000.mp4",
+        )
+
+    def test_rebucket_swaps_stub_and_adds_time(self):
+        self.assertEqual(
+            ck.rekey_filename(
+                "Clayton CA City Council Meeting 2024-05-30.mp4",
+                "2024-05-30",
+                "2024-05-30 04_00 PM",
+                "City Council",
+                "Budget and Audit Committee",
+            ),
+            "Clayton CA Budget and Audit Committee Meeting 2024-05-30 04_00 PM.mp4",
+        )
+
+
+class TestRemapRedisKey(unittest.TestCase):
+    def test_clean_transcript_link(self):
+        self.assertEqual(
+            ck.remap_redis_key(
+                "transcript_link.cc_mtg.2025-08-11",
+                "2025-08-11",
+                "2025-08-11 07_00 PM",
+                "cc_mtg",
+                "cc_mtg",
+            ),
+            "transcript_link.cc_mtg.2025-08-11 07_00 PM",
+        )
+
+    def test_rebucket_video_link_preserves_part(self):
+        self.assertEqual(
+            ck.remap_redis_key(
+                "video_link.cc_mtg.2024-05-30.0",
+                "2024-05-30",
+                "2024-05-30 04_00 PM",
+                "cc_mtg",
+                "bac_mtg",
+            ),
+            "video_link.bac_mtg.2024-05-30 04_00 PM.0",
+        )
+
+
 class TestInventoryDisk(unittest.TestCase):
     def setUp(self):
         td = tempfile.TemporaryDirectory()
