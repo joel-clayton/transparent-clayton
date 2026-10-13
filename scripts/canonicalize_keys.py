@@ -10,13 +10,20 @@ legacy assets to their datetime key first, using the CivicClerk OData API as the
 source of truth, and moves assets that were mis-filed into the wrong type bucket
 (the old City Council catch-all) to their correct type.
 
-The planner here is the audit: it classifies every legacy date-only asset as
-CLEAN (same type, one datetime match), REBUCKET (belongs to another type),
-AMBIGUOUS (the date can't be resolved automatically), or NOMATCH (no OData event
-on that date). Executors (disk/Redis/YouTube/Drive) consume this plan; they are
-added on top of this core. Read-only by default.
+Each legacy asset is classified against the OData API as CLEAN (same type, one
+datetime match), REBUCKET (belongs to another type), COLLISION (present under two
+buckets — manual merge), AMBIGUOUS (the date can't be resolved automatically), or
+NOMATCH (no OData event that date). The executors apply CLEAN/REBUCKET across four
+surfaces — disk files, Redis keys, Drive folders/files (URL-preserving), and
+YouTube titles — and skip the rest, reporting them for manual review.
 
-    python scripts/canonicalize_keys.py            # audit (read-only)
+    python scripts/canonicalize_keys.py                      # audit all (read-only)
+    python scripts/canonicalize_keys.py --surface disk       # audit one surface
+    python scripts/canonicalize_keys.py --execute            # apply all
+    python scripts/canonicalize_keys.py --surface drive --execute
+
+Operator runs --execute (disk/Drive/YouTube/Redis writes are outward). Must run
+before the TRA-169 OData backfill, with worker/beat stopped.
 """
 
 from __future__ import annotations
@@ -32,6 +39,7 @@ from typing import Any
 from celery_app import r
 from src.constants import DATETIME_FORMAT
 from src.meeting_types import MEETING_TYPES, MeetingType
+from src.meeting_types import classify as mt_classify
 from src.processors.helpers.drive_folders import (
     find_or_create_child_folder,
     find_or_create_type_folder,
@@ -467,6 +475,73 @@ def apply_drive(
     return renamed, present, flagged
 
 
+def youtube_title_date(title: str) -> str | None:
+    """The meeting date from a YouTube title, normalized to YYYY-MM-DD. Legacy
+    titles use either hyphens ("2021-09-21") or an older space form ("2025 05 19")."""
+    m = re.search(r"(\d{4})[- ](\d{2})[- ](\d{2})", title)
+    return f"{m.group(1)}-{m.group(2)}-{m.group(3)}" if m else None
+
+
+def youtube_canonical_title(src_title: str, new_mt: MeetingType, new_key: str) -> str:
+    """The exact title ``upload_video`` would set for this meeting's canonical
+    (datetime) compressed file — built from the type's own ``video_title_datetime_
+    format`` (so a rebucket gets the new type's name), with any ' part N' preserved.
+    Matching it is what stops the backfill re-uploading the video."""
+    part = re.search(r" part \d+", src_title)
+    base = datetime.strptime(new_key, DATETIME_FORMAT).strftime(
+        new_mt.video_title_datetime_format
+    )
+    return base + (part.group(0) if part else "")
+
+
+def _youtube_set_title(service: Any, video_id: str, new_title: str) -> None:
+    """Retitle a video, preserving its other snippet fields (categoryId is required
+    on a snippet update)."""
+    resp = service.videos().list(part="snippet", id=video_id).execute()
+    items = resp.get("items", [])
+    if not items:
+        return
+    snippet = items[0]["snippet"]
+    snippet["title"] = new_title
+    service.videos().update(
+        part="snippet", body={"id": video_id, "snippet": snippet}
+    ).execute()
+
+
+def apply_youtube(
+    service: Any, index: dict[str, list[dict[str, Any]]], execute: bool
+) -> tuple[int, int, int]:
+    """Retitle each legacy date-only / space-dated YouTube video to its canonical
+    datetime title (and correct type name on a rebucket). Returns (renamed,
+    already-datetime, flagged)."""
+    from scripts.reconcile import _fetch_uploads
+
+    renamed = present = flagged = 0
+    for title, video_id in _fetch_uploads(service):
+        if _DATETIME_RE.search(title):
+            present += 1
+            continue
+        src_mt = mt_classify(title)
+        date = youtube_title_date(title)
+        if src_mt is None or date is None:
+            continue  # not a meeting video (e.g. a one-off demo upload)
+        plan = classify(src_mt.display_name, date, index.get(date, []))
+        if plan.classification not in (CLEAN, REBUCKET) or not plan.new_key:
+            flagged += 1
+            continue
+        assert plan.new_bucket is not None
+        new_mt = BUCKET_TO_TYPE[plan.new_bucket]
+        new_title = youtube_canonical_title(title, new_mt, plan.new_key)
+        if new_title == title:
+            present += 1
+            continue
+        print(f"  youtube: {title!r} -> {new_title!r}")
+        if execute:
+            _youtube_set_title(service, video_id, new_title)
+        renamed += 1
+    return renamed, present, flagged
+
+
 def _print_audit(plans: list[Plan]) -> None:
     by_class: dict[str, list[Plan]] = defaultdict(list)
     for p in plans:
@@ -539,6 +614,17 @@ def main() -> None:
         renamed, present, flagged = apply_drive(_drive_service(), index, args.execute)
         print(
             f"drive: {renamed} folder(s) {applied}, {present} already datetime-keyed, "
+            f"{flagged} flagged"
+        )
+
+    if args.surface in ("youtube", "all"):
+        from scripts.reconcile import _youtube_service
+
+        renamed, present, flagged = apply_youtube(
+            _youtube_service(), index, args.execute
+        )
+        print(
+            f"youtube: {renamed} title(s) {applied}, {present} already datetime-titled, "
             f"{flagged} flagged"
         )
 

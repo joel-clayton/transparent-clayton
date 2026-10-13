@@ -3,6 +3,7 @@ import tempfile
 import unittest
 
 from scripts import canonicalize_keys as ck
+from src.meeting_types import BUDGET_AND_AUDIT, CITY_COUNCIL
 
 
 def ev(dt_iso: str, category: str, name: str = "") -> dict:
@@ -176,6 +177,39 @@ class TestRemapRedisKey(unittest.TestCase):
                 "bac_mtg",
             ),
             "video_link.bac_mtg.2024-05-30 04_00 PM.0",
+        )
+
+
+class TestYouTube(unittest.TestCase):
+    def test_title_date_hyphen_and_space_forms(self):
+        self.assertEqual(
+            ck.youtube_title_date("Clayton CA City Council Meeting 2021-09-21"),
+            "2021-09-21",
+        )
+        self.assertEqual(
+            ck.youtube_title_date("Clayton CA City Council Meeting 2025 05 19"),
+            "2025-05-19",
+        )
+        self.assertIsNone(ck.youtube_title_date("Quick and dirty app demo"))
+
+    def test_canonical_title_colon_datetime(self):
+        self.assertEqual(
+            ck.youtube_canonical_title(
+                "Clayton CA City Council Meeting 2021-09-21",
+                CITY_COUNCIL,
+                "2021-09-21 07_00 PM",
+            ),
+            "Clayton CA City Council Meeting 2021-09-21 07:00 PM",
+        )
+
+    def test_canonical_title_preserves_part_and_rebucket_name(self):
+        self.assertEqual(
+            ck.youtube_canonical_title(
+                "Clayton CA City Council Meeting 2024-05-30 part 2",
+                BUDGET_AND_AUDIT,
+                "2024-05-30 04_00 PM",
+            ),
+            "Clayton CA Budget and Audit Committee Meeting 2024-05-30 04:00 PM part 2",
         )
 
 
