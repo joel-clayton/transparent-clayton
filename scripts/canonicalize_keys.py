@@ -185,18 +185,7 @@ def build_plan(root: str, index: dict[str, list[dict[str, Any]]]) -> list[Plan]:
     plans: list[Plan] = []
     for bucket, date in sorted(disk):
         plan = classify(bucket, date, index.get(date, []))
-        plans.append(
-            Plan(
-                plan.src_bucket,
-                plan.date,
-                plan.classification,
-                plan.new_bucket,
-                plan.new_key,
-                plan.new_type_key,
-                plan.note,
-                files=sorted(disk[(bucket, date)]),
-            )
-        )
+        plans.append(replace(plan, files=sorted(disk[(bucket, date)])))
     return mark_collisions(plans)
 
 
@@ -259,9 +248,12 @@ def remap_redis_key(
 
 def apply_disk(root: str, plans: list[Plan], execute: bool) -> tuple[int, int]:
     """Rename each CLEAN/REBUCKET asset's files to the datetime key, moving to the
-    correct type bucket on a rebucket. Idempotent: skips when the target already
-    exists or the source is gone. Returns (renamed, already-present)."""
-    renamed = present = 0
+    correct type bucket on a rebucket. Skips when the source is gone (already
+    migrated). When the source is still present but the datetime target already
+    exists, that is a real duplicate (a legacy file beside a newer datetime one),
+    so it is left in place and surfaced as a CONFLICT for manual merge rather than
+    silently counted done. Returns (renamed, conflicts)."""
+    renamed = conflicts = 0
     for p in plans:
         if p.classification not in (CLEAN, REBUCKET) or not p.new_key:
             continue
@@ -276,7 +268,11 @@ def apply_disk(root: str, plans: list[Plan], execute: bool) -> tuple[int, int]:
             if not os.path.exists(src):
                 continue
             if os.path.exists(dst):
-                present += 1
+                print(
+                    f"  disk CONFLICT {stage}: {p.src_bucket}/{name} left — "
+                    f"{p.new_bucket}/{new_name} already exists"
+                )
+                conflicts += 1
                 continue
             print(f"  disk {stage}: {p.src_bucket}/{name} -> {p.new_bucket}/{new_name}")
             if execute:
@@ -286,7 +282,7 @@ def apply_disk(root: str, plans: list[Plan], execute: bool) -> tuple[int, int]:
                 if os.path.exists(sidecar):
                     os.rename(sidecar, os.path.join(dst_dir, "._" + new_name))
             renamed += 1
-    return renamed, present
+    return renamed, conflicts
 
 
 def plan_redis(
@@ -443,20 +439,24 @@ def apply_drive(
                 if not execute:
                     renamed += 1
                     continue
-                dest_year_id = year["id"]
                 if move:
                     dest_type = find_or_create_type_folder(service, new_mt)
                     dest_year_id = find_or_create_child_folder(
                         service, dest_type, year_name
                     )
-                    if any(
-                        c["name"] == new_name
-                        and c.get("mimeType") == _DRIVE_FOLDER_MIME
-                        for c in _drive_children(service, dest_year_id)
-                    ):
-                        print("    (skip: destination already has this meeting folder)")
-                        flagged += 1
-                        continue
+                else:
+                    dest_year_id = year["id"]
+                # Drive allows same-named siblings, so a datetime folder the newer
+                # pipeline already created would be duplicated by this rename and the
+                # meeting's assets split. Guard both CLEAN (same year) and REBUCKET
+                # (destination year): if the target folder already exists, skip + flag.
+                if any(
+                    c["name"] == new_name and c.get("mimeType") == _DRIVE_FOLDER_MIME
+                    for c in _drive_children(service, dest_year_id)
+                ):
+                    print("    (skip: destination already has this meeting folder)")
+                    flagged += 1
+                    continue
                 for child in _drive_children(service, folder["id"]):
                     child_new = drive_child_name(child["name"], name, new_name)
                     if child_new != child["name"]:
@@ -517,6 +517,8 @@ def apply_youtube(
     from scripts.reconcile import _fetch_uploads
 
     renamed = present = flagged = 0
+    # First pass: resolve each legacy title to its canonical form.
+    retitles: list[tuple[str, str, str]] = []  # (video_id, old_title, new_title)
     for title, video_id in _fetch_uploads(service):
         if _DATETIME_RE.search(title):
             present += 1
@@ -530,12 +532,26 @@ def apply_youtube(
             flagged += 1
             continue
         assert plan.new_bucket is not None
-        new_mt = BUCKET_TO_TYPE[plan.new_bucket]
-        new_title = youtube_canonical_title(title, new_mt, plan.new_key)
+        new_title = youtube_canonical_title(
+            title, BUCKET_TO_TYPE[plan.new_bucket], plan.new_key
+        )
         if new_title == title:
             present += 1
             continue
-        print(f"  youtube: {title!r} -> {new_title!r}")
+        retitles.append((video_id, title, new_title))
+
+    # Guard against two videos resolving to the same canonical title (the same
+    # meeting uploaded twice): retitling both identically would defeat the
+    # title-match dedupe the backfill relies on, so flag both instead.
+    collisions = {
+        t for t, n in Counter(new for _v, _o, new in retitles).items() if n > 1
+    }
+    for video_id, old_title, new_title in retitles:
+        if new_title in collisions:
+            print(f"  youtube COLLISION: {old_title!r} -> {new_title!r} (duplicate)")
+            flagged += 1
+            continue
+        print(f"  youtube: {old_title!r} -> {new_title!r}")
         if execute:
             _youtube_set_title(service, video_id, new_title)
         renamed += 1
@@ -598,8 +614,11 @@ def main() -> None:
     if args.surface in ("disk", "all"):
         plans = build_plan(args.root, index)
         _print_audit(plans)
-        renamed, present = apply_disk(args.root, plans, args.execute)
-        print(f"\ndisk: {renamed} file(s) {applied}, {present} already datetime-keyed")
+        renamed, conflicts = apply_disk(args.root, plans, args.execute)
+        print(
+            f"\ndisk: {renamed} file(s) {applied}, {conflicts} CONFLICT "
+            "(legacy + datetime copy both present — manual merge)"
+        )
 
     if args.surface in ("redis", "all"):
         renamed, present, flagged = apply_redis(index, args.execute)
