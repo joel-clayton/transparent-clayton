@@ -3,7 +3,7 @@ import tempfile
 import unittest
 
 from scripts import canonicalize_keys as ck
-from src.meeting_types import BUDGET_AND_AUDIT, CITY_COUNCIL
+from src.meeting_types import BUDGET_AND_AUDIT, CITY_COUNCIL, GHAD
 
 
 def ev(dt_iso: str, category: str, name: str = "") -> dict:
@@ -201,6 +201,18 @@ class TestYouTube(unittest.TestCase):
             ),
             "Clayton CA City Council Meeting 2021-09-21 07:00 PM",
         )
+
+    def test_meeting_type_matches_display_name_including_ghad(self):
+        # Titles embed display_name; GHAD's title_match differs, so mt_classify
+        # would miss it — the display-name matcher must not.
+        self.assertIs(
+            ck._youtube_meeting_type("Clayton CA GHAD Meeting 2024-05-01"), GHAD
+        )
+        self.assertIs(
+            ck._youtube_meeting_type("Clayton CA City Council Meeting 2021-09-21"),
+            CITY_COUNCIL,
+        )
+        self.assertIsNone(ck._youtube_meeting_type("Quick and dirty app demo"))
 
     def test_canonical_title_preserves_part_and_rebucket_name(self):
         self.assertEqual(

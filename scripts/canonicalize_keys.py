@@ -39,7 +39,6 @@ from typing import Any
 from celery_app import r
 from src.constants import DATETIME_FORMAT
 from src.meeting_types import MEETING_TYPES, MeetingType
-from src.meeting_types import classify as mt_classify
 from src.processors.helpers.drive_folders import (
     find_or_create_child_folder,
     find_or_create_type_folder,
@@ -440,7 +439,18 @@ def apply_drive(
             if year.get("mimeType") != _DRIVE_FOLDER_MIME:
                 continue
             year_name = year["name"]
-            for folder in _drive_children(service, year["id"]):
+            year_children = _drive_children(service, year["id"])
+            # Folder-name set per destination year, so the duplicate-target guard is
+            # a lookup, not a fresh listing per meeting (the CLEAN dest is this same
+            # year, already fetched here). Updated as we go so same-run renames count.
+            dest_names: dict[str, set[str]] = {
+                year["id"]: {
+                    c["name"]
+                    for c in year_children
+                    if c.get("mimeType") == _DRIVE_FOLDER_MIME
+                }
+            }
+            for folder in year_children:
                 if folder.get("mimeType") != _DRIVE_FOLDER_MIME:
                     continue
                 name = folder["name"]
@@ -475,14 +485,17 @@ def apply_drive(
                     )
                 else:
                     dest_year_id = year["id"]
+                if dest_year_id not in dest_names:
+                    dest_names[dest_year_id] = {
+                        c["name"]
+                        for c in _drive_children(service, dest_year_id)
+                        if c.get("mimeType") == _DRIVE_FOLDER_MIME
+                    }
                 # Drive allows same-named siblings, so a datetime folder the newer
                 # pipeline already created would be duplicated by this rename and the
                 # meeting's assets split. Guard both CLEAN (same year) and REBUCKET
                 # (destination year): if the target folder already exists, skip + flag.
-                if any(
-                    c["name"] == new_name and c.get("mimeType") == _DRIVE_FOLDER_MIME
-                    for c in _drive_children(service, dest_year_id)
-                ):
+                if new_name in dest_names[dest_year_id]:
                     print("    (skip: destination already has this meeting folder)")
                     flagged += 1
                     continue
@@ -500,6 +513,7 @@ def apply_drive(
                     )
                 else:
                     _drive_rename(service, folder["id"], new_name)
+                dest_names[dest_year_id].add(new_name)
                 renamed += 1
     return renamed, present, flagged
 
@@ -523,18 +537,29 @@ def youtube_canonical_title(src_title: str, new_mt: MeetingType, new_key: str) -
     return base + (part.group(0) if part else "")
 
 
-def _youtube_set_title(service: Any, video_id: str, new_title: str) -> None:
+def _youtube_meeting_type(title: str) -> MeetingType | None:
+    """The meeting type for a YouTube title. Uploaded titles embed the type's
+    ``display_name`` ("Clayton CA GHAD Meeting ..."), which differs from its
+    ``title_match`` for GHAD — so match on display_name, not mt_classify."""
+    for mt in MEETING_TYPES:
+        if f"{mt.display_name} Meeting" in title:
+            return mt
+    return None
+
+
+def _youtube_set_title(service: Any, video_id: str, new_title: str) -> bool:
     """Retitle a video, preserving its other snippet fields (categoryId is required
-    on a snippet update)."""
+    on a snippet update). Returns False if the video is no longer available."""
     resp = service.videos().list(part="snippet", id=video_id).execute()
     items = resp.get("items", [])
     if not items:
-        return
+        return False
     snippet = items[0]["snippet"]
     snippet["title"] = new_title
     service.videos().update(
         part="snippet", body={"id": video_id, "snippet": snippet}
     ).execute()
+    return True
 
 
 def apply_youtube(
@@ -550,13 +575,16 @@ def apply_youtube(
     from scripts.reconcile import _fetch_uploads
 
     renamed = present = flagged = 0
-    # First pass: resolve each legacy title to its canonical form.
+    # First pass: resolve each legacy title to its canonical form, and record the
+    # titles already in canonical datetime form (left untouched).
     retitles: list[tuple[str, str, str]] = []  # (video_id, old_title, new_title)
+    existing: set[str] = set()
     for title, video_id in _fetch_uploads(service):
         if _DATETIME_RE.search(title):
             present += 1
+            existing.add(title)
             continue
-        src_mt = mt_classify(title)
+        src_mt = _youtube_meeting_type(title)
         date = youtube_title_date(title)
         if src_mt is None or date is None:
             continue  # not a meeting video (e.g. a one-off demo upload)
@@ -571,25 +599,28 @@ def apply_youtube(
         new_title = youtube_canonical_title(
             title, BUCKET_TO_TYPE[plan.new_bucket], plan.new_key
         )
-        if new_title == title:
-            present += 1
-            continue
         retitles.append((video_id, title, new_title))
 
-    # Guard against two videos resolving to the same canonical title (the same
-    # meeting uploaded twice): retitling both identically would defeat the
-    # title-match dedupe the backfill relies on, so flag both instead.
-    dup_titles = {
+    # A legacy video must not be retitled onto a title another video already holds —
+    # whether another video we are also retitling (an intra-batch duplicate) or an
+    # already-canonical one we left untouched (``existing``). Either produces two
+    # identically-titled videos and defeats the title-match dedupe the backfill
+    # relies on, so flag instead of retitling.
+    taken = existing | {
         t for t, n in Counter(new for _v, _o, new in retitles).items() if n > 1
     }
     for video_id, old_title, new_title in retitles:
-        if new_title in dup_titles:
-            print(f"  youtube COLLISION: {old_title!r} -> {new_title!r} (duplicate)")
+        if new_title in taken:
+            print(
+                f"  youtube COLLISION: {old_title!r} -> {new_title!r} (target exists)"
+            )
             flagged += 1
             continue
         print(f"  youtube: {old_title!r} -> {new_title!r}")
-        if execute:
-            _youtube_set_title(service, video_id, new_title)
+        if execute and not _youtube_set_title(service, video_id, new_title):
+            print("    (skipped: video unavailable)")
+            flagged += 1
+            continue
         renamed += 1
     return renamed, present, flagged
 
