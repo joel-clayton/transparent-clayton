@@ -55,8 +55,13 @@ from src.scrapers.civic_clerk_api import (
 )
 from src.settings import STORAGE_ROOT
 
-# Stage directories keyed by meeting-type bucket (per-type subfolders, TRA-135).
-STAGES = ["Downloaded", "Compressed", "Audio", "Transcripts", "Documents"]
+# Flat per-type stage dirs whose files embed the meeting key in the filename.
+# Documents is deliberately NOT here: its key lives in the per-meeting *folder* name
+# (the files inside are label-named), and legacy meetings have none on disk anyway;
+# the durable document assets live in Drive and are handled by apply_drive. A
+# date-only Documents folder, should one ever appear, is surfaced by
+# warn_dated_documents rather than silently mishandled by the flat-file logic.
+STAGES = ["Downloaded", "Compressed", "Audio", "Transcripts"]
 
 # A datetime key carries a time; a date-only key does not. The separator is an
 # underscore on disk/Redis ("07_00 PM") and a colon on Drive ("07:00 PM").
@@ -248,16 +253,19 @@ def remap_redis_key(
 
 def apply_disk(root: str, plans: list[Plan], execute: bool) -> tuple[int, int]:
     """Rename each CLEAN/REBUCKET asset's files to the datetime key, moving to the
-    correct type bucket on a rebucket. Skips when the source is gone (already
-    migrated). When the source is still present but the datetime target already
-    exists, that is a real duplicate (a legacy file beside a newer datetime one),
-    so it is left in place and surfaced as a CONFLICT for manual merge rather than
-    silently counted done. Returns (renamed, conflicts)."""
+    correct type bucket on a rebucket. Each meeting migrates all-or-nothing: if any
+    of its stages' datetime targets already exist (a legacy copy beside a newer
+    datetime one), the whole meeting is left intact and surfaced as a CONFLICT for
+    manual merge, never half-renamed into a split date-only/datetime state. Files
+    whose source is already gone (migrated in a prior run) are simply skipped.
+    Returns (renamed, conflicts)."""
     renamed = conflicts = 0
     for p in plans:
         if p.classification not in (CLEAN, REBUCKET) or not p.new_key:
             continue
         assert p.new_bucket is not None
+        moves: list[tuple[str, str, str, str]] = []  # (src, dst, src_dir, dst_dir)
+        conflict = False
         for stage, name in p.files:
             src_dir = os.path.join(root, stage, p.src_bucket)
             dst_dir = os.path.join(root, stage, p.new_bucket)
@@ -266,21 +274,30 @@ def apply_disk(root: str, plans: list[Plan], execute: bool) -> tuple[int, int]:
             )
             src, dst = os.path.join(src_dir, name), os.path.join(dst_dir, new_name)
             if not os.path.exists(src):
-                continue
+                continue  # already migrated in a prior run
             if os.path.exists(dst):
-                print(
-                    f"  disk CONFLICT {stage}: {p.src_bucket}/{name} left — "
-                    f"{p.new_bucket}/{new_name} already exists"
-                )
-                conflicts += 1
-                continue
-            print(f"  disk {stage}: {p.src_bucket}/{name} -> {p.new_bucket}/{new_name}")
+                conflict = True
+                break
+            moves.append((src, dst, src_dir, dst_dir))
+        if conflict:
+            print(
+                f"  disk CONFLICT: {p.src_bucket}/{p.date} left intact — a datetime "
+                f"copy already exists ({p.new_bucket}/{p.new_key}); manual merge"
+            )
+            conflicts += 1
+            continue
+        for src, dst, src_dir, dst_dir in moves:
+            print(
+                f"  disk: {os.path.relpath(src, root)} -> {os.path.relpath(dst, root)}"
+            )
             if execute:
                 os.makedirs(dst_dir, exist_ok=True)
                 os.rename(src, dst)
-                sidecar = os.path.join(src_dir, "._" + name)
+                sidecar = os.path.join(src_dir, "._" + os.path.basename(src))
                 if os.path.exists(sidecar):
-                    os.rename(sidecar, os.path.join(dst_dir, "._" + new_name))
+                    os.rename(
+                        sidecar, os.path.join(dst_dir, "._" + os.path.basename(dst))
+                    )
             renamed += 1
     return renamed, conflicts
 
@@ -320,13 +337,18 @@ def plan_redis(
 
 
 def apply_redis(
-    index: dict[str, list[dict[str, Any]]], execute: bool
+    index: dict[str, list[dict[str, Any]]],
+    collisions: set[tuple[str | None, str | None]],
+    execute: bool,
 ) -> tuple[int, int, int]:
     """Rename legacy date-only per-meeting Redis keys to their datetime key.
     ``RENAME`` is atomic and type-agnostic; guarded so an already-migrated key is
-    never clobbered. Returns (renamed, already-present, flagged)."""
+    never clobbered. Meetings the disk plan flagged COLLISION are left untouched.
+    Returns (renamed, already-present, flagged)."""
     renamed = present = flagged = 0
     for old, new, plan in plan_redis(index):
+        if new is not None and (plan.new_bucket, plan.new_key) in collisions:
+            new = None  # cross-bucket duplicate; leave the whole meeting for manual
         if new is None:
             flagged += 1
             continue
@@ -399,12 +421,16 @@ def _drive_rename(
 
 
 def apply_drive(
-    service: Any, index: dict[str, list[dict[str, Any]]], execute: bool
+    service: Any,
+    index: dict[str, list[dict[str, Any]]],
+    collisions: set[tuple[str | None, str | None]],
+    execute: bool,
 ) -> tuple[int, int, int]:
     """Retitle each legacy date-only Drive meeting folder (and its transcript/doc
     files) to the colon datetime name, moving the folder to the correct type's tree
     on a rebucket. All renames preserve the Drive file id, so every URL is unchanged
-    (TRA-166). Returns (renamed, already-datetime, flagged)."""
+    (TRA-166). Meetings the disk plan flagged COLLISION are left untouched. Returns
+    (renamed, already-datetime, flagged)."""
     renamed = present = flagged = 0
     for mt in MEETING_TYPES:
         type_folder = find_type_folder(service, mt)
@@ -427,6 +453,9 @@ def apply_drive(
                 plan = classify(mt.display_name, m.group(1), index.get(m.group(1), []))
                 if plan.classification not in (CLEAN, REBUCKET) or not plan.new_key:
                     flagged += 1
+                    continue
+                if (plan.new_bucket, plan.new_key) in collisions:
+                    flagged += 1  # cross-bucket duplicate; leave for manual merge
                     continue
                 assert plan.new_bucket is not None
                 new_mt = BUCKET_TO_TYPE[plan.new_bucket]
@@ -509,11 +538,15 @@ def _youtube_set_title(service: Any, video_id: str, new_title: str) -> None:
 
 
 def apply_youtube(
-    service: Any, index: dict[str, list[dict[str, Any]]], execute: bool
+    service: Any,
+    index: dict[str, list[dict[str, Any]]],
+    collisions: set[tuple[str | None, str | None]],
+    execute: bool,
 ) -> tuple[int, int, int]:
     """Retitle each legacy date-only / space-dated YouTube video to its canonical
-    datetime title (and correct type name on a rebucket). Returns (renamed,
-    already-datetime, flagged)."""
+    datetime title (and correct type name on a rebucket). Meetings the disk plan
+    flagged COLLISION are left untouched. Returns (renamed, already-datetime,
+    flagged)."""
     from scripts.reconcile import _fetch_uploads
 
     renamed = present = flagged = 0
@@ -531,6 +564,9 @@ def apply_youtube(
         if plan.classification not in (CLEAN, REBUCKET) or not plan.new_key:
             flagged += 1
             continue
+        if (plan.new_bucket, plan.new_key) in collisions:
+            flagged += 1  # cross-bucket duplicate; leave for manual merge
+            continue
         assert plan.new_bucket is not None
         new_title = youtube_canonical_title(
             title, BUCKET_TO_TYPE[plan.new_bucket], plan.new_key
@@ -543,11 +579,11 @@ def apply_youtube(
     # Guard against two videos resolving to the same canonical title (the same
     # meeting uploaded twice): retitling both identically would defeat the
     # title-match dedupe the backfill relies on, so flag both instead.
-    collisions = {
+    dup_titles = {
         t for t, n in Counter(new for _v, _o, new in retitles).items() if n > 1
     }
     for video_id, old_title, new_title in retitles:
-        if new_title in collisions:
+        if new_title in dup_titles:
             print(f"  youtube COLLISION: {old_title!r} -> {new_title!r} (duplicate)")
             flagged += 1
             continue
@@ -556,6 +592,34 @@ def apply_youtube(
             _youtube_set_title(service, video_id, new_title)
         renamed += 1
     return renamed, present, flagged
+
+
+def warn_dated_documents(root: str) -> int:
+    """Surface any date-only Documents folders, which the flat-file logic can't
+    migrate (their key is in the folder name, files inside are label-named). None
+    exist today, but flag rather than silently skip if that ever changes."""
+    base = os.path.join(root, "Documents")
+    found: list[str] = []
+    if os.path.isdir(base):
+        for bucket in os.listdir(base):
+            bucket_dir = os.path.join(base, bucket)
+            if not os.path.isdir(bucket_dir):
+                continue
+            for entry in os.listdir(bucket_dir):
+                if entry.startswith("._") or _DATETIME_RE.search(entry):
+                    continue
+                if _DATE_RE.search(entry) and os.path.isdir(
+                    os.path.join(bucket_dir, entry)
+                ):
+                    found.append(f"{bucket}/{entry}")
+    if found:
+        print(
+            f"\nWARNING: {len(found)} date-only Documents folder(s) NOT handled by "
+            "this migration (dated-folder layout) — handle manually:"
+        )
+        for f in sorted(found):
+            print(f"  Documents/{f}")
+    return len(found)
 
 
 def _print_audit(plans: list[Plan]) -> None:
@@ -611,9 +675,17 @@ def main() -> None:
     events = fetch_events(datetime(2000, 1, 1), datetime.now())
     index = index_events(events)
 
+    # The disk inventory is the authoritative duplicate detector, so build it even
+    # when only another surface is requested: a meeting flagged COLLISION there is
+    # left untouched on every surface so the two copies can be merged by hand.
+    plans = build_plan(args.root, index)
+    collisions = {
+        (p.new_bucket, p.new_key) for p in plans if p.classification == COLLISION
+    }
+
     if args.surface in ("disk", "all"):
-        plans = build_plan(args.root, index)
         _print_audit(plans)
+        warn_dated_documents(args.root)
         renamed, conflicts = apply_disk(args.root, plans, args.execute)
         print(
             f"\ndisk: {renamed} file(s) {applied}, {conflicts} CONFLICT "
@@ -621,16 +693,18 @@ def main() -> None:
         )
 
     if args.surface in ("redis", "all"):
-        renamed, present, flagged = apply_redis(index, args.execute)
+        renamed, present, flagged = apply_redis(index, collisions, args.execute)
         print(
             f"redis: {renamed} key(s) {applied}, {present} already datetime-keyed, "
-            f"{flagged} flagged (ambiguous/no-match, left for manual review)"
+            f"{flagged} flagged (ambiguous/no-match/collision, manual review)"
         )
 
     if args.surface in ("drive", "all"):
         from scripts.reconcile import _drive_service
 
-        renamed, present, flagged = apply_drive(_drive_service(), index, args.execute)
+        renamed, present, flagged = apply_drive(
+            _drive_service(), index, collisions, args.execute
+        )
         print(
             f"drive: {renamed} folder(s) {applied}, {present} already datetime-keyed, "
             f"{flagged} flagged"
@@ -640,7 +714,7 @@ def main() -> None:
         from scripts.reconcile import _youtube_service
 
         renamed, present, flagged = apply_youtube(
-            _youtube_service(), index, args.execute
+            _youtube_service(), index, collisions, args.execute
         )
         print(
             f"youtube: {renamed} title(s) {applied}, {present} already datetime-titled, "
