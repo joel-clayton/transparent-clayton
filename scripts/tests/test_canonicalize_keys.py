@@ -1,9 +1,35 @@
 import os
 import tempfile
 import unittest
+from datetime import datetime
+from unittest.mock import patch
 
 from scripts import canonicalize_keys as ck
 from src.meeting_types import BUDGET_AND_AUDIT, CITY_COUNCIL, GHAD
+
+
+class TestFetchResilient(unittest.TestCase):
+    def test_retries_then_succeeds(self):
+        with (
+            patch.object(
+                ck, "fetch_events", side_effect=[TimeoutError("boom"), [{"ok": 1}]]
+            ) as fe,
+            patch.object(ck.time, "sleep") as sleep,
+        ):
+            out = ck.fetch_events_resilient(datetime(2000, 1, 1), datetime(2026, 1, 1))
+        self.assertEqual(out, [{"ok": 1}])
+        self.assertEqual(fe.call_count, 2)
+        sleep.assert_called_once()
+
+    def test_reraises_after_exhausting_attempts(self):
+        with (
+            patch.object(ck, "fetch_events", side_effect=TimeoutError("boom")),
+            patch.object(ck.time, "sleep"),
+        ):
+            with self.assertRaises(TimeoutError):
+                ck.fetch_events_resilient(
+                    datetime(2000, 1, 1), datetime(2026, 1, 1), attempts=3
+                )
 
 
 def ev(dt_iso: str, category: str, name: str = "") -> dict:

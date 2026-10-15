@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -168,6 +169,28 @@ def inventory_disk(root: str) -> dict[tuple[str, str], list[tuple[str, str]]]:
                 if m:
                     found[(bucket, m.group(1))].append((stage, name))
     return found
+
+
+def fetch_events_resilient(
+    start: datetime, end: datetime, attempts: int = 4
+) -> list[dict[str, Any]]:
+    """Fetch OData events, retrying on a transient failure (the CivicClerk API
+    occasionally times out a page mid-pagination, which otherwise kills the whole
+    one-shot migration). The fetch is read-only and idempotent, so a retry simply
+    re-fetches from the first page."""
+    for attempt in range(attempts):
+        try:
+            return fetch_events(start, end)
+        except Exception as exc:
+            if attempt == attempts - 1:
+                raise
+            wait = 5 * (attempt + 1)
+            print(
+                f"  OData fetch failed ({exc}); retrying in {wait}s "
+                f"({attempt + 1}/{attempts - 1})"
+            )
+            time.sleep(wait)
+    return []  # unreachable; the last attempt re-raises
 
 
 def index_events(
@@ -703,7 +726,7 @@ def main() -> None:
 
     mode = "EXECUTE (writes)" if args.execute else "AUDIT (read-only)"
     print(f"Canonicalization — mode: {mode}  surface: {args.surface}")
-    events = fetch_events(datetime(2000, 1, 1), datetime.now())
+    events = fetch_events_resilient(datetime(2000, 1, 1), datetime.now())
     index = index_events(events)
 
     # The disk inventory is the authoritative duplicate detector, so build it even
