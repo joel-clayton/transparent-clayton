@@ -4,7 +4,7 @@ from unittest import mock
 
 import src.tasks as tasks
 from src import settings
-from src.meeting_types import CITY_COUNCIL, PLANNING_COMMISSION
+from src.meeting_types import BUDGET_AND_AUDIT, CITY_COUNCIL, PLANNING_COMMISSION
 
 ALWAYS_ON = {
     "src.tasks.get_cc_meeting_details_for_download",
@@ -53,6 +53,26 @@ class TestScrapeTypeForDownload(unittest.TestCase):
         # Only the FULL (video) meeting drives the A/V worklist.
         self.assertEqual(json.loads(payload), ["2026-06-03 07_00 PM"])
         self.assertEqual(result, _meetings())
+
+    def test_pre_cutover_watermark_is_clamped_to_scrape_start(self):
+        # A watermark before the cutover (e.g. a committee that gained older
+        # downloads from the TRA-168 rebucket) must not scrape pre-cutover, which
+        # would route to the retired Granicus (Selenium) path. It is clamped up to
+        # NEW_TYPE_SCRAPE_START so the forward pipeline stays on OData (TRA-171).
+        with (
+            mock.patch.object(
+                tasks,
+                "get_latest_downloaded_date",
+                return_value="2025-08-11 04_00 PM",
+            ),
+            mock.patch.object(
+                tasks, "parse_meetings_from_url", return_value=[]
+            ) as parse,
+            mock.patch.object(tasks, "r"),
+        ):
+            tasks._scrape_type_for_download(BUDGET_AND_AUDIT)
+
+        self.assertEqual(parse.call_args.args[0], tasks.NEW_TYPE_SCRAPE_START)
 
     def test_new_type_falls_back_to_scrape_start(self):
         with (
