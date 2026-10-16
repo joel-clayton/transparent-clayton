@@ -62,6 +62,12 @@ def _scrape_type_for_download(meeting_type: MeetingType) -> list[Meeting]:
         days=RECHECK_WINDOW_DAYS
     )
     latest_date = min(latest_date, recheck_floor)
+    # The forward pipeline is post-cutover only; pre-cutover history is backfilled
+    # deliberately (TRA-169), never pulled by the hourly scrape. Clamping to the
+    # cutover also keeps a type whose watermark regressed below it — e.g. one that
+    # gained older downloads from the date-only canonicalization (TRA-168) — on the
+    # OData path instead of the retired Granicus (Selenium) workflow.
+    latest_date = max(latest_date, NEW_TYPE_SCRAPE_START)
     meetings = parse_meetings_from_url(latest_date, meeting_type)
     # Only FULL (video) meetings drive the A/V pipeline; docs-only meetings are
     # handled by the wiki/archival stages and must never be downloaded.
