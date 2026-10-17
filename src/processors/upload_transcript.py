@@ -13,7 +13,6 @@ from src.constants import (
     DATE_PATTERN,
     DATETIME_OUTPUT_PATTERN,
 )
-from src.processors.constants import EARLIEST
 from src.processors.helpers.drive_folders import (
     ASSET_SEP,
     TRANSCRIPT_ASSET,
@@ -338,8 +337,8 @@ class TranscriptUploader(Processor):
 
     def process_for_date(self, date: str) -> None:
         dt = self.extract_datetime_object(date)
-        if dt and dt <= EARLIEST:
-            self.logger.debug(f"Skipping {date}, older than {EARLIEST}")
+        if dt and dt <= self._floor:
+            self.logger.debug(f"Skipping {date}, older than {self._floor}")
             return None
         elif not dt:
             raise Exception(f"Could not parse date from {date} for {self.job_type}")
