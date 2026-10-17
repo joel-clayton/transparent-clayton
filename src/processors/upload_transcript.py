@@ -337,7 +337,7 @@ class TranscriptUploader(Processor):
 
     def process_for_date(self, date: str) -> None:
         dt = self.extract_datetime_object(date)
-        if dt and dt <= self._floor:
+        if dt and dt < self._floor:  # strict, matching the base Processor + transcribe
             self.logger.debug(f"Skipping {date}, older than {self._floor}")
             return None
         elif not dt:

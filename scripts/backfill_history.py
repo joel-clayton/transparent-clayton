@@ -178,6 +178,12 @@ def _run_video(
     Extractor(source_type).process(BACKFILL_FLOOR)
     Transcriber(source_type).process(BACKFILL_FLOOR)
     TranscriptUploader(source_type).process(BACKFILL_FLOOR)
+    # Archive documents before the wiki: ingestion persists detail for the window's
+    # docs-only meetings too, so without this WikiUpdater would render their rows
+    # with no document links and never re-render them. (Also archives the video
+    # meetings' own agendas/minutes.) Idempotent with a prior --stage docs run.
+    DocumentDownloader(meeting_type).process()
+    DocumentUploader(meeting_type).process()
     WikiUpdater(source_type).process(BACKFILL_FLOOR)
 
 
