@@ -59,7 +59,7 @@ class Transcriber(Processor):
         # boundary (don't transcribe what TurboScribe already did); that's now handled
         # generically by the on-disk transcripts (restored from Drive) + disk
         # idempotency, so it no longer belongs in the workflow.
-        if dt and dt <= self._floor:
+        if dt and dt < self._floor:
             return None
         elif not dt:
             raise Exception(f"Could not find a datetime in {date} for {self.job_type}")

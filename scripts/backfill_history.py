@@ -30,11 +30,11 @@ from __future__ import annotations
 import argparse
 import json
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from celery_app import r
-from src.constants import SCRAPED_KEY
+from src.constants import DETAIL_KEY, SCRAPED_KEY
 from src.processors.compress import Compressor
 from src.processors.download import Downloader
 from src.processors.download_docs import DocumentDownloader
@@ -53,9 +53,17 @@ from src.scrapers.civic_clerk_api import (
     split_documents,
     video_url,
 )
-from src.scrapers.constants import CIVIC_CLERK_START_DATE
+from src.scrapers.constants import (
+    CIVIC_CLERK_START_DATE,
+    SCRAPE_RETRY_ATTEMPTS,
+    SCRAPE_RETRY_BASE_DELAY,
+    SCRAPE_RETRY_DEADLINE,
+    SCRAPE_RETRY_MAX_DELAY,
+)
+from src.scrapers.retry import retry_transient
 from src.scrapers.models import PipelineClass
 from src.types import MEETING_TYPE_BY_SOURCE
+from src.util import get_datetime_from_string
 
 # Reach the whole archive: the pipeline's normal EARLIEST floor is bypassed for the
 # backfill (passed to Processor.process); a run never scrapes past the cutover,
@@ -65,14 +73,30 @@ CUTOVER = CIVIC_CLERK_START_DATE
 
 
 def _year_windows(from_year: int, to_year: int) -> list[tuple[datetime, datetime]]:
-    """[start, end) windows, one per year, clamped to the cutover."""
+    """One window per year, clamped to the cutover. The scrape filters strictly
+    (`start < dt < end`), so each start is nudged back a microsecond: a meeting at
+    exactly Jan 1 00:00:00 then lands in that year's window rather than falling
+    through the crack between two strict bounds."""
     windows = []
     for year in range(from_year, to_year + 1):
-        start = max(BACKFILL_FLOOR, datetime(year, 1, 1))
+        start = max(BACKFILL_FLOOR, datetime(year, 1, 1) - timedelta(microseconds=1))
         end = min(datetime(year + 1, 1, 1), CUTOVER)
         if start < end:
             windows.append((start, end))
     return windows
+
+
+def _fetch_window(start: datetime, end: datetime) -> list[Any]:
+    """Audit-side OData fetch with the same transient-retry as the scrape path, so a
+    single API blip doesn't abort a multi-decade read-only audit."""
+    return retry_transient(
+        lambda: fetch_events(start, end),
+        label=f"fetch CivicClerk events {start:%Y-%m-%d}..{end:%Y-%m-%d}",
+        attempts=SCRAPE_RETRY_ATTEMPTS,
+        base_delay=SCRAPE_RETRY_BASE_DELAY,
+        max_delay=SCRAPE_RETRY_MAX_DELAY,
+        deadline=SCRAPE_RETRY_DEADLINE,
+    )
 
 
 def _in_window(event: Any, start: datetime, end: datetime) -> bool:
@@ -112,11 +136,40 @@ def _run_docs(source_type: Any, meeting_type: Any) -> None:
     WikiUpdater(source_type).process(BACKFILL_FLOOR)
 
 
-def _run_video(source_type: Any, meeting_type: Any, video_keys: list[str]) -> None:
+def _historical_video_keys(
+    meeting_type: Any, from_year: int, to_year: int
+) -> list[str]:
+    """Pre-cutover FULL (video) meeting keys for a type, read from the persisted
+    Redis detail. Built from detail — not from the ingest's return — because the
+    ingest marks video meetings AV-seen, so a re-ingest (e.g. the video run after a
+    docs run) returns nothing; the detail persists regardless."""
+    keys: list[str] = []
+    raw = r.hgetall(meeting_type.redis_key(DETAIL_KEY)) or {}
+    for value in raw.values():
+        try:
+            detail = json.loads(value.decode("utf-8"))
+        except (ValueError, AttributeError):
+            continue
+        if detail.get("pipeline_class") != PipelineClass.FULL.value:
+            continue
+        key = detail.get("key")
+        dt = get_datetime_from_string(key) if key else None
+        if dt and from_year <= dt.year <= to_year and dt < CUTOVER:
+            keys.append(key)
+    return keys
+
+
+def _run_video(
+    source_type: Any, meeting_type: Any, from_year: int, to_year: int
+) -> None:
     # Only Downloader is driven by the scraped worklist; the later A/V stages read
     # from the on-disk stage dirs, so already-downloaded historical videos (e.g.
-    # City Council) flow through them even though they aren't in this list.
-    r.set(meeting_type.redis_key(SCRAPED_KEY), json.dumps(sorted(set(video_keys))))
+    # City Council) flow through them even though they aren't in this list. Merge
+    # (don't overwrite) so any keys the live scrape left in SCRAPED_KEY survive.
+    key = meeting_type.redis_key(SCRAPED_KEY)
+    existing = json.loads((r.get(key) or b"[]"))
+    video_keys = _historical_video_keys(meeting_type, from_year, to_year)
+    r.set(key, json.dumps(sorted(set(existing) | set(video_keys))))
     # Downloader is driven by the scraped worklist (set above), not a date floor,
     # so it needs none; the later A/V stages do floor, so take the backfill floor.
     Downloader(source_type).process()
@@ -167,27 +220,29 @@ def main() -> None:
         # Ingest (persist detail) per type via the live-scrape path, then run that
         # type's stages. Workers must be stopped (this writes shared Redis detail).
         for source_type, meeting_type in selected:
-            video_keys: list[str] = []
             for start, end in windows:
                 for m in _ingest_window(meeting_type, start, end):
-                    if m.get("pipeline_class") == PipelineClass.FULL.value:
-                        video_keys.append(m["key"])
-                        tally[meeting_type.display_name]["video"] += 1
-                    else:
-                        tally[meeting_type.display_name]["docs"] += 1
+                    kind = (
+                        "video"
+                        if m.get("pipeline_class") == PipelineClass.FULL.value
+                        else "docs"
+                    )
+                    tally[meeting_type.display_name][kind] += 1
             if args.stage == "docs":
                 _run_docs(source_type, meeting_type)
             else:
-                _run_video(source_type, meeting_type, video_keys)
+                _run_video(source_type, meeting_type, from_year, to_year)
     else:
         # Audit: fetch each window once (read-only) and classify all selected types.
         for start, end in windows:
-            events = fetch_events(start, end)
+            events = _fetch_window(start, end)
             for _source_type, meeting_type in selected:
                 for m in _type_meetings_in(events, meeting_type, start, end):
-                    # Classify exactly as the scrape does (video_url / split_documents),
-                    # so the audit predicts --execute: a no-asset meeting is neither
-                    # video nor docs and is skipped (execute never ingests it).
+                    # Classify as the scrape does (video_url / split_documents) and
+                    # skip no-asset meetings, so the audit closely estimates --execute.
+                    # It is an upper bound: execute may ingest slightly fewer (media
+                    # whose URL no longer resolves is quarantined; already-seen videos
+                    # are skipped), so treat these counts as "at most this many".
                     agenda, supplemental = split_documents(m)
                     if video_url(m):
                         tally[meeting_type.display_name]["video"] += 1
