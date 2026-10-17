@@ -87,10 +87,10 @@ def _transcript_text(service: Any, file_id: str, mime: str) -> str:
     return data.decode("utf-8") if isinstance(data, (bytes, bytearray)) else str(data)
 
 
-def restore(service: Any, root: str, execute: bool) -> tuple[int, int, int]:
+def restore(service: Any, root: str, execute: bool) -> tuple[int, int, int, int]:
     """Copy each Drive transcript Doc whose on-disk .txt is missing down to disk.
-    Returns (restored, already-on-disk, skipped-unparseable)."""
-    restored = present = skipped = 0
+    Returns (restored, already-on-disk, skipped-unparseable, failed)."""
+    restored = present = skipped = failed = 0
     for meeting_type in MEETING_TYPES:
         type_folder = find_type_folder(service, meeting_type)
         if not type_folder:
@@ -106,6 +106,7 @@ def restore(service: Any, root: str, execute: bool) -> tuple[int, int, int]:
                         c
                         for c in _drive_children(service, folder["id"])
                         if (c.get("name") or "").endswith(_TRANSCRIPT_SUFFIX)
+                        and c.get("mimeType") != _FOLDER_MIME
                     ),
                     None,
                 )
@@ -124,14 +125,21 @@ def restore(service: Any, root: str, execute: bool) -> tuple[int, int, int]:
                     f"<- Drive {transcript['name']!r}"
                 )
                 if execute:
-                    text = _transcript_text(
-                        service, transcript["id"], transcript.get("mimeType", "")
-                    )
-                    os.makedirs(os.path.dirname(dest), exist_ok=True)
-                    with open(dest, "w", encoding="utf-8") as handle:
-                        handle.write(text)
+                    try:
+                        text = _transcript_text(
+                            service, transcript["id"], transcript.get("mimeType", "")
+                        )
+                        os.makedirs(os.path.dirname(dest), exist_ok=True)
+                        with open(dest, "w", encoding="utf-8") as handle:
+                            handle.write(text)
+                    except Exception as exc:
+                        # One bad export must not abort the rest of the pass (the run
+                        # is idempotent, so a re-run retries only what's still missing).
+                        print(f"    FAILED: {exc}")
+                        failed += 1
+                        continue
                 restored += 1
-    return restored, present, skipped
+    return restored, present, skipped, failed
 
 
 def main() -> None:
@@ -146,11 +154,13 @@ def main() -> None:
 
     mode = "EXECUTE (writes to disk)" if args.execute else "AUDIT (read-only)"
     print(f"Restore Drive transcripts to disk — mode: {mode}")
-    restored, present, skipped = restore(_drive_service(), args.root, args.execute)
+    restored, present, skipped, failed = restore(
+        _drive_service(), args.root, args.execute
+    )
     verb = "restored" if args.execute else "to restore"
     print(
         f"\n{restored} transcript(s) {verb}, {present} already on disk, "
-        f"{skipped} skipped (unparseable folder name)"
+        f"{skipped} skipped (unparseable folder name), {failed} failed"
     )
 
 

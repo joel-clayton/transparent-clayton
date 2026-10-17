@@ -50,6 +50,8 @@ from src.scrapers.civic_clerk_api import (
     fetch_events,
     matches_category,
     merge_by_datetime,
+    split_documents,
+    video_url,
 )
 from src.scrapers.constants import CIVIC_CLERK_START_DATE
 from src.scrapers.models import PipelineClass
@@ -73,6 +75,15 @@ def _year_windows(from_year: int, to_year: int) -> list[tuple[datetime, datetime
     return windows
 
 
+def _in_window(event: Any, start: datetime, end: datetime) -> bool:
+    """Whether an event's datetime falls in [start, end); an unparseable one is
+    skipped rather than crashing the audit (merge_by_datetime guards it too)."""
+    try:
+        return start < event_datetime(event) < end
+    except (ValueError, TypeError):
+        return False
+
+
 def _type_meetings_in(
     events: list[Any], meeting_type: Any, start: datetime, end: datetime
 ) -> list[Any]:
@@ -82,7 +93,7 @@ def _type_meetings_in(
         [
             e
             for e in events
-            if matches_category(e, meeting_type) and start < event_datetime(e) < end
+            if matches_category(e, meeting_type) and _in_window(e, start, end)
         ]
     )
 
@@ -174,8 +185,14 @@ def main() -> None:
             events = fetch_events(start, end)
             for _source_type, meeting_type in selected:
                 for m in _type_meetings_in(events, meeting_type, start, end):
-                    kind = "video" if m.get("hasMedia") else "docs"
-                    tally[meeting_type.display_name][kind] += 1
+                    # Classify exactly as the scrape does (video_url / split_documents),
+                    # so the audit predicts --execute: a no-asset meeting is neither
+                    # video nor docs and is skipped (execute never ingests it).
+                    agenda, supplemental = split_documents(m)
+                    if video_url(m):
+                        tally[meeting_type.display_name]["video"] += 1
+                    elif agenda or supplemental:
+                        tally[meeting_type.display_name]["docs"] += 1
 
     for _st, meeting_type in selected:
         t = tally[meeting_type.display_name]

@@ -1,5 +1,5 @@
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import List
 
 import requests
@@ -54,7 +54,12 @@ class Transcriber(Processor):
     def process_for_date(self, date: str) -> None:
         dt = self.extract_datetime_object(date)
 
-        if dt and dt <= datetime(2025, 11, 1):
+        # Floor on the run's floor (self._floor; default EARLIEST), like every other
+        # stage. The old hardcoded 2025-11-01 gate was the TurboScribe→AssemblyAI
+        # boundary (don't transcribe what TurboScribe already did); that's now handled
+        # generically by the on-disk transcripts (restored from Drive) + disk
+        # idempotency, so it no longer belongs in the workflow.
+        if dt and dt <= self._floor:
             return None
         elif not dt:
             raise Exception(f"Could not find a datetime in {date} for {self.job_type}")
