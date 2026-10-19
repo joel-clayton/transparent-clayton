@@ -42,7 +42,8 @@ from src.processors.constants import (
 )
 from src.processors.process import Processor
 from src.scrapers.models import PipelineClass
-from src.settings import TRANSCRIBED_DIR
+from src.settings import SUMMARIES_DIR, TRANSCRIBED_DIR
+from src.storage_layout import resolve_existing_file
 from src.types import JobType, SourceType, WikiMeeting, MEETING_TYPE_BY_SOURCE
 from src.util import (
     get_year_string_from_string,
@@ -496,11 +497,27 @@ class WikiUpdater(Processor):
                 Section(
                     title=WIKI_AI_SECTION_TITLE,
                     content=WIKI_AI_SECTION.format(
-                        ai_summary_text="TBD", transcript_link=transcript_link
+                        ai_summary_text=self._summary_for(key) or "TBD",
+                        transcript_link=transcript_link,
                     ),
                 )
             )
         return sections
+
+    def _summary_for(self, key: str) -> str | None:
+        """The meeting's on-disk summary, if any — a new ``.md`` from the Summarizer
+        or a legacy ``.txt``, whichever is present (new preferred). Returns None so
+        the caller falls back to the ``TBD`` placeholder."""
+        bucket = self.meeting_type.disk_bucket
+        for ext in (".md", ".txt"):
+            name = self.meeting_type.file_template.format(key, ext)
+            path = resolve_existing_file(SUMMARIES_DIR, bucket, name)
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as handle:
+                    text = handle.read().strip()
+                if text:
+                    return text
+        return None
 
     def update_page_sections_for_page(
         self, page_name: str, sections: List[Section], date: str

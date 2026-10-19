@@ -39,10 +39,18 @@ DOWNLOADED_DIR = os.path.join(STORAGE_ROOT, "Downloaded") + os.sep
 COMPRESSED_DIR = os.path.join(STORAGE_ROOT, "Compressed") + os.sep
 EXTRACTED_AUDIO_DIR = os.path.join(STORAGE_ROOT, "Audio") + os.sep
 TRANSCRIBED_DIR = os.path.join(STORAGE_ROOT, "Transcripts") + os.sep
+# LLM-generated meeting summaries (per-agenda-section synthesis of transcript +
+# agenda + packet), one file per meeting (TRA-176).
+SUMMARIES_DIR = os.path.join(STORAGE_ROOT, "Summaries") + os.sep
 # Meeting documents (agenda packets, minutes, staff reports) saved to disk so the
 # on-disk store is canonical — independent of whether they are also published to
 # Google Drive. One folder per meeting under here.
 DOCUMENTS_DIR = os.path.join(STORAGE_ROOT, "Documents") + os.sep
+
+# Local Ollama server + the model built from Modelfile-Summarizer, for LLM meeting
+# summaries (TRA-176). Env-overridable so another deployment can point elsewhere.
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+SUMMARIZER_MODEL = os.environ.get("SUMMARIZER_MODEL", "meeting-summarizer")
 
 
 # --- Redis -------------------------------------------------------------------

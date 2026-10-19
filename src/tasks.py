@@ -14,6 +14,7 @@ from src.processors.compress import Compressor
 from src.processors.download import Downloader
 from src.processors.download_docs import DocumentDownloader
 from src.processors.extract import Extractor
+from src.processors.summarize import Summarizer
 from src.processors.transcribe import Transcriber
 from src.publishers import PUBLISHERS, run_publisher
 from src.scrapers.cc_meetings import get_latest_downloaded_date, parse_meetings_from_url
@@ -170,6 +171,12 @@ def upload_cc_meeting_docs() -> None:
 
 
 @app.task
+def summarize_cc_meeting() -> None:
+    for source_type in MEETING_TYPE_BY_SOURCE:
+        Summarizer(source_type).process()
+
+
+@app.task
 def update_cc_mtg_wiki() -> None:
     run_publisher("update_wiki")
 
@@ -213,6 +220,9 @@ _STAGES: list[tuple[Any, str | None]] = [
     (download_cc_meeting_docs, None),
     (upload_cc_meeting_transcript, "upload_transcript"),
     (upload_cc_meeting_docs, "upload_docs"),
+    # Summarize after the transcript and documents are in place, before the wiki
+    # renders (it embeds the summary). Always-on local stage, like transcribe.
+    (summarize_cc_meeting, None),
     (update_cc_mtg_wiki, "update_wiki"),
     (notify_success, None),
 ]

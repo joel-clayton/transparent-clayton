@@ -22,6 +22,7 @@ Mismatches reported:
     MISSING_VIDEO_LINK  a video is uploaded but no video_link points at it
     MISSING_UPLOAD      a compressed part is on disk but not uploaded
     NO_DETAIL           on disk and/or on YouTube but absent from the detail hash
+    MISSING_SUMMARY     a transcript is on disk but no LLM summary was generated
     MISSING_TRANSCRIPT  a transcript file is on disk but no Drive link is set
     STALE_TRANSCRIPT_LINK  transcript_link points at a Drive file that is gone
     MISSING_DOC         documents are on disk but none archived to Drive
@@ -98,6 +99,7 @@ from src.settings import (  # noqa: E402
     DOCUMENTS_DIR,
     DOWNLOADED_DIR,
     EXTRACTED_AUDIO_DIR,
+    SUMMARIES_DIR,
     TRANSCRIBED_DIR,
 )
 from src.types import MEETING_TYPE_BY_SOURCE, SourceType  # noqa: E402
@@ -113,6 +115,7 @@ STAGE_DIRS: dict[str, str] = {
     "compressed": COMPRESSED_DIR,
     "audio": EXTRACTED_AUDIO_DIR,
     "transcript": TRANSCRIBED_DIR,
+    "summary": SUMMARIES_DIR,
 }
 # Per-type bucket names (TRA-135); only these subdirs are descended into when
 # scanning a stage dir, so a stray temp/partial dir is never counted as assets.
@@ -602,6 +605,11 @@ def find_mismatches(
         if not m.has_detail and (m.on_disk or m.yt_parts):
             issues.append("NO_DETAIL (on disk/youtube but not in Redis detail)")
 
+        # MISSING_SUMMARY: a transcribed meeting with no LLM summary yet (the local
+        # summarize stage). Not tied to a publishing destination.
+        if "transcript" in m.on_disk and "summary" not in m.on_disk:
+            issues.append("MISSING_SUMMARY (transcript on disk, no summary)")
+
         if scope.google_docs:
             # MISSING_TRANSCRIPT: a transcript file on disk with no Drive pointer.
             if "transcript" in m.on_disk and not m.transcript_link:
@@ -964,6 +972,10 @@ def main() -> None:
     legend.append(
         "  NO_DETAIL          the meeting has files/uploads but no Redis 'detail' "
         "record (usually an older meeting already on the wiki; informational)."
+    )
+    legend.append(
+        "  MISSING_SUMMARY    a transcript is on disk but the LLM summary stage has "
+        "not produced a summary for it yet."
     )
     if scope.google_docs:
         legend += [

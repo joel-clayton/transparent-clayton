@@ -163,6 +163,26 @@ class TestDriveFindings(unittest.TestCase):
         self.assertIn("MISSING_DOC", lines[0])
 
 
+class TestSummaryFindings(unittest.TestCase):
+    KEY = "2026-06-02 07_00 PM"
+
+    def test_missing_summary_when_transcript_without_summary(self):
+        rows = {
+            self.KEY: MeetingRow(key=self.KEY, has_detail=True, on_disk={"transcript"})
+        }
+        lines, _, _ = _fm(rows)
+        self.assertTrue(any("MISSING_SUMMARY" in line for line in lines))
+
+    def test_no_missing_summary_when_summary_present(self):
+        rows = {
+            self.KEY: MeetingRow(
+                key=self.KEY, has_detail=True, on_disk={"transcript", "summary"}
+            )
+        }
+        lines, _, _ = _fm(rows)
+        self.assertFalse(any("MISSING_SUMMARY" in line for line in lines))
+
+
 class TestDriveLiveness(unittest.TestCase):
     def test_is_stale_only_for_parseable_confirmed_dead(self):
         dead = "https://docs.google.com/document/d/DEAD/edit"
@@ -234,7 +254,9 @@ class TestScoping(unittest.TestCase):
             self.KEY: MeetingRow(
                 key=self.KEY,
                 has_detail=True,
-                on_disk={"transcript"},
+                # include "summary" so the (unconditional) MISSING_SUMMARY finding
+                # doesn't fire — this test isolates the google_docs-scoped findings.
+                on_disk={"transcript", "summary"},
                 docs_on_disk=True,
                 transcript_link="https://docs.google.com/document/d/DEAD/edit",
             )
