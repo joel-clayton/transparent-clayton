@@ -18,3 +18,11 @@ throttle.ctrl
 tests/e2e_dryrun_assets/
 .mcp.json
 .aider/
+
+# The RAG vector store (sqlite-vec) + its sidecars. Normally lives under
+# STORAGE_ROOT (off-repo), but ignore defensively in case STORAGE_ROOT points into
+# the repo or tests drop a local db. It's a derived index, rebuildable from the
+# canonical on-disk sections.json — never committed (TRA-176).
+*.db
+*.db-wal
+*.db-shm

@@ -91,7 +91,10 @@ A file at `<STORAGE_ROOT>/Rag/index.db`. Two linked tables:
 
 The DB is a **derived index**: the canonical, reconcilable artifact is a per-meeting
 `sections.json` on disk (next to the `.md`), so the whole store can be rebuilt from
-disk and a city's data stays file-portable.
+disk and a city's data stays file-portable. Like every generated artifact it lives
+under `STORAGE_ROOT` (off-repo) and is **never committed** — `.gitignore` also
+excludes `*.db`/`*.db-wal`/`*.db-shm` defensively in case a dev points `STORAGE_ROOT`
+into the repo or a test drops a local db.
 
 ## Stage + reconcile integration
 
