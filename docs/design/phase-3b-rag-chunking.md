@@ -85,8 +85,8 @@ A file at `<STORAGE_ROOT>/Rag/index.db`. Two linked tables:
 - `sections` (metadata, one row per agenda-item section): `id`, `meeting_type`,
   `meeting_key`, `item_index`, `agenda_item`, `t_start`, `t_end`, `procedural`,
   `summary`, `keywords` (JSON), `transcript_ref`, `video_url` (deep-linked to
-  `t_start` where possible), `agenda_url`, `packet_url`, `summarizer_model`,
-  `embed_model`, `created_at`.
+  `t_start` where possible), `agenda_url`, `packet_url`, plus the **provenance**
+  fields below, `created_at`.
 - a `vec0` virtual table holding the embedding, joined to `sections` by rowid.
 
 The DB is a **derived index**: the canonical, reconcilable artifact is a per-meeting
@@ -95,6 +95,35 @@ disk and a city's data stays file-portable. Like every generated artifact it liv
 under `STORAGE_ROOT` (off-repo) and is **never committed** — `.gitignore` also
 excludes `*.db`/`*.db-wal`/`*.db-shm` defensively in case a dev points `STORAGE_ROOT`
 into the repo or a test drops a local db.
+
+## Reproducibility & regeneration
+
+The goal is **"roughly similar" (semantically equivalent), not byte-identical** —
+the right bar for an LLM. Each `sections` row records enough provenance to (a)
+regenerate comparable output elsewhere and (b) *detect* when a regeneration is even
+worth doing (ties into the `legacy_summary` replace-if-better idea):
+
+- `summarizer_model`, `summarizer_digest` — the Ollama **digest**, not just the
+  mutable tag (`:latest`/`8b` can be re-pulled to a different blob); from `/api/show`.
+- `modelfile_hash` — hash of the model's Modelfile (SYSTEM text **and** `PARAMETER`s
+  like `temperature`/`num_ctx` all shape output).
+- `prompt_version` — a version string for *our* prompt-assembly template.
+- `seed` — a fixed seed passed as Ollama `options.seed`, so a rerun on the same
+  machine/model is near-deterministic (temperature 0.3 is otherwise stochastic).
+- `embed_model`, `embed_digest` — pinned for the vectors.
+- (optional) `pdfplumber_version` / input hashes — document-extraction can vary.
+
+Two honest limits:
+
+- **Cross-machine exact reproduction is not achievable.** Different GPU/CPU,
+  quantization, and llama.cpp/Ollama versions give floating-point differences →
+  token-level divergence even with a fixed seed. Same model+digest+modelfile+prompt
+  +input yields *equivalent, differently-worded* summaries — which is fine here.
+- **Never mix embedding-model versions in one index.** Vectors drift slightly across
+  machine/quant/version; cosine comparisons only hold within a single
+  `embed_model`+`embed_digest`. So "regenerate on another machine" means **rebuild the
+  whole vector store** from the canonical `sections.json`, not append to it. A change
+  in `embed_digest` is the trigger to rebuild.
 
 ## Stage + reconcile integration
 
