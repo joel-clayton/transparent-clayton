@@ -51,6 +51,9 @@ DOCUMENTS_DIR = os.path.join(STORAGE_ROOT, "Documents") + os.sep
 # summaries (TRA-176). Env-overridable so another deployment can point elsewhere.
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 SUMMARIZER_MODEL = os.environ.get("SUMMARIZER_MODEL", "meeting-summarizer")
+# Embedding model for the RAG index (TRA-176 increment 2); swappable so the store
+# can be rebuilt with a different model (never mix versions in one index).
+EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "nomic-embed-text")
 
 
 # --- Redis -------------------------------------------------------------------
