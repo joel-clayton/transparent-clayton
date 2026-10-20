@@ -23,6 +23,7 @@ from src.constants import (
     DATE_FORMAT,
 )
 from src.processors.constants import (
+    EARLIEST,
     WIKI_MTG_TABLE_DATA,
     WIKI_AI_SECTION,
     WIKI_MTG_SECTION_TITLE,
@@ -592,7 +593,7 @@ class WikiUpdater(Processor):
             # flag must not cause repeated churn on every run.
             r.srem(refresh_key, member)
 
-    def process(self) -> None:
+    def process(self, floor: datetime = EARLIEST) -> None:
         self._refresh_upgraded_meetings()
-        super().process()
+        super().process(floor)
         self.update_transparency_page()

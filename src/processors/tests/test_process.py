@@ -88,6 +88,29 @@ class TestConstructFilenameAndFilepath(unittest.TestCase):
         )
 
 
+class TestProcessFloor(unittest.TestCase):
+    def _proc(self, inputs):
+        proc = _StubProcessor()
+        proc.gather_input_dates = lambda: inputs  # type: ignore[method-assign]
+        proc.gather_output_dates = lambda: []  # type: ignore[method-assign]
+        self.processed: list[str] = []
+        proc.process_for_date = self.processed.append  # type: ignore[method-assign]
+        return proc
+
+    def test_default_floor_skips_pre_earliest(self):
+        proc = self._proc(["2010-01-01", "2026-06-01"])
+        with patch("src.processors.process.r"):
+            proc.process()  # default floor == EARLIEST (2026-03-01)
+        self.assertEqual(self.processed, ["2026-06-01"])
+
+    def test_lower_floor_reaches_history_and_sets_instance_floor(self):
+        proc = self._proc(["2010-01-01", "2026-06-01"])
+        with patch("src.processors.process.r"):
+            proc.process(floor=datetime(2000, 1, 1))
+        self.assertEqual(self.processed, ["2010-01-01", "2026-06-01"])
+        self.assertEqual(proc._floor, datetime(2000, 1, 1))
+
+
 class TestGatherDates(TempDirTestCase):
     def setUp(self):
         super().setUp()

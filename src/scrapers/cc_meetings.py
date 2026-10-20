@@ -517,13 +517,18 @@ def _warn_unresolved_docs(record: MeetingRecord, meeting_key: str) -> None:
 
 
 def parse_meetings_from_civic_clerk_iframe(
-    latest_date: datetime, meeting_type: MeetingType = CITY_COUNCIL
+    latest_date: datetime,
+    meeting_type: MeetingType = CITY_COUNCIL,
+    end: datetime | None = None,
 ) -> list[Meeting]:
     """Fetch past meetings of one type from the CivicClerk OData API.
 
     Returns Meetings whose date is strictly after `latest_date` and strictly
-    before now. Filters by ``meeting_type.category`` (the exact CivicClerk
-    ``categoryName``) so only that type's meetings are kept.
+    before `end` (default: now). Filters by ``meeting_type.category`` (the exact
+    CivicClerk ``categoryName``) so only that type's meetings are kept. The `end`
+    bound lets a caller fetch a bounded window (e.g. a single year) instead of
+    everything up to now — used by the history backfill to page the archive year
+    by year rather than issuing one decades-wide query that the API times out.
 
     (The name is historical — this used to scrape the portal's DOM, which only
     exposed *upcoming* events and so missed past meetings in a lookback range.
@@ -540,10 +545,14 @@ def parse_meetings_from_civic_clerk_iframe(
     # Fail fast (and transiently) if the snapshot volume isn't mounted.
     store.ensure_ready()
     now_local = datetime.now(CIVIC_CLERK_TZ).replace(tzinfo=None)
+    # The upper bound for the query/filter; defaults to now for the live scrape,
+    # but a backfill passes an explicit window end. The snapshot stamp still uses
+    # the real run time.
+    window_end = end or now_local
     stamp = fetch_stamp(now_local)
 
     events = retry_transient(
-        lambda: fetch_events(latest_date, now_local),
+        lambda: fetch_events(latest_date, window_end),
         label=f"fetch CivicClerk events for {meeting_type.display_name}",
         attempts=SCRAPE_RETRY_ATTEMPTS,
         base_delay=SCRAPE_RETRY_BASE_DELAY,
@@ -564,7 +573,7 @@ def parse_meetings_from_civic_clerk_iframe(
             event
             for event in events
             if matches_category(event, meeting_type)
-            and latest_date < event_datetime(event) < now_local
+            and latest_date < event_datetime(event) < window_end
         ]
     )
     _civic_clerk_logger.info(

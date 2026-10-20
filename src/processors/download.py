@@ -7,8 +7,11 @@ from typing import Any, List
 
 import requests
 
+from datetime import datetime
+
 from celery_app import r
 from src.constants import DETAIL_KEY, SCRAPED_KEY, DOWNLOADED_KEY
+from src.processors.constants import EARLIEST
 from src.processors.process import Processor
 from src.scrapers.alerting import AlertLevel, alert
 from src.settings import DOWNLOADED_DIR
@@ -52,7 +55,9 @@ class Downloader(Processor):
     def gather_output_dates(self) -> List:
         return self.gather_dates(DOWNLOADED_DIR)
 
-    def process(self) -> None:
+    def process(self, floor: datetime = EARLIEST) -> None:
+        # ``floor`` is accepted to match the base signature but unused: downloads are
+        # gated by the scraped worklist (SCRAPED_KEY), not a date floor.
         meetings_to_download = self.get_most_recent_missing_dates()
         if not meetings_to_download:
             return None

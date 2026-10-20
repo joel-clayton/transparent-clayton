@@ -29,6 +29,10 @@ class Processor:
     job_type: JobType
     source_type: SourceType
     redis_key: str
+    # Earliest meeting date this run will process; process() overwrites it per run.
+    # Subclasses whose process_for_date floors (e.g. the transcript uploader) read
+    # this so a backfill's lower floor reaches them too.
+    _floor: datetime = EARLIEST
 
     def __init__(self) -> None:
         self.logger = logging.getLogger(f"{__name__}::{self.job_type.name}")
@@ -126,7 +130,12 @@ class Processor:
     def process_for_date(self, date: str) -> None:
         raise NotImplementedError
 
-    def process(self) -> None:
+    def process(self, floor: datetime = EARLIEST) -> None:
+        # ``floor`` is the earliest meeting date this run will process. It defaults
+        # to EARLIEST (the live pipeline is post-floor only); the history backfill
+        # passes a lower floor to reach the pre-floor archive, without changing the
+        # floor for the hourly worker.
+        self._floor = floor
         missing_dates: List[str] = self.get_most_recent_missing_dates()
         self.logger.debug(f"Missing dates for job {self.job_type}: {missing_dates}")
         failures: List[str] = []
@@ -139,7 +148,7 @@ class Processor:
                     dt = datetime.strptime(
                         get_date_string_from_string(missing_date), DATE_FORMAT
                     )
-                if dt < EARLIEST:
+                if dt < floor:
                     continue
                 self.process_for_date(missing_date)
                 # Mark done only after process_for_date succeeds; a raise below
