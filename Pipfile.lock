@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "06877807407ad5daf41a73a0ee70157934bb4424a3ca051f39f5c6627dd08a1d"
+            "sha256": "63d7a86ece9e1c1be6a22083c597b0199c758474e20f7a4c816d11bb924a1a3d"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -2386,6 +2386,17 @@
             ],
             "index": "pypi",
             "version": "==2.4.0"
+        },
+        "sqlite-vec": {
+            "hashes": [
+                "sha256:1515727990b49e79bcaf75fdee2ffc7d461f8b66905013231251f1c8938e7786",
+                "sha256:1b62a7f0a060d9475575d4e599bbf94a13d85af896bc1ce86ee80d1b5b48e5fb",
+                "sha256:1d52e30513bae4cc9778ddbf6145610434081be4c3afe57cd877893bad9f6b6c",
+                "sha256:4a28dc12fa4b53d7b1dced22da2488fade444e96b5d16fd2d698cd670675cf32",
+                "sha256:4e921e592f24a5f9a18f590b6ddd530eb637e2d474e3b1972f9bbeb773aa3cb9"
+            ],
+            "index": "pypi",
+            "version": "==0.1.9"
         },
         "tomli": {
             "hashes": [

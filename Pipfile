@@ -105,6 +105,7 @@ yarl = "==1.23.0"
 yt-dlp-ejs = "*"
 yt-dlp = {extras = ["default"], version = "*"}
 pdfplumber = "*"
+sqlite-vec = "*"
 
 [dev-packages]
 
