@@ -31,9 +31,12 @@ logger = logging.getLogger(__name__)
 
 # Deterministic classification settings (see module docstring).
 SEG_SEED = 42
-# Transcript tokens per window (~4 chars/token); well under a 32k ctx with room for
-# the agenda list, the JSON schema, and the response.
+# Transcript tokens per window (~4 chars/token).
 WINDOW_TOKENS = 9000
+# Context window set explicitly (base qwen3:8b otherwise falls back to Ollama's
+# small default and would silently truncate a 9000-token window): room for the
+# window + the agenda list + the JSON schema + the response.
+SEG_NUM_CTX = 16384
 
 _SEG_SYSTEM = (
     "You identify where each agenda item begins in a city council meeting "
@@ -117,7 +120,7 @@ def _ask_boundaries(
         system=_SEG_SYSTEM,
         think=False,
         format=_SEG_SCHEMA,
-        options={"seed": SEG_SEED, "temperature": 0},
+        options={"seed": SEG_SEED, "temperature": 0, "num_ctx": SEG_NUM_CTX},
     )
     # Clamp to the window's full time range: a boundary can legitimately fall
     # inside the final utterance's span, so the upper bound is its end, not start.

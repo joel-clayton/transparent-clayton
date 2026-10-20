@@ -115,6 +115,15 @@ def ensure_schema(conn: sqlite3.Connection, dim: int) -> None:
     conn.commit()
 
 
+def _vec_table_exists(conn: sqlite3.Connection) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='vec_sections'"
+        ).fetchone()
+        is not None
+    )
+
+
 def _delete_meeting(conn: sqlite3.Connection, meeting_type: str, key: str) -> None:
     ids = [
         row[0]
@@ -125,7 +134,10 @@ def _delete_meeting(conn: sqlite3.Connection, meeting_type: str, key: str) -> No
     ]
     if ids:
         marks = ",".join("?" * len(ids))
-        conn.execute(f"DELETE FROM vec_sections WHERE rowid IN ({marks})", ids)
+        # The vec table may not exist yet if no meeting indexed so far had an
+        # embedded section (only procedural/not-reached rows); guard the delete.
+        if _vec_table_exists(conn):
+            conn.execute(f"DELETE FROM vec_sections WHERE rowid IN ({marks})", ids)
         conn.execute(f"DELETE FROM sections WHERE id IN ({marks})", ids)
 
 

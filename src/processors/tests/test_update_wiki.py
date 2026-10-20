@@ -20,7 +20,8 @@ class TestMarkdownToMediawiki(unittest.TestCase):
     def test_headings_and_bold_convert(self):
         md = "## Item 4: Consent Calendar\n\nThe council **approved** it.\n\n**Keywords:** a, b"
         out = _markdown_to_mediawiki(md)
-        self.assertIn("=== Item 4: Consent Calendar ===", out)
+        # ## maps to level 4 (====), nested under the level-3 AI-summary header.
+        self.assertIn("==== Item 4: Consent Calendar ====", out)
         self.assertNotIn("## Item", out)
         self.assertIn("The council '''approved''' it.", out)
         self.assertIn("'''Keywords:''' a, b", out)

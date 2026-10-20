@@ -30,6 +30,7 @@ class TestSummarizeSection(unittest.TestCase):
         self.assertEqual(out, "a summary")  # stripped
         kwargs = gen.call_args.kwargs
         self.assertIs(kwargs["think"], False)
+        self.assertEqual(kwargs["options"]["num_ctx"], 32768)  # explicit, no truncation
         prompt = gen.call_args.args[1]
         self.assertIn("Resolution 39", prompt)
         self.assertIn("SPAN TEXT", prompt)

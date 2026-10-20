@@ -32,6 +32,12 @@ _LABEL_RE = re.compile(r"\bSpeaker [A-Z]\b")
 # temperature for readability; classification is pinned to 0.
 _SUMMARY_SEED = 42
 _SUMMARY_TEMPERATURE = 0.3
+# Context windows set explicitly so behavior never depends on a base model's
+# Ollama default (qwen3:8b falls back to a small default that would truncate).
+# A single agenda-item span can be long (a lengthy public hearing); the key/keyword
+# passes see only short inputs.
+_SECTION_NUM_CTX = 32768
+_UTIL_NUM_CTX = 8192
 
 _SECTION_SYSTEM = (
     "You are summarizing ONE agenda item of a city council meeting. You are given "
@@ -96,7 +102,11 @@ def summarize_section(
         prompt,
         system=_SECTION_SYSTEM,
         think=False,
-        options={"seed": _SUMMARY_SEED, "temperature": _SUMMARY_TEMPERATURE},
+        options={
+            "seed": _SUMMARY_SEED,
+            "temperature": _SUMMARY_TEMPERATURE,
+            "num_ctx": _SECTION_NUM_CTX,
+        },
     ).strip()
     return _clean_summary(out, item)
 
@@ -154,7 +164,7 @@ def build_speaker_key(roster: str, roll_call: str, *, model: str) -> str:
         system=_SPEAKER_KEY_SYSTEM,
         think=False,
         format=_SPEAKER_KEY_SCHEMA,
-        options={"seed": _SUMMARY_SEED, "temperature": 0},
+        options={"seed": _SUMMARY_SEED, "temperature": 0, "num_ctx": _UTIL_NUM_CTX},
     )
     try:
         speakers = json.loads(raw).get("speakers", [])
@@ -188,7 +198,7 @@ def extract_keywords(text: str, *, model: str, max_keywords: int = 8) -> list[st
         system=_KEYWORD_SYSTEM,
         think=False,
         format=_KEYWORD_SCHEMA,
-        options={"seed": _SUMMARY_SEED, "temperature": 0},
+        options={"seed": _SUMMARY_SEED, "temperature": 0, "num_ctx": _UTIL_NUM_CTX},
     )
     try:
         keywords = json.loads(raw).get("keywords", [])

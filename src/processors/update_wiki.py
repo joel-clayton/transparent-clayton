@@ -62,14 +62,15 @@ def _markdown_to_mediawiki(text: str) -> str:
     """Convert the small Markdown subset the section summaries emit — ATX headings
     (``## Item N: ...``) and ``**bold**`` — to MediaWiki markup (``=== ... ===`` and
     ``'''bold'''``). Without this the wiki shows the literal ``##``/``**`` (and ``#``
-    at line start is a MediaWiki ordered-list marker, so it mis-renders). A Markdown
-    ``##`` maps one level deeper (``===``) since the AI summary sits under a ``==``
-    section header. Non-heading lines pass through with inline bold converted."""
+    at line start is a MediaWiki ordered-list marker, so it mis-renders). The AI
+    summary sits under a level-3 (``===``) section header, so a Markdown ``##`` item
+    heading maps to level 4 (``====``) to nest beneath it rather than render as a
+    sibling. Non-heading lines pass through with inline bold converted."""
     out: list[str] = []
     for line in text.splitlines():
         m = _MD_HEADING_RE.match(line)
         if m:
-            eq = "=" * min(len(m.group(1)) + 1, 6)
+            eq = "=" * min(len(m.group(1)) + 2, 6)
             out.append(f"{eq} {m.group(2).strip()} {eq}")
         else:
             out.append(_MD_BOLD_RE.sub(r"'''\1'''", line))

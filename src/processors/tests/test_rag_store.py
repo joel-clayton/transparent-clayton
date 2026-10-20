@@ -54,6 +54,17 @@ class TestRagStore(unittest.TestCase):
         self.assertEqual(hits[0]["item_index"], 5)
         self.assertIsInstance(hits[0]["keywords"], list)
 
+    def test_reindex_without_vec_table_does_not_crash(self):
+        # A meeting with only a non-embedded (procedural) row never creates the vec
+        # table; re-indexing must not crash on DELETE FROM vec_sections.
+        key = "2026-10-06 07_00 PM"  # must match _row()'s meeting_key
+        rows = [_row(1, "Roll call at [0:00:19].", procedural=True)]
+        replace_meeting_sections(self.conn, "City Council", key, rows)
+        replace_meeting_sections(self.conn, "City Council", key, rows)  # re-index
+        self.assertEqual(
+            self.conn.execute("select count(*) from sections").fetchone()[0], 1
+        )
+
     def test_replace_is_idempotent(self):
         rows = [_row(5, "a", embedding=[1.0, 0.0, 0.0])]
         for _ in range(3):

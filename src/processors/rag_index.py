@@ -119,8 +119,36 @@ class RagIndexer(Processor):
         if legacy:
             r.sadd(self.meeting_type.redis_key(LEGACY_SUMMARY_KEY), *legacy)
 
+    def _heal_missing_markdown(self) -> None:
+        """Rebuild a wiki ``.md`` from its ``sections.json`` when the ``.md`` is
+        missing — e.g. a crash between writing the sidecar and the ``.md``, or a
+        deleted ``.md``. Cheap and model-free: ``sections.json`` is canonical and the
+        ``.md`` is a pure function of it, so this closes the gap where a meeting
+        would stay ``indexed`` with a permanently blank wiki summary."""
+        indexed, _legacy = self._scan_summaries()
+        for date in indexed:
+            md_path = self.construct_filepath_for_date(date)
+            sj_path = self._sections_json_path(date)
+            if os.path.exists(md_path) or not os.path.exists(sj_path):
+                continue
+            with open(sj_path, encoding="utf-8") as fh:
+                payload = json.load(fh)
+            rows = [
+                {
+                    "number": s["item_index"],
+                    "title": s["agenda_item"],
+                    "summary": s["summary"],
+                    "keywords": s.get("keywords") or [],
+                }
+                for s in payload.get("sections", [])
+            ]
+            if rows:
+                self._atomic_write(md_path, self._assemble_markdown(rows))
+                self.logger.info("Rebuilt missing .md for %s from sections.json", date)
+
     def process(self, floor: datetime = EARLIEST) -> None:
         self._record_legacy_summaries()
+        self._heal_missing_markdown()
         super().process(floor)
 
     # --- paths ---------------------------------------------------------------
@@ -202,21 +230,24 @@ class RagIndexer(Processor):
         agenda_path = find_document(self.meeting_type, date, AGENDA_LABEL)
         agenda_text = pdf_to_text(agenda_path) if agenda_path else ""
         items = parse_agenda_items(agenda_text)
-        if not items:
-            # No parseable agenda: one whole-meeting section so the stage still
-            # produces a summary + index entry (segmentation needs an item list).
+
+        self.logger.info("Indexing %s (%d agenda items)", date, len(items))
+        if items:
+            segments = segment_meeting(items, utterances, model=SEGMENTER_MODEL)
+        else:
+            segments = []
+        if not segments:
+            # No parseable agenda (or nothing segmentable): a single whole-meeting
+            # span summarized directly. Built here rather than running the segmenter
+            # on a synthetic "Meeting" item (which, finding no chair cue, would mark
+            # the whole meeting not-taken-up and emit no index entry).
             items = [
                 AgendaItem(number=1, title="Meeting", raw="MEETING", procedural=False)
             ]
-        items_by_num = {it.number: it for it in items}
-
-        self.logger.info("Indexing %s (%d agenda items)", date, len(items))
-        segments = segment_meeting(items, utterances, model=SEGMENTER_MODEL)
-        if not segments:  # single whole-meeting fallback span
             segments = [
                 Segment(
-                    number=items[0].number,
-                    title=items[0].title,
+                    number=1,
+                    title="Meeting",
                     procedural=False,
                     reached=True,
                     t_start=utterances[0].start,
@@ -224,6 +255,7 @@ class RagIndexer(Processor):
                     utterances=utterances,
                 )
             ]
+        items_by_num = {it.number: it for it in items}
         # Per-meeting context so each isolated section can name speakers: the agenda
         # roster plus an explicit SPEAKER KEY built once from the roll call (the
         # opening minutes), which maps 'Speaker X' labels to members.
