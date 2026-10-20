@@ -1,4 +1,4 @@
-FROM qwen3-vl:8b
+FROM qwen3:14b
 
 # Increase context window to handle multiple large meeting documents (e.g., 16k or 32k)
 PARAMETER num_ctx 32768
