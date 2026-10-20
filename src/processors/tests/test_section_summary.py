@@ -5,6 +5,7 @@ from unittest.mock import patch
 from src.processors.helpers.agenda_items import AgendaItem
 from src.processors.helpers import section_summary
 from src.processors.helpers.section_summary import (
+    build_speaker_key,
     extract_keywords,
     procedural_line,
     summarize_section,
@@ -32,6 +33,33 @@ class TestSummarizeSection(unittest.TestCase):
         prompt = gen.call_args.args[1]
         self.assertIn("Resolution 39", prompt)
         self.assertIn("SPAN TEXT", prompt)
+
+
+class TestBuildSpeakerKey(unittest.TestCase):
+    def test_formats_label_name_lines_and_skips_incomplete(self):
+        payload = json.dumps(
+            {
+                "speakers": [
+                    {"label": "Speaker A", "name": "Jeff Wan, Mayor"},
+                    {"label": "Speaker C", "name": "Jim Diaz, Councilmember"},
+                    {"label": "Speaker Z"},  # no name -> skipped
+                ]
+            }
+        )
+        with patch.object(section_summary, "generate", return_value=payload):
+            key = build_speaker_key("ROSTER", "ROLL CALL TEXT", model="m")
+        self.assertEqual(
+            key, "Speaker A = Jeff Wan, Mayor\nSpeaker C = Jim Diaz, Councilmember"
+        )
+
+    def test_empty_roll_call_skips_model(self):
+        with patch.object(section_summary, "generate") as gen:
+            self.assertEqual(build_speaker_key("ROSTER", "   ", model="m"), "")
+        gen.assert_not_called()
+
+    def test_unparseable_returns_empty(self):
+        with patch.object(section_summary, "generate", return_value="nope"):
+            self.assertEqual(build_speaker_key("R", "roll", model="m"), "")
 
 
 class TestExtractKeywords(unittest.TestCase):

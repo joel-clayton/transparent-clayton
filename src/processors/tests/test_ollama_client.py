@@ -27,6 +27,29 @@ class TestOllamaClient(unittest.TestCase):
         self.assertEqual(vec, [0.1, 0.2])
         self.assertTrue(post.call_args.args[0].endswith("/api/embeddings"))
 
+    def test_generate_passes_optional_knobs(self):
+        resp = MagicMock()
+        resp.json.return_value = {"response": "ok"}
+        with patch.object(ollama_client.requests, "post", return_value=resp) as post:
+            ollama_client.generate(
+                "m", "p", system="sys", think=False, format="json", options={"seed": 1}
+            )
+        body = post.call_args.kwargs["json"]
+        self.assertEqual(body["system"], "sys")
+        self.assertIs(body["think"], False)
+        self.assertEqual(body["format"], "json")
+        self.assertEqual(body["options"], {"seed": 1})
+
+    def test_unload_posts_keep_alive_zero(self):
+        resp = MagicMock()
+        with patch.object(ollama_client.requests, "post", return_value=resp) as post:
+            ollama_client.unload("m")
+        body = post.call_args.kwargs["json"]
+        self.assertEqual(body["model"], "m")
+        self.assertEqual(body["keep_alive"], 0)
+        self.assertTrue(post.call_args.args[0].endswith("/api/generate"))
+        resp.raise_for_status.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

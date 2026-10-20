@@ -14,6 +14,7 @@ from src.processors.compress import Compressor
 from src.processors.download import Downloader
 from src.processors.download_docs import DocumentDownloader
 from src.processors.extract import Extractor
+from src.processors.helpers.ollama_client import unload
 from src.processors.rag_index import RagIndexer
 from src.processors.transcribe import Transcriber
 from src.publishers import PUBLISHERS, run_publisher
@@ -26,6 +27,12 @@ from src.scrapers.constants import (
 )
 from src.scrapers.errors import SiteStructureError, TransientScrapeError
 from src.scrapers.models import PipelineClass
+from src.settings import (
+    EMBEDDING_MODEL,
+    KEYWORD_MODEL,
+    SECTION_SUMMARY_MODEL,
+    SEGMENTER_MODEL,
+)
 from src.types import MEETING_TYPE_BY_SOURCE, Meeting
 from src.util import get_datetime_from_string, send_to_discord_bots
 
@@ -177,6 +184,19 @@ def summarize_cc_meeting() -> None:
     # Summarizer at this stage slot.
     for source_type in MEETING_TYPE_BY_SOURCE:
         RagIndexer(source_type).process()
+    # Free the local models once the stage is done so the ~15GB section model does
+    # not sit resident (Ollama's default keep-alive) while the rest of the pipeline
+    # needs memory. Best-effort.
+    for model in {
+        SEGMENTER_MODEL,
+        SECTION_SUMMARY_MODEL,
+        KEYWORD_MODEL,
+        EMBEDDING_MODEL,
+    }:
+        try:
+            unload(model)
+        except Exception as exc:
+            logger.warning("Could not unload Ollama model %s: %s", model, exc)
 
 
 @app.task

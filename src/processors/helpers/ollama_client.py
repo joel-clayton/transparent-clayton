@@ -51,6 +51,21 @@ def generate(
     return str(resp.json().get("response", ""))
 
 
+def unload(model: str, *, timeout: float = 30.0) -> None:
+    """Ask Ollama to unload a model from memory now (``keep_alive: 0``).
+
+    Called when the summarize stage finishes so the large section model (~15 GB)
+    doesn't sit resident for Ollama's default keep-alive window while the rest of
+    the pipeline (ffmpeg, workers) needs memory. Best-effort: a failure here is
+    logged by the caller, never fatal.
+    """
+    requests.post(
+        f"{OLLAMA_URL}/api/generate",
+        json={"model": model, "keep_alive": 0},
+        timeout=timeout,
+    ).raise_for_status()
+
+
 def embed(model: str, text: str, *, timeout: float = DEFAULT_TIMEOUT) -> list[float]:
     """Return the embedding vector for ``text`` (for the Phase 3b RAG store)."""
     resp = requests.post(

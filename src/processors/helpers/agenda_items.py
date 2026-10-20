@@ -67,6 +67,17 @@ class AgendaItem:
     body: str = ""  # the agenda text under this item (sub-items, recommendations)
 
 
+def agenda_preamble(agenda_text: str) -> str:
+    """The agenda text before the first numbered item — it carries the member
+    roster (``Jeff Wan, Mayor`` / ``Jim Diaz, Councilmember`` ...), which the section
+    engine feeds to each section so speakers are named consistently and correctly."""
+    lines = agenda_text.splitlines()
+    for i, line in enumerate(lines):
+        if _ITEM_RE.match(line):
+            return "\n".join(lines[:i]).strip()
+    return agenda_text.strip()
+
+
 def parse_agenda_items(agenda_text: str) -> list[AgendaItem]:
     """Ordered top-level agenda items parsed from the agenda text.
 

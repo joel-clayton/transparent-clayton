@@ -23,7 +23,11 @@ from typing import List
 from celery_app import r
 from src.constants import LEGACY_SUMMARY_KEY, SUMMARIZED_KEY
 from src.processors.constants import EARLIEST
-from src.processors.helpers.agenda_items import AgendaItem, parse_agenda_items
+from src.processors.helpers.agenda_items import (
+    AgendaItem,
+    agenda_preamble,
+    parse_agenda_items,
+)
 from src.processors.helpers.document_store import find_document
 from src.processors.helpers.embeddings import embed_document
 from src.processors.helpers.ollama_client import model_digest
@@ -36,12 +40,17 @@ from src.processors.helpers.rag_store import (
 )
 from src.processors.helpers.section_summary import (
     NOT_TAKEN_UP,
+    build_speaker_key,
     extract_keywords,
     procedural_line,
     summarize_section,
 )
 from src.processors.helpers.segmentation import Segment, segment_meeting
-from src.processors.helpers.transcript import parse_utterances, render_span
+from src.processors.helpers.transcript import (
+    parse_utterances,
+    render_span,
+    utterances_in_span,
+)
 from src.processors.process import Processor
 from src.processors.summarize import AGENDA_LABEL
 from src.settings import (
@@ -125,10 +134,17 @@ class RagIndexer(Processor):
 
     # --- the pipeline --------------------------------------------------------
     def _build_sections(
-        self, segments: list[Segment], items_by_num: dict[int, AgendaItem]
+        self,
+        segments: list[Segment],
+        items_by_num: dict[int, AgendaItem],
+        context: str = "",
     ) -> list[dict]:
         """Turn segments into section dicts (summary + keywords), one LLM pass each
-        for reached non-procedural items; procedural/not-reached are cheap."""
+        for reached non-procedural items; procedural/not-reached are cheap.
+
+        ``context`` (roster + roll call) is fed to each section so speakers are
+        named consistently from the transcript's anonymous 'Speaker X' labels.
+        """
         sections: list[dict] = []
         for seg in segments:
             item = items_by_num[seg.number]
@@ -141,7 +157,10 @@ class RagIndexer(Processor):
                 keywords = []
             else:
                 summary = summarize_section(
-                    item, render_span(seg.utterances), model=SECTION_SUMMARY_MODEL
+                    item,
+                    render_span(seg.utterances),
+                    model=SECTION_SUMMARY_MODEL,
+                    context=context,
                 )
                 keywords = extract_keywords(summary, model=KEYWORD_MODEL)
                 embed = bool(summary.strip())
@@ -205,7 +224,25 @@ class RagIndexer(Processor):
                     utterances=utterances,
                 )
             ]
-        sections = self._build_sections(segments, items_by_num)
+        # Per-meeting context so each isolated section can name speakers: the agenda
+        # roster plus an explicit SPEAKER KEY built once from the roll call (the
+        # opening minutes), which maps 'Speaker X' labels to members.
+        roster = agenda_preamble(agenda_text)
+        opening = render_span(
+            utterances_in_span(
+                utterances, utterances[0].start, utterances[0].start + 180
+            )
+        )
+        speaker_key = build_speaker_key(roster, opening, model=KEYWORD_MODEL)
+        context = "\n\n".join(
+            part
+            for part in (
+                f"MEMBER ROSTER:\n{roster}" if roster else "",
+                f"SPEAKER KEY:\n{speaker_key}" if speaker_key else "",
+            )
+            if part
+        )
+        sections = self._build_sections(segments, items_by_num, context)
 
         # Provenance (best-effort; digests pin the exact model blobs used).
         now = datetime.now(timezone.utc).isoformat()

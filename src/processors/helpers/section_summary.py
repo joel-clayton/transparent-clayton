@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from src.processors.helpers.agenda_items import AgendaItem
 from src.processors.helpers.ollama_client import generate
@@ -21,6 +22,12 @@ logger = logging.getLogger(__name__)
 
 NOT_TAKEN_UP = "This item was not taken up at the meeting."
 
+# Safety net: a raw diarization label the model failed to resolve must never reach
+# the wiki. Council members get named via the SPEAKER KEY; a residual label is
+# usually a non-roster speaker (staff, public) we can't identify, so it becomes a
+# generic reference rather than "Speaker G".
+_LABEL_RE = re.compile(r"\bSpeaker [A-Z]\b")
+
 # Deterministic-ish: a fixed seed with low temperature. Prose keeps a little
 # temperature for readability; classification is pinned to 0.
 _SUMMARY_SEED = 42
@@ -28,18 +35,30 @@ _SUMMARY_TEMPERATURE = 0.3
 
 _SECTION_SYSTEM = (
     "You are summarizing ONE agenda item of a city council meeting. You are given "
-    "the AGENDA TEXT for that item and the TRANSCRIPT SPAN where it was discussed.\n"
+    "MEETING CONTEXT (the member roster and the roll call, which map the "
+    "transcript's 'Speaker A/B/C' labels to real people), the AGENDA TEXT for the "
+    "item, and the TRANSCRIPT SPAN where it was discussed.\n"
     "Rules:\n"
     "- Use ONLY the provided text. Never invent names, quotes, votes, figures, or "
     "events. Do not reuse a quote or fact from a different item.\n"
+    "- Name people using the MEETING CONTEXT. It includes a SPEAKER KEY mapping "
+    "labels to people (e.g. 'Speaker C = Jim Diaz, Councilmember') — apply it so you "
+    "NEVER write 'Speaker C' in the output. A label absent from the key is a member "
+    "of the public: use their name if they state it, otherwise 'a member of the "
+    "public' or 'a speaker'. Never emit a 'Speaker X' label.\n"
+    "- Do not repeat the agenda item number or title as a heading or first line; "
+    "begin directly with the summary content.\n"
     "- Use the AGENDA TEXT to state what the item concerns (sub-item titles, "
     "resolution numbers, dollar amounts, named parties); use the TRANSCRIPT SPAN "
     "for what was said and decided.\n"
-    "- Report what actually happened: positions taken, speakers (by name only if "
-    "the text names them), motions, votes and their outcomes, and any amendments.\n"
-    "- Cite key timestamps in [h:mm:ss] for motions, votes, and decisions.\n"
-    "- Neutral, factual, concise: 80-250 words. No preamble, no restating the task, "
-    "no meta-commentary, and no closing summary sentence. Begin with the content.\n"
+    "- Be thorough and complete for substantive items: cover every speaker and each "
+    "distinct point, position, motion, vote and outcome, and amendment — do not omit "
+    "participants or compress multiple speakers into one line. Cite key timestamps "
+    "in [h:mm:ss] for motions, votes, and decisions.\n"
+    "- Length should fit the substance: roughly 150-500 words for a substantive "
+    "item, shorter only when the item genuinely was brief. Do not pad, do not "
+    "restate the task, no meta-commentary, no closing summary sentence. Begin with "
+    "the content.\n"
     "- If the span contains no substantive discussion of this item, say that in one "
     "sentence and stop."
 )
@@ -58,9 +77,16 @@ _KEYWORD_SCHEMA = {
 }
 
 
-def summarize_section(item: AgendaItem, span_text: str, *, model: str) -> str:
-    """Prose summary of one reached, non-procedural agenda item."""
+def summarize_section(
+    item: AgendaItem, span_text: str, *, model: str, context: str = ""
+) -> str:
+    """Prose summary of one reached, non-procedural agenda item.
+
+    ``context`` is the per-meeting roster + roll call, so the model can resolve the
+    transcript's ``Speaker X`` labels to real names consistently across sections.
+    """
     prompt = (
+        f"MEETING CONTEXT:\n{context or '(none provided)'}\n\n"
         f"AGENDA ITEM {item.number}: {item.title}\n"
         f"{item.body or '(no agenda detail)'}\n\n"
         f"TRANSCRIPT SPAN:\n{span_text}"
@@ -72,7 +98,75 @@ def summarize_section(item: AgendaItem, span_text: str, *, model: str) -> str:
         think=False,
         options={"seed": _SUMMARY_SEED, "temperature": _SUMMARY_TEMPERATURE},
     ).strip()
-    return out
+    return _clean_summary(out, item)
+
+
+def _clean_summary(text: str, item: AgendaItem) -> str:
+    """Strip any residual ``Speaker X`` labels and a leading echoed item heading."""
+    text = _LABEL_RE.sub("a speaker", text).strip()
+    head, _, rest = text.partition("\n")
+    normalized = head.strip().lstrip("#").strip().rstrip(":").lower()
+    if normalized == item.title.lower() or normalized.startswith(f"item {item.number}"):
+        text = rest.strip()
+    return text
+
+
+_SPEAKER_KEY_SYSTEM = (
+    "You map the anonymous speaker labels in a city council roll call to real "
+    "people. You are given the MEMBER ROSTER and the ROLL CALL transcript, where "
+    "the clerk reads each member's name and that member answers 'present'/'here' on "
+    "the next line, and the mayor runs the meeting. For each 'Speaker X' label, give "
+    "the person's name and role (e.g. 'Jim Diaz, Councilmember') ONLY when the roll "
+    "call and roster make it clear; omit a label you cannot confidently identify. "
+    "Output only JSON."
+)
+
+_SPEAKER_KEY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "speakers": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "label": {"type": "string"},
+                    "name": {"type": "string"},
+                },
+                "required": ["label", "name"],
+            },
+        }
+    },
+    "required": ["speakers"],
+}
+
+
+def build_speaker_key(roster: str, roll_call: str, *, model: str) -> str:
+    """A ``Speaker X = Name, Role`` key derived once per meeting from the roster +
+    roll call, to hand to every section so council members are named consistently
+    instead of each section re-inferring from roll-call adjacency. Returns "" if the
+    mapping can't be built (best-effort; sections still get the roster)."""
+    if not roll_call.strip():
+        return ""
+    prompt = f"MEMBER ROSTER:\n{roster or '(none)'}\n\nROLL CALL:\n{roll_call}"
+    raw = generate(
+        model,
+        prompt,
+        system=_SPEAKER_KEY_SYSTEM,
+        think=False,
+        format=_SPEAKER_KEY_SCHEMA,
+        options={"seed": _SUMMARY_SEED, "temperature": 0},
+    )
+    try:
+        speakers = json.loads(raw).get("speakers", [])
+    except (ValueError, TypeError):
+        logger.warning("Speaker-key pass returned unparseable JSON")
+        return ""
+    lines = [
+        f"{s['label']} = {s['name']}"
+        for s in speakers
+        if s.get("label") and s.get("name")
+    ]
+    return "\n".join(lines)
 
 
 def procedural_line(item: AgendaItem, t_start: int) -> str:
