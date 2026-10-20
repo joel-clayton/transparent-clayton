@@ -54,6 +54,21 @@ class TestRagStore(unittest.TestCase):
         self.assertEqual(hits[0]["item_index"], 5)
         self.assertIsInstance(hits[0]["keywords"], list)
 
+    def test_search_returns_empty_when_no_vec_table(self):
+        # Store only a non-embedded section -> vec table never created. search() must
+        # return [] instead of raising OperationalError: no such table.
+        key = "2026-10-06 07_00 PM"
+        replace_meeting_sections(
+            self.conn,
+            "City Council",
+            key,
+            [_row(1, "Roll call at [0:00:19].", procedural=True)],
+        )
+        self.assertEqual(search(self.conn, [1.0, 0.0, 0.0], k=3), [])
+        self.assertEqual(
+            search(self.conn, [1.0, 0.0, 0.0], k=3, meeting_type="City Council"), []
+        )
+
     def test_reindex_without_vec_table_does_not_crash(self):
         # A meeting with only a non-embedded (procedural) row never creates the vec
         # table; re-indexing must not crash on DELETE FROM vec_sections.

@@ -211,6 +211,11 @@ def search(
     nearest rows are other types. (At this corpus size over-fetching all vectors is
     cheap; a larger store would move the filter into a vec0 partition column.)
     """
+    # The vec table only exists once a meeting with an embedded section is stored;
+    # an early/sparse store (only procedural/not-reached sections) has none, so a
+    # query returns no matches rather than raising on a missing table.
+    if not _vec_table_exists(conn):
+        return []
     fetch_k = k
     if meeting_type is not None:
         total = conn.execute("SELECT count(*) FROM vec_sections").fetchone()[0]

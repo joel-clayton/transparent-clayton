@@ -98,5 +98,74 @@ class TestNoAgendaFallback(unittest.TestCase):
         self.assertEqual(payload["sections"][0]["agenda_item"], "Meeting")
 
 
+class TestFallbackSegments(unittest.TestCase):
+    def _utts(self, n, chars):
+        from src.processors.helpers.transcript import Utterance
+
+        return [Utterance("A", i * 10, i * 10 + 5, "x" * chars) for i in range(n)]
+
+    def test_single_chunk_is_one_meeting_section(self):
+        idx = RagIndexer(SourceType.CITY_COUNCIL_MEETING)
+        segs = idx._fallback_segments(self._utts(2, 50))
+        self.assertEqual(len(segs), 1)
+        self.assertEqual(segs[0].title, "Meeting")
+        self.assertTrue(segs[0].reached)
+
+    def test_long_transcript_splits_into_parts(self):
+        idx = RagIndexer(SourceType.CITY_COUNCIL_MEETING)
+        # 10 utterances x 5000 chars = 50000 > FALLBACK_WINDOW_TOKENS*4 (32000)
+        segs = idx._fallback_segments(self._utts(10, 5000))
+        self.assertGreater(len(segs), 1)
+        self.assertEqual([s.title for s in segs[:2]], ["Part 1", "Part 2"])
+        self.assertTrue(all(s.reached for s in segs))
+
+
+class TestAllUnreachedFallback(unittest.TestCase):
+    """A parseable agenda whose segmentation detects zero boundaries (all items
+    unreached) falls back to whole-meeting parts rather than emitting a meeting
+    where every item reads 'not taken up'."""
+
+    def test_falls_back_when_no_item_reached(self):
+        from src.processors.helpers.segmentation import Segment
+
+        idx = RagIndexer(SourceType.CITY_COUNCIL_MEETING)
+        tmp = tempfile.mkdtemp()
+        transcript = os.path.join(tmp, "t.txt")
+        with open(transcript, "w") as fh:
+            fh.write("[Speaker A] (0:00:01 - 0:00:05)\nMeeting content here.\n")
+        md = os.path.join(tmp, "m.md")
+        sj = os.path.join(tmp, "m.sections.json")
+        db = os.path.join(tmp, "x.db")
+        idx.construct_filepath_for_date = (  # type: ignore
+            lambda date, job_type=None: (
+                transcript if job_type == JobType.TRANSCRIBE_AUDIO else md
+            )
+        )
+        idx._sections_json_path = lambda date: sj  # type: ignore
+
+        all_unreached = [
+            Segment(1, "Roll Call", True, False, 0, 0, []),
+            Segment(2, "Action Items", False, False, 0, 0, []),
+        ]
+        with (
+            patch.object(rag_index, "find_document", return_value="/agenda.pdf"),
+            patch.object(
+                rag_index, "pdf_to_text", return_value="1. ROLL CALL\n2. ACTION ITEMS"
+            ),
+            patch.object(rag_index, "segment_meeting", return_value=all_unreached),
+            patch.object(rag_index, "summarize_section", return_value="REAL CONTENT"),
+            patch.object(rag_index, "extract_keywords", return_value=[]),
+            patch.object(rag_index, "build_speaker_key", return_value=""),
+            patch.object(rag_index, "model_digest", return_value=None),
+            patch.object(rag_index, "embed_document", return_value=[0.1, 0.2, 0.3]),
+            patch.object(rag_index, "connect", lambda *a, **k: real_connect(db)),
+        ):
+            idx.process_for_date("2026-10-06 07_00 PM")
+
+        content = open(md, encoding="utf-8").read()
+        self.assertIn("REAL CONTENT", content)
+        self.assertNotIn("not taken up", content.lower())
+
+
 if __name__ == "__main__":
     unittest.main()

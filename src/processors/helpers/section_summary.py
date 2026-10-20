@@ -112,11 +112,24 @@ def summarize_section(
 
 
 def _clean_summary(text: str, item: AgendaItem) -> str:
-    """Strip any residual ``Speaker X`` labels and a leading echoed item heading."""
+    """Strip any residual ``Speaker X`` labels and a leading echoed item heading.
+
+    Only an actual echoed heading is removed — a Markdown heading line, or a first
+    line that *equals* a known heading form — so prose that merely begins with the
+    item number (e.g. "Item 3 funding was approved 4-1...") is preserved."""
     text = _LABEL_RE.sub("a speaker", text).strip()
     head, _, rest = text.partition("\n")
-    normalized = head.strip().lstrip("#").strip().rstrip(":").lower()
-    if normalized == item.title.lower() or normalized.startswith(f"item {item.number}"):
+    stripped = head.strip()
+    normalized = stripped.lstrip("#").strip().rstrip(":").lower()
+    title = item.title.lower()
+    heading_forms = {
+        title,
+        f"item {item.number}",
+        f"item {item.number}: {title}",
+        f"item {item.number} {title}",
+        f"item {item.number} - {title}",
+    }
+    if stripped.startswith("#") or normalized in heading_forms:
         text = rest.strip()
     return text
 

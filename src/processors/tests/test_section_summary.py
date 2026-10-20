@@ -5,11 +5,36 @@ from unittest.mock import patch
 from src.processors.helpers.agenda_items import AgendaItem
 from src.processors.helpers import section_summary
 from src.processors.helpers.section_summary import (
+    _clean_summary,
     build_speaker_key,
     extract_keywords,
     procedural_line,
     summarize_section,
 )
+
+
+class TestCleanSummary(unittest.TestCase):
+    ITEM = AgendaItem(3, "Public Comment", "PUBLIC COMMENT", False)
+
+    def test_strips_markdown_heading_and_exact_title_echo(self):
+        self.assertEqual(
+            _clean_summary("## Item 3\n\nbody text", self.ITEM), "body text"
+        )
+        self.assertEqual(_clean_summary("Public Comment\nbody", self.ITEM), "body")
+        self.assertEqual(
+            _clean_summary("Item 3: Public Comment\nbody", self.ITEM), "body"
+        )
+
+    def test_preserves_prose_starting_with_item_number(self):
+        # Real content that happens to open "Item 3 ..." must not be deleted.
+        text = "Item 3 funding was approved 4-1 after debate. More detail follows."
+        self.assertEqual(_clean_summary(text, self.ITEM), text)
+
+    def test_rewrites_residual_speaker_label(self):
+        self.assertEqual(
+            _clean_summary("Speaker G gave the report.", self.ITEM),
+            "a speaker gave the report.",
+        )
 
 
 class TestProceduralLine(unittest.TestCase):

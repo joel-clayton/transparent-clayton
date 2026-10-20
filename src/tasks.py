@@ -28,7 +28,6 @@ from src.scrapers.constants import (
 from src.scrapers.errors import SiteStructureError, TransientScrapeError
 from src.scrapers.models import PipelineClass
 from src.settings import (
-    EMBEDDING_MODEL,
     KEYWORD_MODEL,
     SECTION_SUMMARY_MODEL,
     SEGMENTER_MODEL,
@@ -184,15 +183,12 @@ def summarize_cc_meeting() -> None:
     # Summarizer at this stage slot.
     for source_type in MEETING_TYPE_BY_SOURCE:
         RagIndexer(source_type).process()
-    # Free the local models once the stage is done so the ~15GB section model does
-    # not sit resident (Ollama's default keep-alive) while the rest of the pipeline
-    # needs memory. Best-effort.
-    for model in {
-        SEGMENTER_MODEL,
-        SECTION_SUMMARY_MODEL,
-        KEYWORD_MODEL,
-        EMBEDDING_MODEL,
-    }:
+    # Free the large generate models once the stage is done so the ~15GB section
+    # model does not sit resident (Ollama's default keep-alive) while the rest of the
+    # pipeline needs memory. The embedding model (nomic, ~275MB) is left for Ollama's
+    # idle unload: it is tiny and does not serve /api/generate, so an unload call
+    # there would error. Best-effort.
+    for model in {SEGMENTER_MODEL, SECTION_SUMMARY_MODEL, KEYWORD_MODEL}:
         try:
             unload(model)
         except Exception as exc:

@@ -47,6 +47,7 @@ from src.processors.helpers.section_summary import (
 )
 from src.processors.helpers.segmentation import Segment, segment_meeting
 from src.processors.helpers.transcript import (
+    Utterance,
     parse_utterances,
     render_span,
     utterances_in_span,
@@ -69,6 +70,9 @@ from src.util import get_datetime_string_from_string
 SECTIONS_SUFFIX = ".sections.json"
 _SUMMARY_EXTS = (".md", ".txt")
 _SEED = 42
+# Tokens per "Part N" chunk when summarizing a meeting with no usable agenda
+# segmentation — kept well within the section model's context so nothing truncates.
+FALLBACK_WINDOW_TOKENS = 8000
 
 
 class RagIndexer(Processor):
@@ -219,6 +223,38 @@ class RagIndexer(Processor):
             blocks.append("\n".join(block))
         return "\n\n".join(blocks) + "\n"
 
+    def _fallback_segments(self, utterances: list[Utterance]) -> list[Segment]:
+        """Bounded time-windowed pseudo-sections for a meeting with no usable agenda
+        segmentation. Splits the transcript into ~FALLBACK_WINDOW_TOKENS chunks so
+        each is summarized within the section model's context (no truncation) and the
+        whole meeting is captured; a single-chunk meeting is one 'Meeting' section."""
+        budget = FALLBACK_WINDOW_TOKENS * 4  # chars
+        chunks: list[list[Utterance]] = []
+        cur: list[Utterance] = []
+        size = 0
+        for u in utterances:
+            ulen = len(u.text) + len(u.speaker) + 16
+            if cur and size + ulen > budget:
+                chunks.append(cur)
+                cur, size = [], 0
+            cur.append(u)
+            size += ulen
+        if cur:
+            chunks.append(cur)
+        single = len(chunks) == 1
+        return [
+            Segment(
+                number=i,
+                title="Meeting" if single else f"Part {i}",
+                procedural=False,
+                reached=True,
+                t_start=chunk[0].start,
+                t_end=chunk[-1].end,
+                utterances=chunk,
+            )
+            for i, chunk in enumerate(chunks, start=1)
+        ]
+
     def process_for_date(self, date: str) -> None:
         transcript_path = self.construct_filepath_for_date(date, self.input_job_type)
         with open(transcript_path, encoding="utf-8") as handle:
@@ -232,28 +268,25 @@ class RagIndexer(Processor):
         items = parse_agenda_items(agenda_text)
 
         self.logger.info("Indexing %s (%d agenda items)", date, len(items))
-        if items:
-            segments = segment_meeting(items, utterances, model=SEGMENTER_MODEL)
-        else:
-            segments = []
-        if not segments:
-            # No parseable agenda (or nothing segmentable): a single whole-meeting
-            # span summarized directly. Built here rather than running the segmenter
-            # on a synthetic "Meeting" item (which, finding no chair cue, would mark
-            # the whole meeting not-taken-up and emit no index entry).
+        segments = (
+            segment_meeting(items, utterances, model=SEGMENTER_MODEL) if items else []
+        )
+        if not any(seg.reached for seg in segments):
+            # No parseable agenda, or segmentation detected no boundaries at all (no
+            # chair cues) — so no agenda item was captured. Rather than emit a
+            # meeting where every item reads "not taken up" (losing the content) or
+            # feed the whole transcript to one call (which would truncate a long
+            # meeting at num_ctx), split it into bounded time-windowed "Part N"
+            # sections so the full meeting is summarized and indexed.
+            segments = self._fallback_segments(utterances)
             items = [
-                AgendaItem(number=1, title="Meeting", raw="MEETING", procedural=False)
-            ]
-            segments = [
-                Segment(
-                    number=1,
-                    title="Meeting",
+                AgendaItem(
+                    number=s.number,
+                    title=s.title,
+                    raw=s.title.upper(),
                     procedural=False,
-                    reached=True,
-                    t_start=utterances[0].start,
-                    t_end=utterances[-1].end,
-                    utterances=utterances,
                 )
+                for s in segments
             ]
         items_by_num = {it.number: it for it in items}
         # Per-meeting context so each isolated section can name speakers: the agenda
