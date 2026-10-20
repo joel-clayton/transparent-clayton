@@ -8,11 +8,27 @@ from src.processors.constants import WIKI_MTG_CANCELLED
 from src.processors.update_wiki import (
     WikiUpdater,
     _humanize_meeting_key,
+    _markdown_to_mediawiki,
     insert_sections_in_date_order,
     remove_section_by_date,
     render_meeting_table_row,
     render_no_materials_page,
 )
+
+
+class TestMarkdownToMediawiki(unittest.TestCase):
+    def test_headings_and_bold_convert(self):
+        md = "## Item 4: Consent Calendar\n\nThe council **approved** it.\n\n**Keywords:** a, b"
+        out = _markdown_to_mediawiki(md)
+        # ## maps to level 4 (====), nested under the level-3 AI-summary header.
+        self.assertIn("==== Item 4: Consent Calendar ====", out)
+        self.assertNotIn("## Item", out)
+        self.assertIn("The council '''approved''' it.", out)
+        self.assertIn("'''Keywords:''' a, b", out)
+        self.assertNotIn("**", out)
+
+    def test_plain_text_passes_through(self):
+        self.assertEqual(_markdown_to_mediawiki("just prose here"), "just prose here")
 
 
 class TestRemoveSectionByDate(unittest.TestCase):

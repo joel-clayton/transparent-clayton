@@ -39,10 +39,33 @@ DOWNLOADED_DIR = os.path.join(STORAGE_ROOT, "Downloaded") + os.sep
 COMPRESSED_DIR = os.path.join(STORAGE_ROOT, "Compressed") + os.sep
 EXTRACTED_AUDIO_DIR = os.path.join(STORAGE_ROOT, "Audio") + os.sep
 TRANSCRIBED_DIR = os.path.join(STORAGE_ROOT, "Transcripts") + os.sep
+# LLM-generated meeting summaries (per-agenda-section synthesis of transcript +
+# agenda + packet), one file per meeting (TRA-176).
+SUMMARIES_DIR = os.path.join(STORAGE_ROOT, "Summaries") + os.sep
 # Meeting documents (agenda packets, minutes, staff reports) saved to disk so the
 # on-disk store is canonical — independent of whether they are also published to
 # Google Drive. One folder per meeting under here.
 DOCUMENTS_DIR = os.path.join(STORAGE_ROOT, "Documents") + os.sep
+
+# Local Ollama server + the model built from Modelfile-Summarizer, for LLM meeting
+# summaries (TRA-176). Env-overridable so another deployment can point elsewhere.
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+SUMMARIZER_MODEL = os.environ.get("SUMMARIZER_MODEL", "meeting-summarizer")
+# Embedding model for the RAG index (TRA-176 increment 2); swappable so the store
+# can be rebuilt with a different model (never mix versions in one index).
+EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "nomic-embed-text")
+# Section engine models (TRA-176 increment 2). Segmentation and keyword extraction
+# are cheap classification -> a fast model; per-section prose uses the larger model
+# (the 14B that won the summary bake-off). All env-overridable.
+SEGMENTER_MODEL = os.environ.get("SEGMENTER_MODEL", "qwen3:8b")
+SECTION_SUMMARY_MODEL = os.environ.get("SECTION_SUMMARY_MODEL", "qwen3:14b")
+KEYWORD_MODEL = os.environ.get("KEYWORD_MODEL", "qwen3:8b")
+# A version string for our prompt-assembly templates, recorded in RAG provenance so
+# a regeneration can tell whether the prompts changed (bump when they do).
+PROMPT_VERSION = "2026-10-20.1"
+# The RAG vector store: a single sqlite-vec file under the (off-repo) storage root.
+# Derived/rebuildable from each meeting's sections.json; never committed.
+RAG_DB_PATH = os.path.join(STORAGE_ROOT, "Rag", "index.db")
 
 
 # --- Redis -------------------------------------------------------------------
