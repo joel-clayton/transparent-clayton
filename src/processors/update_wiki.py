@@ -611,28 +611,43 @@ class WikiUpdater(Processor):
             )
 
     def _refresh_upgraded_meetings(self) -> None:
-        """Remove the wiki entry for any meeting flagged as upgraded (its assets
-        grew, e.g. a video posted late) so the normal pass re-adds it with its
-        current assets. The wiki otherwise never re-renders an existing entry.
+        """Remove the wiki entry for any meeting flagged for refresh (its assets
+        grew, e.g. a video posted late, or its AI summary was (re)generated) so the
+        normal pass re-adds it with current content. The wiki otherwise never
+        re-renders an existing entry.
+
+        Flagged meetings are grouped by year and each year page is fetched and saved
+        once — a backfill can flag many meetings, and a page read per meeting would
+        be O(N) wiki round-trips (mostly no-ops, since a freshly-rendered meeting is
+        not on the page yet).
         """
         refresh_key = self.meeting_type.redis_key(WIKI_REFRESH_KEY)
-        for member in list(r.smembers(refresh_key) or set()):
-            meeting_key = (
-                member.decode("utf-8") if isinstance(member, bytes) else member
+        members = list(r.smembers(refresh_key) or set())
+        keys = [m.decode("utf-8") if isinstance(m, bytes) else m for m in members]
+        by_year: dict[str, list[str]] = {}
+        for key in keys:
+            by_year.setdefault(get_year_string_from_string(key), []).append(key)
+
+        for year, year_keys in by_year.items():
+            page = pywikibot.Page(
+                self.site, self.meeting_type.wiki_year_template.format(year)
             )
-            page_name = self.meeting_type.wiki_year_template.format(
-                get_year_string_from_string(meeting_key)
-            )
-            page = pywikibot.Page(self.site, page_name)
-            if page.exists():
-                new_text, removed = remove_section_by_date(page.text, meeting_key)
+            if not page.exists():
+                continue
+            text = page.text
+            cleared: list[str] = []
+            for key in year_keys:
+                text, removed = remove_section_by_date(text, key)
                 if removed:
-                    page.text = new_text
-                    page.save(summary=f"Refreshing {meeting_key} (assets updated)")
-                    self.logger.info("Cleared %s for refresh", meeting_key)
-            # Clear the flag regardless: the normal pass re-adds it, and a stale
-            # flag must not cause repeated churn on every run.
-            r.srem(refresh_key, member)
+                    cleared.append(key)
+            if cleared:
+                page.text = text
+                page.save(summary=f"Refreshing {len(cleared)} meeting(s) (updated)")
+                self.logger.info("Cleared for refresh: %s", ", ".join(cleared))
+        # Clear all flags regardless: the normal pass re-adds, and a stale flag must
+        # not cause repeated churn on every run.
+        if members:
+            r.srem(refresh_key, *members)
 
     def process(self, floor: datetime = EARLIEST) -> None:
         self._refresh_upgraded_meetings()

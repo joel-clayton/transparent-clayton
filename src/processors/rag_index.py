@@ -152,15 +152,17 @@ class RagIndexer(Processor):
                 self.logger.info("Rebuilt missing .md for %s from sections.json", date)
 
     def _mark_for_wiki_refresh(self, date: str) -> None:
-        """Flag a meeting for wiki re-render after its summary ``.md`` is written.
+        """Flag a meeting for wiki re-render when its summary is (re)generated.
 
-        The wiki fills its AI-summary section from this ``.md`` (else ``TBD``) and
-        only re-renders an *existing* page entry when WIKI_REFRESH_KEY is set. Without
-        this flag, a meeting whose entry was published before its summary existed
-        (e.g. a summarize failure on the first run) would stay ``TBD`` forever. It is
-        a no-op for a meeting not yet on the page (the normal single-run cascade),
-        and summarize is idempotent, so the flag is set only when a summary is
-        actually (re)generated — no per-run churn (TRA-178)."""
+        The wiki fills its AI-summary section from the on-disk ``.md`` (else ``TBD``)
+        and only re-renders an *existing* page entry when WIKI_REFRESH_KEY is set.
+        Without this flag, a meeting whose entry was published before its summary
+        existed (e.g. a summarize failure on the first run) would stay ``TBD``
+        forever. Called before the summary is written (so the flag can't be lost
+        after a successful write) and on a heal; it is a no-op for a meeting not yet
+        on the page (the normal single-run cascade), and summarize is idempotent, so
+        the flag is set only when a summary is actually (re)generated — no per-run
+        churn (TRA-178)."""
         r.sadd(self.meeting_type.redis_key(WIKI_REFRESH_KEY), date)
 
     def process(self, floor: datetime = EARLIEST) -> None:
@@ -275,6 +277,10 @@ class RagIndexer(Processor):
         utterances = parse_utterances(transcript)
         if not utterances:
             raise Exception(f"No parseable transcript utterances for {date}")
+        # Flag the wiki to re-render this meeting BEFORE writing the summary, so the
+        # flag can never be lost after a successful write (if this fails nothing is
+        # written and the whole meeting retries). See _mark_for_wiki_refresh.
+        self._mark_for_wiki_refresh(date)
 
         agenda_path = find_document(self.meeting_type, date, AGENDA_LABEL)
         agenda_text = pdf_to_text(agenda_path) if agenda_path else ""
@@ -352,7 +358,6 @@ class RagIndexer(Processor):
         self._atomic_write(
             self.construct_filepath_for_date(date), self._assemble_markdown(sections)
         )
-        self._mark_for_wiki_refresh(date)
 
     @staticmethod
     def _atomic_write(path: str, text: str) -> None:
