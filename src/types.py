@@ -7,6 +7,7 @@ from src.constants import (
     DOWNLOADED_CC_MTG_KEY,
     EXTRACTED_CC_MTG_KEY,
     SCRAPED_CC_MTG_KEY,
+    SUMMARIZED_CC_MTG_KEY,
     TRANSCRIPT_UPLOADED_CC_MTG_KEY,
     VIDEO_UPLOADED_CC_MTG_KEY,
 )
@@ -25,6 +26,7 @@ from src.settings import (
     COMPRESSED_DIR,
     DOWNLOADED_DIR,
     EXTRACTED_AUDIO_DIR,
+    SUMMARIES_DIR,
     TRANSCRIBED_DIR,
 )
 
@@ -68,6 +70,7 @@ class JobType(Enum):
     UPLOAD_TRANSCRIPT = 6
     UPLOAD_VIDEO = 7
     UPDATE_WIKI = 8
+    SUMMARIZE = 9
 
 
 job_paths = {
@@ -75,6 +78,7 @@ job_paths = {
     JobType.COMPRESS: COMPRESSED_DIR,
     JobType.EXTRACT_AUDIO: EXTRACTED_AUDIO_DIR,
     JobType.TRANSCRIBE_AUDIO: TRANSCRIBED_DIR,
+    JobType.SUMMARIZE: SUMMARIES_DIR,
 }
 
 
@@ -88,6 +92,7 @@ source_job_file_templates = {
         JobType.COMPRESS: mt.compressed_segmented_template,
         JobType.EXTRACT_AUDIO: mt.file_template,
         JobType.TRANSCRIBE_AUDIO: mt.file_template,
+        JobType.SUMMARIZE: mt.file_template,
     }
     for source, mt in MEETING_TYPE_BY_SOURCE.items()
 }
@@ -97,6 +102,7 @@ job_file_formats = {
     JobType.COMPRESS: ".mp4",
     JobType.EXTRACT_AUDIO: ".m4a",
     JobType.TRANSCRIBE_AUDIO: ".txt",
+    JobType.SUMMARIZE: ".md",
 }
 
 job_redis_keys = {
@@ -105,6 +111,7 @@ job_redis_keys = {
     JobType.COMPRESS: COMPRESSED_CC_MTG_KEY,
     JobType.EXTRACT_AUDIO: EXTRACTED_CC_MTG_KEY,
     JobType.TRANSCRIBE_AUDIO: AUDIO_TRANSCRIBED_CC_MTG_KEY,
+    JobType.SUMMARIZE: SUMMARIZED_CC_MTG_KEY,
     JobType.UPLOAD_TRANSCRIPT: TRANSCRIPT_UPLOADED_CC_MTG_KEY,
     JobType.UPLOAD_VIDEO: VIDEO_UPLOADED_CC_MTG_KEY,
 }

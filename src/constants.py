@@ -4,6 +4,11 @@ DOWNLOADED_KEY = "downloaded"
 COMPRESSED_KEY = "compressed"
 EXTRACTED_KEY = "extracted"
 AUDIO_TRANSCRIBED_KEY = "audio_transcribed"
+SUMMARIZED_KEY = "summarized"  # LLM summary generated (TRA-176)
+# Meeting keys whose summary predates this stage (a different/older generator); the
+# new Summarizer leaves them in place, but records them here so they can be
+# selectively regenerated later if the new output proves higher quality.
+LEGACY_SUMMARY_KEY = "legacy_summary"
 VIDEO_UPLOADED_KEY = "video_uploaded"
 TRANSCRIPT_UPLOADED_KEY = "transcript_uploaded"
 WIKI_UPDATED_KEY = "wiki_updated"
@@ -35,6 +40,8 @@ DOWNLOADED_CC_MTG_KEY = f"{DOWNLOADED_KEY}.{CC_MTG_KEY}"
 COMPRESSED_CC_MTG_KEY = f"{COMPRESSED_KEY}.{CC_MTG_KEY}"
 EXTRACTED_CC_MTG_KEY = f"{EXTRACTED_KEY}.{CC_MTG_KEY}"
 AUDIO_TRANSCRIBED_CC_MTG_KEY = f"{AUDIO_TRANSCRIBED_KEY}.{CC_MTG_KEY}"
+SUMMARIZED_CC_MTG_KEY = f"{SUMMARIZED_KEY}.{CC_MTG_KEY}"
+LEGACY_SUMMARY_CC_MTG_KEY = f"{LEGACY_SUMMARY_KEY}.{CC_MTG_KEY}"
 VIDEO_UPLOADED_CC_MTG_KEY = f"{VIDEO_UPLOADED_KEY}.{CC_MTG_KEY}"
 TRANSCRIPT_UPLOADED_CC_MTG_KEY = f"{TRANSCRIPT_UPLOADED_KEY}.{CC_MTG_KEY}"
 WIKI_UPDATED_CC_MTG_KEY = f"{WIKI_UPDATED_KEY}.{CC_MTG_KEY}"
