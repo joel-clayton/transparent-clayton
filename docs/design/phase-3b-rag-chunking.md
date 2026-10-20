@@ -1,6 +1,7 @@
 # Phase 3b — RAG chunking: agenda-section summaries, keywords, embeddings
 
-Status: **Designed — build after TRA-176 increment 1 is live-tested.** Design discussion, 2026-10. Tracks TRA-176.
+Status: **Built 2026-10-20** (design discussion 2026-10). Tracks TRA-176. See
+"Implementation notes" at the end for how the build differs from this plan.
 
 ## Context
 
@@ -144,3 +145,38 @@ Two honest limits:
   piece after this index exists; out of scope here.
 - **Re-indexing legacy summaries:** the `legacy_summary.<type>` set (increment 1)
   marks pre-existing summaries; a later pass can regenerate + quality-compare them.
+
+## Implementation notes (built 2026-10-20)
+
+How the shipped build differs from the plan above, and why:
+
+- **Vector store kept as sqlite-vec, but the interpreter had to be rebuilt.** The
+  project's pyenv 3.11.5 was compiled without loadable-extension support, so
+  sqlite-vec couldn't load. Rather than swap stores, pyenv 3.11.5 was rebuilt with
+  `--enable-loadable-sqlite-extensions` (linked to Homebrew sqlite) and the venv
+  recreated. Store schema is as designed (`sections` + `vec0`), one file at
+  `RAG_DB_PATH`; only embedded (reached, non-procedural) sections get a vector.
+- **Stage reuses the `SUMMARIZE` slot** instead of a new `JobType`/`rag_index`
+  stage. `RagIndexer` (src/processors/rag_index.py) is a drop-in replacement for the
+  Summarizer at the same chain position — same `Summaries/*.md` output and wiki
+  seam — so no new job wiring. Idempotency keys on the per-meeting `sections.json`
+  sidecar (``<summary>.sections.json``); legacy summaries (a `.md`/`.txt` with no
+  sidecar) are recorded and left alone, as in increment 1.
+- **Models:** segmentation + keywords run on a fast model (`qwen3:8b`), per-section
+  prose on `qwen3:14b` (the summary bake-off winner). Sections use base models with
+  task-specific prompts in code, not a Modelfile — so `modelfile_hash` provenance is
+  replaced by `prompt_version` (`PROMPT_VERSION`). All model names are env-settings.
+  `think=false` + a fixed `seed` + JSON-schema output make the classification calls
+  deterministic and parseable.
+- **Segmentation = LLM boundary detection** (windowed, so any transcript length),
+  not per-window item tagging: the model reports where each agenda item *begins*,
+  boundaries are forced monotonic, and an item with no detected (or zero-length)
+  boundary is marked "not taken up" rather than given invented content. Works well
+  on real meetings; a known limitation is the fuzzy boundary between adjacent
+  report-style items (e.g. council-committee reports landing under "Action Items"
+  when no chair cue separates them).
+- **Reconcile:** `MISSING_SUMMARY` became `MISSING_RAG_INDEX` (transcript on disk,
+  no `sections.json`, and no summary of any kind).
+- **Deferred:** populating `video_url`/`agenda_url`/`packet_url` (and video
+  deep-links to `t_start`) on section rows — the columns exist but are left null for
+  now; and the query/chat layer over the store.

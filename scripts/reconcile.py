@@ -22,7 +22,8 @@ Mismatches reported:
     MISSING_VIDEO_LINK  a video is uploaded but no video_link points at it
     MISSING_UPLOAD      a compressed part is on disk but not uploaded
     NO_DETAIL           on disk and/or on YouTube but absent from the detail hash
-    MISSING_SUMMARY     a transcript is on disk but no LLM summary was generated
+    MISSING_RAG_INDEX   a transcript is on disk but the section engine has produced
+                        no section index (sections.json) and no summary exists
     MISSING_TRANSCRIPT  a transcript file is on disk but no Drive link is set
     STALE_TRANSCRIPT_LINK  transcript_link points at a Drive file that is gone
     MISSING_DOC         documents are on disk but none archived to Drive
@@ -312,7 +313,13 @@ def _disk_index() -> tuple[dict[str, dict[str, set[str]]], dict[str, int]]:
             if not stub or not key:
                 unrecognized[stage] += 1
                 continue
-            by_stub[stub][key].add(stage)
+            # In the summaries dir, the section engine's sections.json sidecar is a
+            # distinct signal ("indexed") from a plain .md/.txt summary; a legacy
+            # summary has the latter without the former.
+            if stage == "summary" and name.endswith(".sections.json"):
+                by_stub[stub][key].add("rag_index")
+            else:
+                by_stub[stub][key].add(stage)
     return by_stub, unrecognized
 
 
@@ -605,10 +612,18 @@ def find_mismatches(
         if not m.has_detail and (m.on_disk or m.yt_parts):
             issues.append("NO_DETAIL (on disk/youtube but not in Redis detail)")
 
-        # MISSING_SUMMARY: a transcribed meeting with no LLM summary yet (the local
-        # summarize stage). Not tied to a publishing destination.
-        if "transcript" in m.on_disk and "summary" not in m.on_disk:
-            issues.append("MISSING_SUMMARY (transcript on disk, no summary)")
+        # MISSING_RAG_INDEX: a transcribed meeting the section engine has not
+        # indexed (no sections.json) and that has no summary of any kind. A legacy
+        # summary (a .md/.txt without a sections.json) counts as handled and is left
+        # alone, so it is not flagged. Not tied to a publishing destination.
+        if (
+            "transcript" in m.on_disk
+            and "rag_index" not in m.on_disk
+            and "summary" not in m.on_disk
+        ):
+            issues.append(
+                "MISSING_RAG_INDEX (transcript on disk, no section index or summary)"
+            )
 
         if scope.google_docs:
             # MISSING_TRANSCRIPT: a transcript file on disk with no Drive pointer.
@@ -974,8 +989,8 @@ def main() -> None:
         "record (usually an older meeting already on the wiki; informational)."
     )
     legend.append(
-        "  MISSING_SUMMARY    a transcript is on disk but the LLM summary stage has "
-        "not produced a summary for it yet."
+        "  MISSING_RAG_INDEX  a transcript is on disk but the section engine has not "
+        "indexed it (no sections.json) and no summary exists."
     )
     if scope.google_docs:
         legend += [

@@ -54,6 +54,18 @@ SUMMARIZER_MODEL = os.environ.get("SUMMARIZER_MODEL", "meeting-summarizer")
 # Embedding model for the RAG index (TRA-176 increment 2); swappable so the store
 # can be rebuilt with a different model (never mix versions in one index).
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "nomic-embed-text")
+# Section engine models (TRA-176 increment 2). Segmentation and keyword extraction
+# are cheap classification -> a fast model; per-section prose uses the larger model
+# (the 14B that won the summary bake-off). All env-overridable.
+SEGMENTER_MODEL = os.environ.get("SEGMENTER_MODEL", "qwen3:8b")
+SECTION_SUMMARY_MODEL = os.environ.get("SECTION_SUMMARY_MODEL", "qwen3:14b")
+KEYWORD_MODEL = os.environ.get("KEYWORD_MODEL", "qwen3:8b")
+# A version string for our prompt-assembly templates, recorded in RAG provenance so
+# a regeneration can tell whether the prompts changed (bump when they do).
+PROMPT_VERSION = "2026-10-20.1"
+# The RAG vector store: a single sqlite-vec file under the (off-repo) storage root.
+# Derived/rebuildable from each meeting's sections.json; never committed.
+RAG_DB_PATH = os.path.join(STORAGE_ROOT, "Rag", "index.db")
 
 
 # --- Redis -------------------------------------------------------------------

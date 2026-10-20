@@ -166,21 +166,32 @@ class TestDriveFindings(unittest.TestCase):
 class TestSummaryFindings(unittest.TestCase):
     KEY = "2026-06-02 07_00 PM"
 
-    def test_missing_summary_when_transcript_without_summary(self):
+    def test_missing_rag_index_when_transcript_without_index_or_summary(self):
         rows = {
             self.KEY: MeetingRow(key=self.KEY, has_detail=True, on_disk={"transcript"})
         }
         lines, _, _ = _fm(rows)
-        self.assertTrue(any("MISSING_SUMMARY" in line for line in lines))
+        self.assertTrue(any("MISSING_RAG_INDEX" in line for line in lines))
 
-    def test_no_missing_summary_when_summary_present(self):
+    def test_no_missing_rag_index_when_sections_json_present(self):
+        rows = {
+            self.KEY: MeetingRow(
+                key=self.KEY, has_detail=True, on_disk={"transcript", "rag_index"}
+            )
+        }
+        lines, _, _ = _fm(rows)
+        self.assertFalse(any("MISSING_RAG_INDEX" in line for line in lines))
+
+    def test_legacy_summary_without_index_is_left_alone(self):
+        # A pre-existing .md/.txt summary (no sections.json) counts as handled and
+        # must not be flagged for (re)indexing.
         rows = {
             self.KEY: MeetingRow(
                 key=self.KEY, has_detail=True, on_disk={"transcript", "summary"}
             )
         }
         lines, _, _ = _fm(rows)
-        self.assertFalse(any("MISSING_SUMMARY" in line for line in lines))
+        self.assertFalse(any("MISSING_RAG_INDEX" in line for line in lines))
 
 
 class TestDriveLiveness(unittest.TestCase):
@@ -254,7 +265,7 @@ class TestScoping(unittest.TestCase):
             self.KEY: MeetingRow(
                 key=self.KEY,
                 has_detail=True,
-                # include "summary" so the (unconditional) MISSING_SUMMARY finding
+                # include "summary" so the (unconditional) MISSING_RAG_INDEX finding
                 # doesn't fire — this test isolates the google_docs-scoped findings.
                 on_disk={"transcript", "summary"},
                 docs_on_disk=True,

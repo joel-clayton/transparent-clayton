@@ -14,7 +14,7 @@ from src.processors.compress import Compressor
 from src.processors.download import Downloader
 from src.processors.download_docs import DocumentDownloader
 from src.processors.extract import Extractor
-from src.processors.summarize import Summarizer
+from src.processors.rag_index import RagIndexer
 from src.processors.transcribe import Transcriber
 from src.publishers import PUBLISHERS, run_publisher
 from src.scrapers.cc_meetings import get_latest_downloaded_date, parse_meetings_from_url
@@ -172,8 +172,11 @@ def upload_cc_meeting_docs() -> None:
 
 @app.task
 def summarize_cc_meeting() -> None:
+    # Section engine (TRA-176 increment 2): per-agenda-item summaries + RAG index,
+    # writing the same Summaries/*.md the wiki consumes. Supersedes the whole-meeting
+    # Summarizer at this stage slot.
     for source_type in MEETING_TYPE_BY_SOURCE:
-        Summarizer(source_type).process()
+        RagIndexer(source_type).process()
 
 
 @app.task
