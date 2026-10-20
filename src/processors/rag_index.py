@@ -248,13 +248,13 @@ class RagIndexer(Processor):
         now = datetime.now(timezone.utc).isoformat()
         rows = self._section_rows(date, sections, now)
 
-        # Write .md (wiki source) and the store first; the canonical sections.json
-        # sidecar is written LAST so a crash mid-run reprocesses rather than marking
-        # the meeting done with an incomplete index.
-        md = self._assemble_markdown(sections)
-        with open(self.construct_filepath_for_date(date), "w", encoding="utf-8") as fh:
-            fh.write(md)
-
+        # Write order matters for crash-safety: store, then the canonical
+        # sections.json sidecar, then the wiki .md LAST. Because the .md is written
+        # only after sections.json exists, our pipeline can never leave a .md
+        # without a sections.json — so _scan_summaries only ever sees that state for
+        # a genuine pre-existing (legacy) summary, never a crashed partial. A crash
+        # before sections.json leaves nothing to skip on (the meeting reprocesses);
+        # the store write is idempotent (replace-per-meeting) on that retry.
         conn = connect()
         try:
             replace_meeting_sections(conn, self.meeting_type.disk_bucket, date, rows)
@@ -267,10 +267,20 @@ class RagIndexer(Processor):
             "generated_at": now,
             "sections": [section_row_to_json(row) for row in rows],
         }
-        tmp = self._sections_json_path(date) + ".part"
+        self._atomic_write(
+            self._sections_json_path(date),
+            json.dumps(payload, indent=2, ensure_ascii=False),
+        )
+        self._atomic_write(
+            self.construct_filepath_for_date(date), self._assemble_markdown(sections)
+        )
+
+    @staticmethod
+    def _atomic_write(path: str, text: str) -> None:
+        tmp = f"{path}.part"
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, indent=2, ensure_ascii=False)
-        os.replace(tmp, self._sections_json_path(date))
+            fh.write(text)
+        os.replace(tmp, path)
 
     def _section_rows(
         self, date: str, sections: list[dict], created_at: str

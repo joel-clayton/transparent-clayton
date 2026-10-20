@@ -119,7 +119,9 @@ def _ask_boundaries(
         format=_SEG_SCHEMA,
         options={"seed": SEG_SEED, "temperature": 0},
     )
-    lo, hi = window[0].start, window[-1].start
+    # Clamp to the window's full time range: a boundary can legitimately fall
+    # inside the final utterance's span, so the upper bound is its end, not start.
+    lo, hi = window[0].start, window[-1].end
     valid = {it.number for it in items}
     out: dict[int, int] = {}
     try:

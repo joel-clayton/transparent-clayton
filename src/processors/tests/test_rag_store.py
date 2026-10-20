@@ -91,6 +91,30 @@ class TestRagStore(unittest.TestCase):
         )
         self.assertTrue(all(h["meeting_type"] == "Planning Commission" for h in hits))
 
+    def test_type_scope_overfetches_past_nearer_other_types(self):
+        # Three City Council rows are globally nearest; one Planning Commission row
+        # is farther. A k=1 PC-scoped query must still return the PC row (regression:
+        # post-filtering a k=1 k-NN returned nothing because the nearest was CC).
+        cc = [_row(i, f"cc{i}", embedding=[1.0, 0.0, 0.0]) for i in range(3)]
+        replace_meeting_sections(self.conn, "City Council", "k1", cc)
+        pc = [
+            SectionRow(
+                meeting_type="Planning Commission",
+                meeting_key="k2",
+                item_index=2,
+                agenda_item="pc",
+                summary="pc",
+                embedding=[0.0, 1.0, 0.0],
+                embed_model="nomic",
+            )
+        ]
+        replace_meeting_sections(self.conn, "Planning Commission", "k2", pc)
+        hits = search(
+            self.conn, [1.0, 0.0, 0.0], k=1, meeting_type="Planning Commission"
+        )
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["meeting_type"], "Planning Commission")
+
     def test_section_row_to_json_drops_embedding(self):
         d = section_row_to_json(_row(5, "a", embedding=[1.0, 0.0, 0.0]))
         self.assertNotIn("embedding", d)

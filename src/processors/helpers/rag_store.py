@@ -193,14 +193,22 @@ def search(
     """K nearest section summaries to a query embedding, nearest first.
 
     Each result is the ``sections`` row as a dict plus a ``distance``. Optionally
-    restricted to one meeting type.
+    restricted to one meeting type — the type filter is applied over the full ranked
+    set (the k-NN over-fetches every vector, then filters and truncates to ``k``), so
+    a type-scoped query still returns up to ``k`` results even when the globally
+    nearest rows are other types. (At this corpus size over-fetching all vectors is
+    cheap; a larger store would move the filter into a vec0 partition column.)
     """
+    fetch_k = k
+    if meeting_type is not None:
+        total = conn.execute("SELECT count(*) FROM vec_sections").fetchone()[0]
+        fetch_k = max(k, int(total))
     rows = conn.execute(
         """SELECT s.*, v.distance FROM vec_sections v
            JOIN sections s ON s.id = v.rowid
            WHERE v.embedding MATCH ? AND k = ?
            ORDER BY v.distance""",
-        (sqlite_vec.serialize_float32(embedding), k),
+        (sqlite_vec.serialize_float32(embedding), fetch_k),
     ).fetchall()
     out: list[dict[str, Any]] = []
     for row in rows:
@@ -209,6 +217,8 @@ def search(
             continue
         d["keywords"] = json.loads(d.get("keywords") or "[]")
         out.append(d)
+        if len(out) >= k:
+            break
     return out
 
 

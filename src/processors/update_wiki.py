@@ -54,6 +54,28 @@ from src.util import (
 )
 
 
+_MD_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*$")
+_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+
+
+def _markdown_to_mediawiki(text: str) -> str:
+    """Convert the small Markdown subset the section summaries emit — ATX headings
+    (``## Item N: ...``) and ``**bold**`` — to MediaWiki markup (``=== ... ===`` and
+    ``'''bold'''``). Without this the wiki shows the literal ``##``/``**`` (and ``#``
+    at line start is a MediaWiki ordered-list marker, so it mis-renders). A Markdown
+    ``##`` maps one level deeper (``===``) since the AI summary sits under a ``==``
+    section header. Non-heading lines pass through with inline bold converted."""
+    out: list[str] = []
+    for line in text.splitlines():
+        m = _MD_HEADING_RE.match(line)
+        if m:
+            eq = "=" * min(len(m.group(1)) + 1, 6)
+            out.append(f"{eq} {m.group(2).strip()} {eq}")
+        else:
+            out.append(_MD_BOLD_RE.sub(r"'''\1'''", line))
+    return "\n".join(out)
+
+
 def _humanize_meeting_key(key: str) -> str:
     """Render a meeting key ('2026-06-03 07_00 PM' or '2026-06-03') for display."""
     for fmt, out in (
@@ -505,9 +527,10 @@ class WikiUpdater(Processor):
         return sections
 
     def _summary_for(self, key: str) -> str | None:
-        """The meeting's on-disk summary, if any — a new ``.md`` from the Summarizer
-        or a legacy ``.txt``, whichever is present (new preferred). Returns None so
-        the caller falls back to the ``TBD`` placeholder."""
+        """The meeting's on-disk summary, if any — a new ``.md`` from the section
+        engine or a legacy ``.txt``, whichever is present (new preferred). Markdown
+        is converted to MediaWiki markup so headings/bold render on the wiki instead
+        of appearing literally. Returns None so the caller falls back to ``TBD``."""
         bucket = self.meeting_type.disk_bucket
         for ext in (".md", ".txt"):
             name = self.meeting_type.file_template.format(key, ext)
@@ -516,7 +539,7 @@ class WikiUpdater(Processor):
                 with open(path, encoding="utf-8") as handle:
                     text = handle.read().strip()
                 if text:
-                    return text
+                    return _markdown_to_mediawiki(text) if ext == ".md" else text
         return None
 
     def update_page_sections_for_page(

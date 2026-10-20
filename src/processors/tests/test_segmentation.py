@@ -71,6 +71,14 @@ class TestAskBoundaries(unittest.TestCase):
             out = _ask_boundaries(ITEMS, window, "m")
         self.assertEqual(out, {1: 200})
 
+    def test_boundary_inside_last_utterance_is_kept(self):
+        # Last utterance starts at 300, ends at 305; a boundary at 303 is valid and
+        # must not be clamped out (regression: upper bound was the start, not end).
+        window = _utterances([100, 200, 300])
+        payload = json.dumps({"boundaries": [{"item": 2, "start": "0:05:03"}]})
+        with patch.object(segmentation, "generate", return_value=payload):
+            self.assertEqual(_ask_boundaries(ITEMS, window, "m"), {2: 303})
+
     def test_unparseable_json_returns_empty(self):
         with patch.object(segmentation, "generate", return_value="not json"):
             self.assertEqual(_ask_boundaries(ITEMS, _utterances([0]), "m"), {})
