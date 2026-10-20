@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from typing import List
 
 from celery_app import r
-from src.constants import LEGACY_SUMMARY_KEY, SUMMARIZED_KEY
+from src.constants import LEGACY_SUMMARY_KEY, SUMMARIZED_KEY, WIKI_REFRESH_KEY
 from src.processors.constants import EARLIEST
 from src.processors.helpers.agenda_items import (
     AgendaItem,
@@ -148,7 +148,20 @@ class RagIndexer(Processor):
             ]
             if rows:
                 self._atomic_write(md_path, self._assemble_markdown(rows))
+                self._mark_for_wiki_refresh(date)
                 self.logger.info("Rebuilt missing .md for %s from sections.json", date)
+
+    def _mark_for_wiki_refresh(self, date: str) -> None:
+        """Flag a meeting for wiki re-render after its summary ``.md`` is written.
+
+        The wiki fills its AI-summary section from this ``.md`` (else ``TBD``) and
+        only re-renders an *existing* page entry when WIKI_REFRESH_KEY is set. Without
+        this flag, a meeting whose entry was published before its summary existed
+        (e.g. a summarize failure on the first run) would stay ``TBD`` forever. It is
+        a no-op for a meeting not yet on the page (the normal single-run cascade),
+        and summarize is idempotent, so the flag is set only when a summary is
+        actually (re)generated — no per-run churn (TRA-178)."""
+        r.sadd(self.meeting_type.redis_key(WIKI_REFRESH_KEY), date)
 
     def process(self, floor: datetime = EARLIEST) -> None:
         self._record_legacy_summaries()
@@ -339,6 +352,7 @@ class RagIndexer(Processor):
         self._atomic_write(
             self.construct_filepath_for_date(date), self._assemble_markdown(sections)
         )
+        self._mark_for_wiki_refresh(date)
 
     @staticmethod
     def _atomic_write(path: str, text: str) -> None:
