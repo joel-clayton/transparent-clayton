@@ -5,12 +5,15 @@ through the same OData API the live scrape uses. This ingests that pre-cutover
 history through the normal pipeline — in bounded, resumable batches — so nothing
 already processed is redone (the stages' existence checks skip it).
 
-Two stages:
+Three stages:
   --stage docs  : archive each meeting's documents to Drive + add a wiki entry.
                   Cheap; no video, no transcription. Detail-driven, no floor change.
   --stage video : run the full A/V pipeline (download -> compress -> YouTube ->
                   extract -> transcribe -> transcript Doc -> wiki) for video
                   meetings, with the EARLIEST floor lowered for this run only.
+  --stage wiki  : render existing on-disk / Redis assets to the wiki only — no
+                  document download, no A/V. For meetings already backfilled but
+                  missing from the wiki because the live floor skipped their year.
 
 Ingestion fetches OData one year at a time (a single decades-wide query times the
 API out) and persists each meeting's detail exactly as the live scrape does, via
@@ -23,6 +26,7 @@ worker would otherwise start acting on. Audit is read-only.
     python scripts/backfill_history.py --stage docs                       # audit all
     python scripts/backfill_history.py --stage docs --execute
     python scripts/backfill_history.py --stage video --type pc_mtg --year 2019 --execute
+    python scripts/backfill_history.py --stage wiki --type ba_mtg --execute   # render to wiki
 """
 
 from __future__ import annotations
@@ -136,6 +140,18 @@ def _run_docs(source_type: Any, meeting_type: Any) -> None:
     WikiUpdater(source_type).process(BACKFILL_FLOOR)
 
 
+def _run_wiki(source_type: Any) -> None:
+    """Render existing on-disk / Redis assets to the wiki only — no document
+    download and no A/V. For meetings already backfilled (documents, transcripts, or
+    video present and their links in Redis) but missing from the wiki because the
+    live pipeline floor skipped their year. The preceding ingest refreshes each
+    meeting's Redis detail so WikiUpdater can render it; the base Processor floors at
+    BACKFILL_FLOOR so historical year pages are not skipped. Idempotent: adds missing
+    year-page entries and leaves existing ones. (If a meeting's asset links are no
+    longer in Redis, run --stage docs first to restore them.)"""
+    WikiUpdater(source_type).process(BACKFILL_FLOOR)
+
+
 def _historical_video_keys(
     meeting_type: Any, from_year: int, to_year: int
 ) -> list[str]:
@@ -189,7 +205,7 @@ def _run_video(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--stage", choices=["docs", "video"], default="docs")
+    parser.add_argument("--stage", choices=["docs", "video", "wiki"], default="docs")
     parser.add_argument("--type", dest="type_key", default=None, help="one type key")
     parser.add_argument("--year", type=int, default=None, help="a single year")
     parser.add_argument("--from-year", type=int, default=2002)
@@ -236,8 +252,10 @@ def main() -> None:
                     tally[meeting_type.display_name][kind] += 1
             if args.stage == "docs":
                 _run_docs(source_type, meeting_type)
-            else:
+            elif args.stage == "video":
                 _run_video(source_type, meeting_type, from_year, to_year)
+            else:  # wiki: render existing assets only
+                _run_wiki(source_type)
     else:
         # Audit: fetch each window once (read-only) and classify all selected types.
         for start, end in windows:

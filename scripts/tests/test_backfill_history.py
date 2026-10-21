@@ -1,7 +1,23 @@
 import unittest
 from datetime import datetime, timedelta
+from unittest import mock
 
 from scripts import backfill_history as bf
+
+
+class TestRunWiki(unittest.TestCase):
+    def test_renders_only_the_wiki_at_the_backfill_floor(self):
+        with (
+            mock.patch.object(bf, "WikiUpdater") as wiki,
+            mock.patch.object(bf, "DocumentDownloader") as dl,
+            mock.patch.object(bf, "DocumentUploader") as ul,
+        ):
+            bf._run_wiki("src")
+        wiki.assert_called_once_with("src")
+        wiki.return_value.process.assert_called_once_with(bf.BACKFILL_FLOOR)
+        # wiki-only: no document download / upload, no A/V
+        dl.assert_not_called()
+        ul.assert_not_called()
 
 
 class TestYearWindows(unittest.TestCase):
