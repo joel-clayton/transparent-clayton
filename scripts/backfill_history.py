@@ -26,7 +26,7 @@ worker would otherwise start acting on. Audit is read-only.
     python scripts/backfill_history.py --stage docs                       # audit all
     python scripts/backfill_history.py --stage docs --execute
     python scripts/backfill_history.py --stage video --type pc_mtg --year 2019 --execute
-    python scripts/backfill_history.py --stage wiki --type ba_mtg --execute   # render to wiki
+    python scripts/backfill_history.py --stage wiki --type bac_mtg --execute  # render to wiki
 """
 
 from __future__ import annotations
@@ -140,23 +140,26 @@ def _run_docs(source_type: Any, meeting_type: Any) -> None:
     WikiUpdater(source_type).process(BACKFILL_FLOOR)
 
 
-def _run_wiki(source_type: Any) -> None:
+def _run_wiki(source_type: Any, from_year: int) -> None:
     """Render existing on-disk / Redis assets to the wiki only — no document
     download, no A/V, and (crucially) no OData ingest. It renders from the detail a
     prior --stage docs/video run already persisted, so WikiUpdater reads the archived
-    Drive doc links rather than a meeting's expiring CivicClerk source URLs. The base
-    Processor floors at BACKFILL_FLOOR so historical year pages are not skipped.
-    Idempotent: adds missing year-page entries, leaves existing ones. (If a meeting's
-    detail/links are no longer in Redis, run --stage docs first to restore them.)"""
-    WikiUpdater(source_type).process(BACKFILL_FLOOR)
+    Drive doc links rather than a meeting's expiring CivicClerk source URLs.
+
+    Renders any not-yet-on-the-wiki meeting dated ``from_year`` or later (the wiki
+    renderer floors only, so ``--to-year``/``--year`` do not bound it — the floor is
+    the sole scope, matching the tally). Idempotent: adds missing year-page entries,
+    leaves existing ones. (If a meeting's detail/links are no longer in Redis, run
+    --stage docs first to restore them.)"""
+    WikiUpdater(source_type).process(max(BACKFILL_FLOOR, datetime(from_year, 1, 1)))
 
 
-def _detail_meetings_in_range(
-    meeting_type: Any, from_year: int, to_year: int
-) -> list[dict]:
-    """Meetings for a type already persisted in Redis detail whose date is in range
-    — the set --stage wiki renders. Read from detail (not OData) so the wiki stage
-    renders only already-backfilled meetings and never pulls in un-archived ones."""
+def _detail_meetings_in_range(meeting_type: Any, from_year: int) -> list[dict]:
+    """Meetings for a type already persisted in Redis detail dated ``from_year`` or
+    later — the set --stage wiki considers (matching _run_wiki's floor). Read from
+    detail (not OData) so the wiki stage renders only already-backfilled meetings and
+    never pulls in un-archived ones. No upper bound: the wiki renderer floors only,
+    so already-rendered (e.g. post-cutover) meetings are considered but are no-ops."""
     out: list[dict] = []
     raw = r.hgetall(meeting_type.redis_key(DETAIL_KEY)) or {}
     for value in raw.values():
@@ -166,7 +169,7 @@ def _detail_meetings_in_range(
             continue
         key = detail.get("key")
         dt = get_datetime_from_string(key) if key else None
-        if dt and from_year <= dt.year <= to_year:
+        if dt and dt.year >= from_year:
             out.append(detail)
     return out
 
@@ -263,7 +266,7 @@ def main() -> None:
         # rendered). The tally previews the already-backfilled meetings in range;
         # audit vs execute differ only in whether the render actually runs.
         for source_type, meeting_type in selected:
-            for detail in _detail_meetings_in_range(meeting_type, from_year, to_year):
+            for detail in _detail_meetings_in_range(meeting_type, from_year):
                 kind = (
                     "video"
                     if detail.get("pipeline_class") == PipelineClass.FULL.value
@@ -271,7 +274,7 @@ def main() -> None:
                 )
                 tally[meeting_type.display_name][kind] += 1
             if args.execute:
-                _run_wiki(source_type)
+                _run_wiki(source_type, from_year)
     elif args.execute:
         # Ingest (persist detail) per type via the live-scrape path, then run that
         # type's stages. Workers must be stopped (this writes shared Redis detail).

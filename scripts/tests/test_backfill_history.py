@@ -7,11 +7,11 @@ from scripts import backfill_history as bf
 
 
 class TestRunWiki(unittest.TestCase):
-    def test_renders_the_wiki_at_the_backfill_floor(self):
+    def test_renders_the_wiki_floored_at_from_year(self):
         with mock.patch.object(bf, "WikiUpdater") as wiki:
-            bf._run_wiki("src")
+            bf._run_wiki("src", 2019)
         wiki.assert_called_once_with("src")
-        wiki.return_value.process.assert_called_once_with(bf.BACKFILL_FLOOR)
+        wiki.return_value.process.assert_called_once_with(datetime(2019, 1, 1))
 
     def test_wiki_stage_renders_without_odata_ingest(self):
         # The real contract: --stage wiki renders from persisted Redis detail and
