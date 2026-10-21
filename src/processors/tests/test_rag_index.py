@@ -34,12 +34,17 @@ class TestHealMissingMarkdown(unittest.TestCase):
         idx.construct_filepath_for_date = lambda date, job_type=None: md  # type: ignore
         idx._sections_json_path = lambda date: sj  # type: ignore
 
-        idx._heal_missing_markdown()
+        with patch.object(rag_index, "r") as r_mock:
+            idx._heal_missing_markdown()
 
         content = open(md, encoding="utf-8").read()
         self.assertIn("## Item 5: Recognitions", content)
         self.assertIn("A presentation happened.", content)
         self.assertIn("**Keywords:** kw1", content)
+        # a rebuilt .md flags the meeting so the wiki re-renders it (TRA-178)
+        r_mock.sadd.assert_called_once()
+        self.assertIn("wiki_refresh", r_mock.sadd.call_args.args[0])
+        self.assertEqual(r_mock.sadd.call_args.args[1], "2026-10-06 07_00 PM")
 
     def test_leaves_existing_md_alone(self):
         idx = RagIndexer(SourceType.CITY_COUNCIL_MEETING)
@@ -86,6 +91,7 @@ class TestNoAgendaFallback(unittest.TestCase):
             patch.object(rag_index, "model_digest", return_value=None),
             patch.object(rag_index, "embed_document", return_value=[0.1, 0.2, 0.3]),
             patch.object(rag_index, "connect", lambda *a, **k: real_connect(db)),
+            patch.object(rag_index, "r") as r_mock,
         ):
             idx.process_for_date("2026-10-06 07_00 PM")
 
@@ -96,6 +102,9 @@ class TestNoAgendaFallback(unittest.TestCase):
         payload = json.load(open(sj, encoding="utf-8"))
         self.assertEqual(len(payload["sections"]), 1)
         self.assertEqual(payload["sections"][0]["agenda_item"], "Meeting")
+        # generating a summary flags the meeting for wiki refresh (TRA-178)
+        r_mock.sadd.assert_called_once()
+        self.assertIn("wiki_refresh", r_mock.sadd.call_args.args[0])
 
 
 class TestFallbackSegments(unittest.TestCase):
@@ -159,6 +168,7 @@ class TestAllUnreachedFallback(unittest.TestCase):
             patch.object(rag_index, "model_digest", return_value=None),
             patch.object(rag_index, "embed_document", return_value=[0.1, 0.2, 0.3]),
             patch.object(rag_index, "connect", lambda *a, **k: real_connect(db)),
+            patch.object(rag_index, "r"),
         ):
             idx.process_for_date("2026-10-06 07_00 PM")
 

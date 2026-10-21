@@ -20,7 +20,9 @@ DOCS_ARCHIVED_KEY = "docs_archived"  # documents downloaded + archived
 NO_ASSETS_KEY = "no_assets"  # meetings the city posted with no published materials
 NO_AUDIO_KEY = "no_audio"  # video has no spoken audio -> recorded, not transcribed
 WIKI_REFRESH_KEY = (
-    "wiki_refresh"  # meeting whose assets grew -> re-render its wiki entry
+    # meeting to re-render on the wiki: its assets grew (e.g. a video posted late)
+    # or its AI summary was (re)generated (TRA-178)
+    "wiki_refresh"
 )
 
 CC_MTG_KEY = "cc_mtg"
