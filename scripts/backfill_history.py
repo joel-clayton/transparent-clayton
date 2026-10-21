@@ -5,12 +5,15 @@ through the same OData API the live scrape uses. This ingests that pre-cutover
 history through the normal pipeline — in bounded, resumable batches — so nothing
 already processed is redone (the stages' existence checks skip it).
 
-Two stages:
+Three stages:
   --stage docs  : archive each meeting's documents to Drive + add a wiki entry.
                   Cheap; no video, no transcription. Detail-driven, no floor change.
   --stage video : run the full A/V pipeline (download -> compress -> YouTube ->
                   extract -> transcribe -> transcript Doc -> wiki) for video
                   meetings, with the EARLIEST floor lowered for this run only.
+  --stage wiki  : render existing on-disk / Redis assets to the wiki only — no
+                  document download, no A/V. For meetings already backfilled but
+                  missing from the wiki because the live floor skipped their year.
 
 Ingestion fetches OData one year at a time (a single decades-wide query times the
 API out) and persists each meeting's detail exactly as the live scrape does, via
@@ -23,6 +26,7 @@ worker would otherwise start acting on. Audit is read-only.
     python scripts/backfill_history.py --stage docs                       # audit all
     python scripts/backfill_history.py --stage docs --execute
     python scripts/backfill_history.py --stage video --type pc_mtg --year 2019 --execute
+    python scripts/backfill_history.py --stage wiki --type bac_mtg --execute  # render to wiki
 """
 
 from __future__ import annotations
@@ -136,6 +140,40 @@ def _run_docs(source_type: Any, meeting_type: Any) -> None:
     WikiUpdater(source_type).process(BACKFILL_FLOOR)
 
 
+def _run_wiki(source_type: Any, from_year: int) -> None:
+    """Render existing on-disk / Redis assets to the wiki only — no document
+    download, no A/V, and (crucially) no OData ingest. It renders from the detail a
+    prior --stage docs/video run already persisted, so WikiUpdater reads the archived
+    Drive doc links rather than a meeting's expiring CivicClerk source URLs.
+
+    Renders any not-yet-on-the-wiki meeting dated ``from_year`` or later (the wiki
+    renderer floors only, so ``--to-year``/``--year`` do not bound it — the floor is
+    the sole scope, matching the tally). Idempotent: adds missing year-page entries,
+    leaves existing ones. (If a meeting's detail/links are no longer in Redis, run
+    --stage docs first to restore them.)"""
+    WikiUpdater(source_type).process(max(BACKFILL_FLOOR, datetime(from_year, 1, 1)))
+
+
+def _detail_meetings_in_range(meeting_type: Any, from_year: int) -> list[dict]:
+    """Meetings for a type already persisted in Redis detail dated ``from_year`` or
+    later — the set --stage wiki considers (matching _run_wiki's floor). Read from
+    detail (not OData) so the wiki stage renders only already-backfilled meetings and
+    never pulls in un-archived ones. No upper bound: the wiki renderer floors only,
+    so already-rendered (e.g. post-cutover) meetings are considered but are no-ops."""
+    out: list[dict] = []
+    raw = r.hgetall(meeting_type.redis_key(DETAIL_KEY)) or {}
+    for value in raw.values():
+        try:
+            detail = json.loads(value.decode("utf-8"))
+        except (ValueError, AttributeError):
+            continue
+        key = detail.get("key")
+        dt = get_datetime_from_string(key) if key else None
+        if dt and dt.year >= from_year:
+            out.append(detail)
+    return out
+
+
 def _historical_video_keys(
     meeting_type: Any, from_year: int, to_year: int
 ) -> list[str]:
@@ -189,7 +227,7 @@ def _run_video(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--stage", choices=["docs", "video"], default="docs")
+    parser.add_argument("--stage", choices=["docs", "video", "wiki"], default="docs")
     parser.add_argument("--type", dest="type_key", default=None, help="one type key")
     parser.add_argument("--year", type=int, default=None, help="a single year")
     parser.add_argument("--from-year", type=int, default=2002)
@@ -222,7 +260,22 @@ def main() -> None:
         mt.display_name: {"video": 0, "docs": 0} for _st, mt in selected
     }
 
-    if args.execute:
+    if args.stage == "wiki":
+        # Render from existing Redis detail only — no OData ingest (so un-archived
+        # meetings, whose CivicClerk source URLs expire, are never pulled in and
+        # rendered). The tally previews the already-backfilled meetings in range;
+        # audit vs execute differ only in whether the render actually runs.
+        for source_type, meeting_type in selected:
+            for detail in _detail_meetings_in_range(meeting_type, from_year):
+                kind = (
+                    "video"
+                    if detail.get("pipeline_class") == PipelineClass.FULL.value
+                    else "docs"
+                )
+                tally[meeting_type.display_name][kind] += 1
+            if args.execute:
+                _run_wiki(source_type, from_year)
+    elif args.execute:
         # Ingest (persist detail) per type via the live-scrape path, then run that
         # type's stages. Workers must be stopped (this writes shared Redis detail).
         for source_type, meeting_type in selected:
