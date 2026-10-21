@@ -1,3 +1,4 @@
+import sys
 import unittest
 from datetime import datetime, timedelta
 from unittest import mock
@@ -6,18 +7,41 @@ from scripts import backfill_history as bf
 
 
 class TestRunWiki(unittest.TestCase):
-    def test_renders_only_the_wiki_at_the_backfill_floor(self):
-        with (
-            mock.patch.object(bf, "WikiUpdater") as wiki,
-            mock.patch.object(bf, "DocumentDownloader") as dl,
-            mock.patch.object(bf, "DocumentUploader") as ul,
-        ):
+    def test_renders_the_wiki_at_the_backfill_floor(self):
+        with mock.patch.object(bf, "WikiUpdater") as wiki:
             bf._run_wiki("src")
         wiki.assert_called_once_with("src")
         wiki.return_value.process.assert_called_once_with(bf.BACKFILL_FLOOR)
-        # wiki-only: no document download / upload, no A/V
-        dl.assert_not_called()
-        ul.assert_not_called()
+
+    def test_wiki_stage_renders_without_odata_ingest(self):
+        # The real contract: --stage wiki renders from persisted Redis detail and
+        # never ingests from OData (which would pull in un-archived meetings whose
+        # expiring source URLs would be rendered). Exercised through main().
+        argv = [
+            "backfill_history.py",
+            "--stage",
+            "wiki",
+            "--type",
+            "bac_mtg",
+            "--execute",
+            "--from-year",
+            "2026",
+            "--to-year",
+            "2026",
+        ]
+        with (
+            mock.patch.object(sys, "argv", argv),
+            mock.patch.object(bf, "_ingest_window") as ingest,
+            mock.patch.object(bf, "_detail_meetings_in_range", return_value=[]),
+            mock.patch.object(bf, "_run_wiki") as run_wiki,
+            mock.patch.object(bf, "_run_docs") as run_docs,
+            mock.patch.object(bf, "_run_video") as run_video,
+        ):
+            bf.main()
+        ingest.assert_not_called()  # no OData ingest for the wiki stage
+        run_wiki.assert_called_once()
+        run_docs.assert_not_called()
+        run_video.assert_not_called()
 
 
 class TestYearWindows(unittest.TestCase):
