@@ -5,7 +5,7 @@ through the same OData API the live scrape uses. This ingests that pre-cutover
 history through the normal pipeline — in bounded, resumable batches — so nothing
 already processed is redone (the stages' existence checks skip it).
 
-Three stages:
+Four stages:
   --stage docs  : archive each meeting's documents to Drive + add a wiki entry.
                   Cheap; no video, no transcription. Detail-driven, no floor change.
   --stage video : run the full A/V pipeline (download -> compress -> YouTube ->
@@ -14,6 +14,9 @@ Three stages:
   --stage wiki  : render existing on-disk / Redis assets to the wiki only — no
                   document download, no A/V. For meetings already backfilled but
                   missing from the wiki because the live floor skipped their year.
+  --stage summaries : summarize transcribed meetings that have no summary yet (the
+                  section engine), then render them to the wiki. Disk-driven, no
+                  OData ingest, no A/V. Long local run (local LLM).
 
 Ingestion fetches OData one year at a time (a single decades-wide query times the
 API out) and persists each meeting's detail exactly as the live scrape does, via
@@ -27,6 +30,7 @@ worker would otherwise start acting on. Audit is read-only.
     python scripts/backfill_history.py --stage docs --execute
     python scripts/backfill_history.py --stage video --type pc_mtg --year 2019 --execute
     python scripts/backfill_history.py --stage wiki --type bac_mtg --execute  # render to wiki
+    python scripts/backfill_history.py --stage summaries --execute            # summarize all
 """
 
 from __future__ import annotations
@@ -43,6 +47,7 @@ from src.processors.compress import Compressor
 from src.processors.download import Downloader
 from src.processors.download_docs import DocumentDownloader
 from src.processors.extract import Extractor
+from src.processors.rag_index import RagIndexer
 from src.processors.transcribe import Transcriber
 from src.processors.update_wiki import WikiUpdater
 from src.processors.upload_docs import DocumentUploader
@@ -154,6 +159,17 @@ def _run_wiki(source_type: Any, from_year: int) -> None:
     WikiUpdater(source_type).process(max(BACKFILL_FLOOR, datetime(from_year, 1, 1)))
 
 
+def _run_summaries(source_type: Any) -> None:
+    """Summarize every transcribed meeting that has no summary yet, then render the
+    new summaries to the wiki. Disk-driven (the section engine reads the transcript +
+    documents from disk), so no OData ingest and no A/V. RagIndexer is idempotent
+    (skips meetings whose sections.json exists) and leaves legacy summaries alone;
+    WikiUpdater then re-renders each newly-summarized meeting (the TRA-178 refresh
+    flag). Both floor at BACKFILL_FLOOR so historical meetings are not skipped."""
+    RagIndexer(source_type).process(BACKFILL_FLOOR)
+    WikiUpdater(source_type).process(BACKFILL_FLOOR)
+
+
 def _detail_meetings_in_range(meeting_type: Any, from_year: int) -> list[dict]:
     """Meetings for a type already persisted in Redis detail dated ``from_year`` or
     later — the set --stage wiki considers (matching _run_wiki's floor). Read from
@@ -227,7 +243,9 @@ def _run_video(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--stage", choices=["docs", "video", "wiki"], default="docs")
+    parser.add_argument(
+        "--stage", choices=["docs", "video", "wiki", "summaries"], default="docs"
+    )
     parser.add_argument("--type", dest="type_key", default=None, help="one type key")
     parser.add_argument("--year", type=int, default=None, help="a single year")
     parser.add_argument("--from-year", type=int, default=2002)
@@ -275,6 +293,15 @@ def main() -> None:
                 tally[meeting_type.display_name][kind] += 1
             if args.execute:
                 _run_wiki(source_type, from_year)
+    elif args.stage == "summaries":
+        # Disk-driven: summarize transcribed meetings that have no summary yet, then
+        # render to the wiki. No OData ingest, no A/V. The tally is the exact
+        # to-summarize set per type (transcribed minus already-summarized).
+        for source_type, meeting_type in selected:
+            missing = RagIndexer(source_type).get_most_recent_missing_dates()
+            tally[meeting_type.display_name]["video"] = len(missing)
+            if args.execute:
+                _run_summaries(source_type)
     elif args.execute:
         # Ingest (persist detail) per type via the live-scrape path, then run that
         # type's stages. Workers must be stopped (this writes shared Redis detail).
@@ -308,15 +335,23 @@ def main() -> None:
                     elif agenda or supplemental:
                         tally[meeting_type.display_name]["docs"] += 1
 
+    summaries_stage = args.stage == "summaries"
     for _st, meeting_type in selected:
         t = tally[meeting_type.display_name]
-        print(
-            f"  {meeting_type.display_name:<34} video={t['video']:>4} docs={t['docs']:>5}"
-        )
+        if summaries_stage:
+            print(f"  {meeting_type.display_name:<34} to summarize={t['video']:>4}")
+        else:
+            print(
+                f"  {meeting_type.display_name:<34} "
+                f"video={t['video']:>4} docs={t['docs']:>5}"
+            )
         totals["video"] += t["video"]
         totals["docs"] += t["docs"]
 
-    print(f"\nTOTAL  video={totals['video']}  docs-only={totals['docs']}")
+    if summaries_stage:
+        print(f"\nTOTAL  to summarize={totals['video']}")
+    else:
+        print(f"\nTOTAL  video={totals['video']}  docs-only={totals['docs']}")
     if not args.execute:
         print(
             "Audit only — no Redis writes, no stages run. Re-run with --execute "
