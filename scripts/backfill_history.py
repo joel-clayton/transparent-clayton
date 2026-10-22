@@ -159,15 +159,18 @@ def _run_wiki(source_type: Any, from_year: int) -> None:
     WikiUpdater(source_type).process(max(BACKFILL_FLOOR, datetime(from_year, 1, 1)))
 
 
-def _run_summaries(source_type: Any) -> None:
+def _run_summaries(source_type: Any, from_year: int) -> None:
     """Summarize every transcribed meeting that has no summary yet, then render the
     new summaries to the wiki. Disk-driven (the section engine reads the transcript +
     documents from disk), so no OData ingest and no A/V. RagIndexer is idempotent
     (skips meetings whose sections.json exists) and leaves legacy summaries alone;
     WikiUpdater then re-renders each newly-summarized meeting (the TRA-178 refresh
-    flag). Both floor at BACKFILL_FLOOR so historical meetings are not skipped."""
-    RagIndexer(source_type).process(BACKFILL_FLOOR)
-    WikiUpdater(source_type).process(BACKFILL_FLOOR)
+    flag). Both floor at ``from_year`` (so ``--from-year`` scopes the run and the run
+    matches the tally; the processors floor only, so --to-year/--year don't bound
+    it)."""
+    floor = max(BACKFILL_FLOOR, datetime(from_year, 1, 1))
+    RagIndexer(source_type).process(floor)
+    WikiUpdater(source_type).process(floor)
 
 
 def _detail_meetings_in_range(meeting_type: Any, from_year: int) -> list[dict]:
@@ -275,7 +278,7 @@ def main() -> None:
     windows = _year_windows(from_year, to_year)
     totals: dict[str, int] = defaultdict(int)
     tally: dict[str, dict[str, int]] = {
-        mt.display_name: {"video": 0, "docs": 0} for _st, mt in selected
+        mt.display_name: {"video": 0, "docs": 0, "summaries": 0} for _st, mt in selected
     }
 
     if args.stage == "wiki":
@@ -296,12 +299,18 @@ def main() -> None:
     elif args.stage == "summaries":
         # Disk-driven: summarize transcribed meetings that have no summary yet, then
         # render to the wiki. No OData ingest, no A/V. The tally is the exact
-        # to-summarize set per type (transcribed minus already-summarized).
+        # to-summarize set per type (transcribed minus already-summarized), scoped to
+        # the same floor the run uses so audit matches --execute.
+        floor_year = max(BACKFILL_FLOOR.year, from_year)
         for source_type, meeting_type in selected:
-            missing = RagIndexer(source_type).get_most_recent_missing_dates()
-            tally[meeting_type.display_name]["video"] = len(missing)
+            missing = [
+                d
+                for d in RagIndexer(source_type).get_most_recent_missing_dates()
+                if int(d[:4]) >= floor_year
+            ]
+            tally[meeting_type.display_name]["summaries"] = len(missing)
             if args.execute:
-                _run_summaries(source_type)
+                _run_summaries(source_type, from_year)
     elif args.execute:
         # Ingest (persist detail) per type via the live-scrape path, then run that
         # type's stages. Workers must be stopped (this writes shared Redis detail).
@@ -339,17 +348,18 @@ def main() -> None:
     for _st, meeting_type in selected:
         t = tally[meeting_type.display_name]
         if summaries_stage:
-            print(f"  {meeting_type.display_name:<34} to summarize={t['video']:>4}")
+            print(f"  {meeting_type.display_name:<34} to summarize={t['summaries']:>4}")
+            totals["summaries"] += t["summaries"]
         else:
             print(
                 f"  {meeting_type.display_name:<34} "
                 f"video={t['video']:>4} docs={t['docs']:>5}"
             )
-        totals["video"] += t["video"]
-        totals["docs"] += t["docs"]
+            totals["video"] += t["video"]
+            totals["docs"] += t["docs"]
 
     if summaries_stage:
-        print(f"\nTOTAL  to summarize={totals['video']}")
+        print(f"\nTOTAL  to summarize={totals['summaries']}")
     else:
         print(f"\nTOTAL  video={totals['video']}  docs-only={totals['docs']}")
     if not args.execute:
