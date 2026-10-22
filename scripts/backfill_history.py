@@ -165,12 +165,14 @@ def _run_summaries(source_type: Any, from_year: int) -> None:
     documents from disk), so no OData ingest and no A/V. RagIndexer is idempotent
     (skips meetings whose sections.json exists) and leaves legacy summaries alone;
     WikiUpdater then re-renders each newly-summarized meeting (the TRA-178 refresh
-    flag). Both floor at ``from_year`` (so ``--from-year`` scopes the run and the run
-    matches the tally; the processors floor only, so --to-year/--year don't bound
-    it)."""
-    floor = max(BACKFILL_FLOOR, datetime(from_year, 1, 1))
-    RagIndexer(source_type).process(floor)
-    WikiUpdater(source_type).process(floor)
+    flag). ``--from-year`` scopes which meetings are summarized; the processors floor
+    only, so --to-year/--year don't bound it."""
+    RagIndexer(source_type).process(max(BACKFILL_FLOOR, datetime(from_year, 1, 1)))
+    # WikiUpdater must floor at BACKFILL_FLOOR, not from_year: its
+    # _refresh_upgraded_meetings strips every refresh-flagged meeting's entry before
+    # the floored re-render, so a higher floor would drop any flagged meeting dated
+    # below from_year with no re-add (same guard _run_docs/_run_video apply).
+    WikiUpdater(source_type).process(BACKFILL_FLOOR)
 
 
 def _detail_meetings_in_range(meeting_type: Any, from_year: int) -> list[dict]:

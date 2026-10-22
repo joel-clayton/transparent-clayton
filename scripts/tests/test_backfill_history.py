@@ -45,18 +45,19 @@ class TestRunWiki(unittest.TestCase):
 
 
 class TestRunSummaries(unittest.TestCase):
-    def test_summarizes_then_renders_wiki_floored_at_from_year(self):
+    def test_summarizes_at_from_year_renders_wiki_at_backfill_floor(self):
         with (
             mock.patch.object(bf, "RagIndexer") as rag,
             mock.patch.object(bf, "WikiUpdater") as wiki,
             mock.patch.object(bf, "DocumentDownloader") as dl,
         ):
             bf._run_summaries("src", 2019)
-        floor = datetime(2019, 1, 1)
         rag.assert_called_once_with("src")
-        rag.return_value.process.assert_called_once_with(floor)
+        rag.return_value.process.assert_called_once_with(datetime(2019, 1, 1))
         wiki.assert_called_once_with("src")
-        wiki.return_value.process.assert_called_once_with(floor)
+        # WikiUpdater floors at BACKFILL_FLOOR (not from_year) so refresh-flagged
+        # pre-from_year meetings aren't stripped-without-re-add.
+        wiki.return_value.process.assert_called_once_with(bf.BACKFILL_FLOOR)
         dl.assert_not_called()  # disk-driven: no document download
 
     def test_summaries_stage_runs_without_odata_ingest(self):
