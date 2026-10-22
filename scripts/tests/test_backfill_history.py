@@ -44,6 +44,52 @@ class TestRunWiki(unittest.TestCase):
         run_video.assert_not_called()
 
 
+class TestRunSummaries(unittest.TestCase):
+    def test_summarizes_at_from_year_renders_wiki_at_backfill_floor(self):
+        with (
+            mock.patch.object(bf, "RagIndexer") as rag,
+            mock.patch.object(bf, "WikiUpdater") as wiki,
+            mock.patch.object(bf, "DocumentDownloader") as dl,
+        ):
+            bf._run_summaries("src", 2019)
+        rag.assert_called_once_with("src")
+        rag.return_value.process.assert_called_once_with(datetime(2019, 1, 1))
+        wiki.assert_called_once_with("src")
+        # WikiUpdater floors at BACKFILL_FLOOR (not from_year) so refresh-flagged
+        # pre-from_year meetings aren't stripped-without-re-add.
+        wiki.return_value.process.assert_called_once_with(bf.BACKFILL_FLOOR)
+        dl.assert_not_called()  # disk-driven: no document download
+
+    def test_summaries_stage_runs_without_odata_ingest(self):
+        # --stage summaries is disk-driven: it summarizes transcribed meetings and
+        # must not ingest from OData. Exercised through main().
+        argv = [
+            "backfill_history.py",
+            "--stage",
+            "summaries",
+            "--type",
+            "cc_mtg",
+            "--execute",
+        ]
+        fake_idx = mock.Mock()
+        fake_idx.get_most_recent_missing_dates.return_value = []
+        with (
+            mock.patch.object(sys, "argv", argv),
+            mock.patch.object(bf, "_ingest_window") as ingest,
+            mock.patch.object(bf, "RagIndexer", return_value=fake_idx),
+            mock.patch.object(bf, "_run_summaries") as run_summaries,
+            mock.patch.object(bf, "_run_docs") as run_docs,
+            mock.patch.object(bf, "_run_video") as run_video,
+            mock.patch.object(bf, "_run_wiki") as run_wiki,
+        ):
+            bf.main()
+        ingest.assert_not_called()  # no OData ingest for the summaries stage
+        run_summaries.assert_called_once()
+        run_docs.assert_not_called()
+        run_video.assert_not_called()
+        run_wiki.assert_not_called()
+
+
 class TestYearWindows(unittest.TestCase):
     def test_windows_are_per_year_and_clamped_to_cutover(self):
         windows = bf._year_windows(2024, bf.CUTOVER.year)
