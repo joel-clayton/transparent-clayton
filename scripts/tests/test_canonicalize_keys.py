@@ -87,13 +87,47 @@ class TestClassify(unittest.TestCase):
         self.assertEqual(p.new_key, "2024-05-30 04_00 PM")
         self.assertEqual(p.new_type_key, "bac_mtg")
 
-    def test_multiple_candidate_types_is_ambiguous(self):
+    def test_override_resolves_ambiguous_to_rebucket(self):
+        # 2021-06-08 has both a B&A (4pm) and a PC (7pm) meeting, so OData alone is
+        # AMBIGUOUS; the content-confirmed OVERRIDE picks B&A. Validated against the
+        # events (the named target meeting must exist that day).
         p = ck.classify(
             "City Council",
             "2021-06-08",
             [
                 ev("2021-06-08T16:00:00Z", "Budget and Audit Committee"),
                 ev("2021-06-08T19:00:00Z", "Planning Commission"),
+            ],
+        )
+        self.assertEqual(p.classification, ck.REBUCKET)
+        self.assertEqual(p.new_bucket, "Budget and Audit Committee")
+        self.assertEqual(p.new_key, "2021-06-08 04_00 PM")
+        self.assertEqual(p.new_type_key, "bac_mtg")
+
+    def test_stale_override_ignored_and_falls_through(self):
+        # An override whose target meeting is absent from OData that day is ignored
+        # (warned), falling back to auto-classification — here NOMATCH.
+        with patch.dict(
+            ck.OVERRIDES,
+            {
+                ("City Council", "2099-01-01"): (
+                    "Budget and Audit Committee",
+                    "2099-01-01 04_00 PM",
+                )
+            },
+        ):
+            p = ck.classify("City Council", "2099-01-01", [])
+        self.assertEqual(p.classification, ck.NOMATCH)
+
+    def test_multiple_candidate_types_is_ambiguous(self):
+        # A neutral date (not in OVERRIDES) so this exercises the generic
+        # auto-classification path rather than a content-confirmed override.
+        p = ck.classify(
+            "City Council",
+            "2020-03-04",
+            [
+                ev("2020-03-04T16:00:00Z", "Budget and Audit Committee"),
+                ev("2020-03-04T19:00:00Z", "Planning Commission"),
             ],
         )
         self.assertEqual(p.classification, ck.AMBIGUOUS)
