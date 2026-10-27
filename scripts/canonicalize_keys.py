@@ -102,12 +102,79 @@ def _key_for(event: dict[str, Any]) -> str:
     return event_datetime(event).strftime(DATETIME_FORMAT)
 
 
+# Content-confirmed dispositions for dates the OData-only classifier flags AMBIGUOUS
+# (two candidate bodies that day) but the transcript content resolves. Maps
+# (src_bucket, date-only) -> (target display_name, target datetime key). Each is
+# validated against OData before it is applied, so a stale/typo'd entry is ignored
+# rather than creating a bad key.
+OVERRIDES: dict[tuple[str, str], tuple[str, str]] = {
+    # 2021-06-08 City Council asset is actually the Budget & Audit Committee meeting
+    # ("call to order the Clayton Budget and Audit Committee", 3:04pm); 7pm that day
+    # is the separate Planning Commission meeting.
+    ("City Council", "2021-06-08"): (
+        "Budget and Audit Committee",
+        "2021-06-08 04_00 PM",
+    ),
+    # 2023-01-23 City Council asset is Budget & Audit (transcript: 9x "audit", no
+    # trails); 6:30pm that day is the separate Trails & Landscaping meeting.
+    ("City Council", "2023-01-23"): (
+        "Budget and Audit Committee",
+        "2023-01-23 04_00 PM",
+    ),
+    # 2024-08-12 City Council asset is Budget & Audit ("start the August Budget and
+    # Audit Committee meeting"); 6:30pm that day is Trails & Landscaping.
+    ("City Council", "2024-08-12"): (
+        "Budget and Audit Committee",
+        "2024-08-12 04_00 PM",
+    ),
+}
+
+
+def _override_plan(
+    src_bucket: str, date: str, merged: list[dict[str, Any]]
+) -> Plan | None:
+    """A REBUCKET/CLEAN plan from a content-confirmed OVERRIDE, validated against
+    OData (the named target meeting must actually exist that day). Returns None when
+    there is no override or it does not match OData (then normal classification runs,
+    and a warning is printed so a stale override is visible)."""
+    target = OVERRIDES.get((src_bucket, date))
+    if not target:
+        return None
+    disp, new_key = target
+    mt = BUCKET_TO_TYPE.get(disp)
+    if mt is not None:
+        for e in merged:
+            if (
+                CATEGORY_TO_TYPE.get(effective_category(e)) is mt
+                and _key_for(e) == new_key
+            ):
+                cls = CLEAN if disp == src_bucket else REBUCKET
+                return Plan(
+                    src_bucket,
+                    date,
+                    cls,
+                    disp,
+                    new_key,
+                    mt.key,
+                    note=f"override: {src_bucket} -> {disp} {new_key}",
+                )
+    print(
+        f"  WARNING: override {src_bucket}/{date} -> {disp} {new_key} "
+        f"not found in OData; ignoring (falling back to auto-classification)"
+    )
+    return None
+
+
 def classify(src_bucket: str, date: str, events_on_date: list[dict[str, Any]]) -> Plan:
     """Classify one on-disk (bucket, date-only) asset against that date's OData
     events. Uses the scraper's own ``matches_category`` / ``merge_by_datetime`` so
     the result mirrors how ingestion would key the same meeting."""
     src_type = BUCKET_TO_TYPE[src_bucket]
     merged = merge_by_datetime(events_on_date)
+
+    override = _override_plan(src_bucket, date, merged)
+    if override is not None:
+        return override
 
     same = [e for e in merged if matches_category(e, src_type)]
     if len(same) == 1:
