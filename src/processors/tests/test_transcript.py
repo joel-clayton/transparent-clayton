@@ -27,11 +27,38 @@ class TestTimeHelpers(unittest.TestCase):
         self.assertEqual(seconds_to_hms(3723), "1:02:03")
         self.assertEqual(seconds_to_hms(19), "0:00:19")
 
+    def test_minutes_seconds_form(self):
+        self.assertEqual(hms_to_seconds("0:53"), 53)
+        self.assertEqual(hms_to_seconds("12:05"), 725)
+
     def test_negative_clamped(self):
         self.assertEqual(seconds_to_hms(-5), "0:00:00")
 
 
+MIXED_FORMAT = """[Speaker 1] (0:00 - 0:53)
+Good afternoon.
+
+[Speaker 2] (0:53 - 12:05)
+Move approval.
+
+[Speaker 1] (1:00:04 - 1:00:10)
+Back from recess.
+"""
+
+
 class TestParseUtterances(unittest.TestCase):
+    def test_leading_bom_does_not_drop_the_first_utterance(self):
+        us = parse_utterances("\ufeff" + MIXED_FORMAT)
+        self.assertEqual([u.start for u in us], [0, 53, 3604])
+
+    def test_parses_minutes_seconds_headers_before_the_hour_mark(self):
+        # Many transcripts use M:SS until the hour mark and H:MM:SS after it; the
+        # first hour must not be dropped.
+        us = parse_utterances(MIXED_FORMAT)
+        self.assertEqual([u.start for u in us], [0, 53, 3604])
+        self.assertEqual([u.end for u in us], [53, 725, 3610])
+        self.assertEqual(us[0].text, "Good afternoon.")
+
     def test_parses_blocks_and_ignores_preamble(self):
         us = parse_utterances(TRANSCRIPT)
         self.assertEqual(len(us), 3)

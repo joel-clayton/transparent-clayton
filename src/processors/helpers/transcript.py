@@ -15,16 +15,21 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-# "[Speaker A] (0:00:19 - 0:00:26)" — hours:minutes:seconds, hours 1+ digits.
+# "[Speaker A] (0:00:19 - 0:00:26)" — hours:minutes:seconds, hours 1+ digits. Many
+# transcripts instead print minutes:seconds ("(0:53 - 1:05)") until the hour mark and
+# switch to hours:minutes:seconds after it, so a header may use either form.
+_TS = r"\d+(?::\d{2}){1,2}"
 _HEADER_RE = re.compile(
-    r"^\[(?P<speaker>[^\]]+)\]\s*\((?P<start>\d+:\d{2}:\d{2})\s*-\s*"
-    r"(?P<end>\d+:\d{2}:\d{2})\)\s*$"
+    rf"^\[(?P<speaker>[^\]]+)\]\s*\((?P<start>{_TS})\s*-\s*(?P<end>{_TS})\)\s*$"
 )
 
 
 def hms_to_seconds(hms: str) -> int:
-    """``"1:02:03"`` -> ``3723`` seconds."""
-    h, m, s = (int(p) for p in hms.split(":"))
+    """``"1:02:03"`` -> ``3723`` seconds; also accepts ``"M:SS"`` (``"1:03"`` -> 63)."""
+    parts = [int(p) for p in hms.split(":")]
+    if len(parts) == 2:
+        parts.insert(0, 0)
+    h, m, s = parts
     return h * 3600 + m * 60 + s
 
 
@@ -58,7 +63,9 @@ def parse_utterances(transcript: str) -> list[Utterance]:
             speaker, start, end = header
             utterances.append(Utterance(speaker, start, end, "\n".join(body).strip()))
 
-    for line in transcript.splitlines():
+    # A leading BOM (transcripts are written utf-8-sig style) is not stripped by
+    # str.strip() and would defeat the first header, dropping the opening utterance.
+    for line in transcript.lstrip("\ufeff").splitlines():
         m = _HEADER_RE.match(line.strip())
         if m:
             flush()
