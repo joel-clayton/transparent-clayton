@@ -63,22 +63,22 @@ from src.scrapers.civic_clerk_api import (
     video_url,
 )
 from src.scrapers.constants import (
-    CIVIC_CLERK_START_DATE,
     SCRAPE_RETRY_ATTEMPTS,
     SCRAPE_RETRY_BASE_DELAY,
     SCRAPE_RETRY_DEADLINE,
     SCRAPE_RETRY_MAX_DELAY,
 )
+from src.settings import PIPELINE_START
 from src.scrapers.retry import retry_transient
 from src.scrapers.models import PipelineClass
 from src.types import MEETING_TYPE_BY_SOURCE
 from src.util import get_datetime_from_string
 
 # Reach the whole archive: the pipeline's normal EARLIEST floor is bypassed for the
-# backfill (passed to Processor.process); a run never scrapes past the cutover,
-# where the live pipeline takes over.
+# backfill (passed to Processor.process); a run never scrapes at or past
+# PIPELINE_START, where the live pipeline takes over.
 BACKFILL_FLOOR = datetime(2000, 1, 1)
-CUTOVER = CIVIC_CLERK_START_DATE
+CUTOVER = PIPELINE_START
 
 
 def _year_windows(from_year: int, to_year: int) -> list[tuple[datetime, datetime]]:

@@ -1,4 +1,4 @@
-from datetime import datetime
+from src.settings import PIPELINE_START
 
 SNIPPET = dict(
     defaultAudioLanguage="English",
@@ -30,7 +30,7 @@ CC_MTG_VIDEO_TITLE_DATETIME_FORMAT = "Clayton CA City Council Meeting %Y-%m-%d %
 CC_MTG_VIDEO_TITLE_DATE_FORMAT = "Clayton CA City Council Meeting %Y-%m-%d"
 CC_MTG_TRANSCRIPT_TITLE_FORMAT = "City Council Meeting %Y-%m-%d %I:%M %p"
 CC_MTG_TRANSCRIPT_TITLE_DATE_FORMAT = "City Council Meeting %Y-%m-%d"
-EARLIEST = datetime(2026, 3, 1)
+EARLIEST = PIPELINE_START
 
 CC_MTG_WIKI_YEAR_NAME_TEMPLATE = "List of {} City Council Meetings"
 

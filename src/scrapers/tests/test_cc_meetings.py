@@ -120,7 +120,7 @@ class TestParseMeetingsFromUrlRouting(unittest.TestCase):
             mock.patch.object(cc_meetings, "browser") as browser,
         ):
             result = cc_meetings.parse_meetings_from_url(
-                cc_meetings.CIVIC_CLERK_START_DATE, CITY_COUNCIL
+                cc_meetings.PIPELINE_START, CITY_COUNCIL
             )
         self.assertEqual(result, ["from-api"])
         api.assert_called_once()
