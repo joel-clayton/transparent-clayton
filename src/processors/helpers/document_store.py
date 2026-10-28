@@ -114,6 +114,53 @@ def find_document(
     return None
 
 
+def _find_by_stem(
+    meeting_type: MeetingType,
+    meeting_key: str,
+    include: str,
+    exclude: tuple[str, ...] = (),
+    exact: str | None = None,
+) -> str | None:
+    """A saved document whose file stem contains ``include`` (case-insensitive) and
+    none of ``exclude``, preferring an exact-label match (``exact``) and then the
+    alphabetically first. Used where the city's own file names, not our labels, are
+    what is on disk (e.g. ``BAC_RegularSession_Agenda_02_10_2025``)."""
+    for directory in _meeting_document_dirs(meeting_type, meeting_key):
+        if not os.path.isdir(directory):
+            continue
+        matches: list[tuple[int, str]] = []
+        for name in sorted(os.listdir(directory)):
+            if name.startswith("._"):
+                continue
+            stem = os.path.splitext(name)[0]
+            low = stem.lower()
+            if include in low and not any(word in low for word in exclude):
+                matches.append((0 if stem == exact else 1, name))
+        if matches:
+            return os.path.join(directory, min(matches)[1])
+    return None
+
+
+def find_agenda(meeting_type: MeetingType, meeting_key: str) -> str | None:
+    """The meeting's agenda on disk. CivicClerk documents are saved under the city's
+    own file names (``CC_RegularSession_Agenda_07_07_2026``), not a fixed "Agenda"
+    label, so an exact ``Agenda`` is preferred (the older scraper's label) and
+    otherwise any document named like an agenda that is not the packet or minutes."""
+    return _find_by_stem(
+        meeting_type,
+        meeting_key,
+        "agenda",
+        exclude=("packet", "minutes"),
+        exact="Agenda",
+    )
+
+
+def find_minutes(meeting_type: MeetingType, meeting_key: str) -> str | None:
+    """The meeting's minutes on disk (city file name, e.g. ``BAC_RegularSession_
+    Minutes_02_10_2025``), if posted."""
+    return _find_by_stem(meeting_type, meeting_key, "minutes")
+
+
 def document_mimetype(path: str) -> str:
     """The MIME type to upload a saved document with, from its extension."""
     return mimetypes.guess_type(path)[0] or "application/pdf"

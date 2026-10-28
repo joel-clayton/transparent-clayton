@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections import Counter
 
 from src.processors.helpers.agenda_items import AgendaItem
 from src.processors.helpers.ollama_client import generate
@@ -135,13 +136,16 @@ def _clean_summary(text: str, item: AgendaItem) -> str:
 
 
 _SPEAKER_KEY_SYSTEM = (
-    "You map the anonymous speaker labels in a city council roll call to real "
-    "people. You are given the MEMBER ROSTER and the ROLL CALL transcript, where "
-    "the clerk reads each member's name and that member answers 'present'/'here' on "
-    "the next line, and the mayor runs the meeting. For each 'Speaker X' label, give "
-    "the person's name and role (e.g. 'Jim Diaz, Councilmember') ONLY when the roll "
-    "call and roster make it clear; omit a label you cannot confidently identify. "
-    "Output only JSON."
+    "You map the anonymous speaker labels in a city meeting's opening to real "
+    "people. You are given the MEMBER ROSTER (and, when present, the MINUTES ROLL "
+    "CALL: who actually attended, with titles, which is authoritative over the "
+    "agenda roster) and the OPENING transcript. Where the clerk reads each member's "
+    "name and that member answers 'present'/'here' on the next line, use that. A "
+    "committee may instead take a silent visual roll call; then use only strong "
+    "cues in the opening, such as a speaker addressed by name or title, or the chair "
+    "naming themself. For each 'Speaker X' label, give the person's name and role "
+    "(e.g. 'Jim Diaz, Councilmember') ONLY when the evidence makes it clear; omit a "
+    "label you cannot confidently identify. Output only JSON."
 )
 
 _SPEAKER_KEY_SCHEMA = {
@@ -184,10 +188,16 @@ def build_speaker_key(roster: str, roll_call: str, *, model: str) -> str:
     except (ValueError, TypeError):
         logger.warning("Speaker-key pass returned unparseable JSON")
         return ""
+    named = [s for s in speakers if s.get("label") and s.get("name")]
+    # A small model sometimes pins several labels on one person (observed: two
+    # different speakers both mapped to the same staff member). One person rarely
+    # holds two labels, so a name given to more than one label is ambiguous: drop it
+    # rather than mislabel speakers in every section.
+    counts = Counter(s["name"].strip().lower() for s in named)
     lines = [
         f"{s['label']} = {s['name']}"
-        for s in speakers
-        if s.get("label") and s.get("name")
+        for s in named
+        if counts[s["name"].strip().lower()] == 1
     ]
     return "\n".join(lines)
 
