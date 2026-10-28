@@ -78,6 +78,22 @@ class TestBuildSpeakerKey(unittest.TestCase):
             key, "Speaker A = Jeff Wan, Mayor\nSpeaker C = Jim Diaz, Councilmember"
         )
 
+    def test_name_assigned_to_several_labels_is_dropped_as_ambiguous(self):
+        # Observed: a small model mapped two different speakers to the same staff
+        # member; keep only unambiguous labels.
+        payload = json.dumps(
+            {
+                "speakers": [
+                    {"label": "Speaker 1", "name": "Mayor Kim Trupiano"},
+                    {"label": "Speaker 2", "name": "Regina Rubier"},
+                    {"label": "Speaker 3", "name": "regina rubier "},
+                ]
+            }
+        )
+        with patch.object(section_summary, "generate", return_value=payload):
+            key = build_speaker_key("ROSTER", "OPENING", model="m")
+        self.assertEqual(key, "Speaker 1 = Mayor Kim Trupiano")
+
     def test_empty_roll_call_skips_model(self):
         with patch.object(section_summary, "generate") as gen:
             self.assertEqual(build_speaker_key("ROSTER", "   ", model="m"), "")

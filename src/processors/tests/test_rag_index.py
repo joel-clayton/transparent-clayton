@@ -81,7 +81,8 @@ class TestNoAgendaFallback(unittest.TestCase):
         idx._sections_json_path = lambda date: sj  # type: ignore
 
         with (
-            patch.object(rag_index, "find_document", return_value=None),
+            patch.object(rag_index, "find_agenda", return_value=None),
+            patch.object(rag_index, "find_minutes", return_value=None),
             patch.object(rag_index, "segment_meeting") as seg,
             patch.object(
                 rag_index, "summarize_section", return_value="WHOLE MEETING SUMMARY"
@@ -157,7 +158,8 @@ class TestAllUnreachedFallback(unittest.TestCase):
             Segment(2, "Action Items", False, False, 0, 0, []),
         ]
         with (
-            patch.object(rag_index, "find_document", return_value="/agenda.pdf"),
+            patch.object(rag_index, "find_agenda", return_value="/agenda.pdf"),
+            patch.object(rag_index, "find_minutes", return_value=None),
             patch.object(
                 rag_index, "pdf_to_text", return_value="1. ROLL CALL\n2. ACTION ITEMS"
             ),
@@ -175,6 +177,61 @@ class TestAllUnreachedFallback(unittest.TestCase):
         content = open(md, encoding="utf-8").read()
         self.assertIn("REAL CONTENT", content)
         self.assertNotIn("not taken up", content.lower())
+
+
+class TestMinutesRosterContext(unittest.TestCase):
+    """The minutes' roll call (who actually attended, with titles) is fed to both the
+    speaker-key pass and every section, ahead of the agenda's printed roster."""
+
+    def test_minutes_roll_call_reaches_speaker_key_and_sections(self):
+        from src.processors.helpers.segmentation import Segment
+
+        idx = RagIndexer(SourceType.CITY_COUNCIL_MEETING)
+        tmp = tempfile.mkdtemp()
+        transcript = os.path.join(tmp, "t.txt")
+        with open(transcript, "w") as fh:
+            fh.write("[Speaker 1] (0:00 - 0:05)\nCalled to order.\n")
+        md = os.path.join(tmp, "m.md")
+        sj = os.path.join(tmp, "m.sections.json")
+        db = os.path.join(tmp, "x.db")
+        idx.construct_filepath_for_date = (  # type: ignore
+            lambda date, job_type=None: (
+                transcript if job_type == JobType.TRANSCRIBE_AUDIO else md
+            )
+        )
+        idx._sections_json_path = lambda date: sj  # type: ignore
+
+        texts = {
+            "/agenda.pdf": "AGENDA\nCommittee Members\nJeff Wan, Mayor\n1. ACTION ITEMS",
+            "/minutes.pdf": (
+                "1. CALL TO ORDER AND ROLL CALL \u2013 Committee members present: "
+                "Vice Mayor Wan and Mayor Trupiano.\n2. PUBLIC COMMENT\n"
+            ),
+        }
+        seg = [Segment(1, "Action Items", False, True, 0, 5, [])]
+        with (
+            patch.object(rag_index, "find_agenda", return_value="/agenda.pdf"),
+            patch.object(rag_index, "find_minutes", return_value="/minutes.pdf"),
+            patch.object(rag_index, "pdf_to_text", side_effect=texts.__getitem__),
+            patch.object(rag_index, "segment_meeting", return_value=seg),
+            patch.object(rag_index, "summarize_section", return_value="S") as summ,
+            patch.object(rag_index, "extract_keywords", return_value=[]),
+            patch.object(rag_index, "build_speaker_key", return_value="") as key,
+            patch.object(rag_index, "model_digest", return_value=None),
+            patch.object(rag_index, "embed_document", return_value=[0.1, 0.2, 0.3]),
+            patch.object(rag_index, "connect", lambda *a, **k: real_connect(db)),
+            patch.object(rag_index, "r"),
+        ):
+            idx.process_for_date("2025-02-10 04_00 PM")
+
+        roster_for_key = key.call_args.args[0]
+        self.assertIn("MINUTES ROLL CALL", roster_for_key)
+        self.assertIn("Vice Mayor Wan and Mayor Trupiano", roster_for_key)
+        self.assertIn("Jeff Wan, Mayor", roster_for_key)  # agenda roster kept too
+        context = summ.call_args.kwargs["context"]
+        self.assertLess(
+            context.index("MINUTES ROLL CALL"), context.index("MEMBER ROSTER")
+        )
 
 
 if __name__ == "__main__":

@@ -26,9 +26,10 @@ from src.processors.constants import EARLIEST
 from src.processors.helpers.agenda_items import (
     AgendaItem,
     agenda_preamble,
+    minutes_roll_call,
     parse_agenda_items,
 )
-from src.processors.helpers.document_store import find_document
+from src.processors.helpers.document_store import find_agenda, find_minutes
 from src.processors.helpers.embeddings import embed_document
 from src.processors.helpers.ollama_client import model_digest
 from src.processors.helpers.pdf_text import pdf_to_text
@@ -53,7 +54,6 @@ from src.processors.helpers.transcript import (
     utterances_in_span,
 )
 from src.processors.process import Processor
-from src.processors.summarize import AGENDA_LABEL
 from src.settings import (
     EMBEDDING_MODEL,
     KEYWORD_MODEL,
@@ -282,7 +282,7 @@ class RagIndexer(Processor):
         # written and the whole meeting retries). See _mark_for_wiki_refresh.
         self._mark_for_wiki_refresh(date)
 
-        agenda_path = find_document(self.meeting_type, date, AGENDA_LABEL)
+        agenda_path = find_agenda(self.meeting_type, date)
         agenda_text = pdf_to_text(agenda_path) if agenda_path else ""
         items = parse_agenda_items(agenda_text)
 
@@ -312,15 +312,31 @@ class RagIndexer(Processor):
         # roster plus an explicit SPEAKER KEY built once from the roll call (the
         # opening minutes), which maps 'Speaker X' labels to members.
         roster = agenda_preamble(agenda_text)
+        minutes_path = find_minutes(self.meeting_type, date)
+        minutes_roll = (
+            minutes_roll_call(pdf_to_text(minutes_path)) if minutes_path else ""
+        )
+        key_roster = "\n\n".join(
+            part
+            for part in (
+                f"MINUTES ROLL CALL:\n{minutes_roll}" if minutes_roll else "",
+                roster,
+            )
+            if part
+        )
         opening = render_span(
             utterances_in_span(
                 utterances, utterances[0].start, utterances[0].start + 180
             )
         )
-        speaker_key = build_speaker_key(roster, opening, model=KEYWORD_MODEL)
+        speaker_key = build_speaker_key(key_roster, opening, model=KEYWORD_MODEL)
         context = "\n\n".join(
             part
             for part in (
+                f"MINUTES ROLL CALL (who attended; authoritative over the roster):\n"
+                f"{minutes_roll}"
+                if minutes_roll
+                else "",
                 f"MEMBER ROSTER:\n{roster}" if roster else "",
                 f"SPEAKER KEY:\n{speaker_key}" if speaker_key else "",
             )

@@ -100,6 +100,50 @@ class TestEnsureDocumentOnDisk(TempDirTestCase):
         self.assertEqual(document_store.document_mimetype(path), "image/png")
 
 
+class TestFindAgendaAndMinutes(TempDirTestCase):
+    KEY = "2026-06-02 07_00 PM"
+
+    def _put(self, *names):
+        folder = os.path.join(
+            self.tmpdir,
+            CITY_COUNCIL.disk_bucket,
+            f"{CITY_COUNCIL.file_stub} {self.KEY}",
+        )
+        os.makedirs(folder, exist_ok=True)
+        for name in names:
+            open(os.path.join(folder, name), "wb").close()
+
+    def test_agenda_and_minutes_found_by_the_citys_file_names(self):
+        # Documents are saved under the city's own names, so the fixed label "Agenda"
+        # rarely exists; the agenda is any agenda-named file that isn't the packet or
+        # minutes, and ._ resource-fork files are ignored.
+        self._put(
+            "Agenda Packet.pdf",
+            "._CC_RegularSession_Agenda_06_02_2026.pdf",
+            "CC_RegularSession_Agenda_06_02_2026.pdf",
+            "CC_RegularSession_Minutes_06_02_2026.pdf",
+        )
+        with patch.object(document_store, "DOCUMENTS_DIR", self.tmpdir + os.sep):
+            agenda = document_store.find_agenda(CITY_COUNCIL, self.KEY)
+            minutes = document_store.find_minutes(CITY_COUNCIL, self.KEY)
+        self.assertTrue(agenda.endswith("CC_RegularSession_Agenda_06_02_2026.pdf"))
+        self.assertNotIn("._", os.path.basename(agenda))
+        self.assertTrue(minutes.endswith("CC_RegularSession_Minutes_06_02_2026.pdf"))
+
+    def test_exact_agenda_label_preferred_and_missing_is_none(self):
+        self._put("Agenda.pdf", "Special Agenda 061526_v2.pdf")
+        with patch.object(document_store, "DOCUMENTS_DIR", self.tmpdir + os.sep):
+            self.assertTrue(
+                document_store.find_agenda(CITY_COUNCIL, self.KEY).endswith(
+                    "Agenda.pdf"
+                )
+            )
+            self.assertIsNone(document_store.find_minutes(CITY_COUNCIL, self.KEY))
+            self.assertIsNone(
+                document_store.find_agenda(CITY_COUNCIL, "2000-01-01 07_00 PM")
+            )
+
+
 class TestMeetingsWithDocuments(unittest.TestCase):
     def test_yields_only_archivable_meetings_that_have_docs(self):
         details = {

@@ -78,6 +78,31 @@ def agenda_preamble(agenda_text: str) -> str:
     return agenda_text.strip()
 
 
+_ROLL_START_RE = re.compile(
+    r"^\s*(?:\d+\.\s*)?(?:CALL TO ORDER|ROLL CALL)", re.I | re.M
+)
+_NEXT_ITEM_RE = re.compile(r"^\s*\d+\.\s+\S", re.M)
+
+
+def minutes_roll_call(minutes_text: str, max_chars: int = 1500) -> str:
+    """The roll-call paragraph of a meeting's minutes — who was present (with
+    titles) and which staff attended — e.g. ``Committee members present: Vice Mayor
+    Wan and Mayor Trupiano. Staff present: City Manager, ...``. Unlike the agenda's
+    printed roster (reused template text whose titles can be stale), it records who
+    actually attended, so it is the better source for naming speakers. Returns ""
+    when the minutes have no such paragraph."""
+    start = _ROLL_START_RE.search(minutes_text)
+    if not start:
+        return ""
+    rest = minutes_text[start.start() :]
+    first_line_end = rest.find("\n")
+    end = (
+        _NEXT_ITEM_RE.search(rest, first_line_end + 1) if first_line_end >= 0 else None
+    )
+    block = " ".join((rest[: end.start()] if end else rest).split())
+    return block[:max_chars] if "present" in block.lower() else ""
+
+
 def parse_agenda_items(agenda_text: str) -> list[AgendaItem]:
     """Ordered top-level agenda items parsed from the agenda text.
 
