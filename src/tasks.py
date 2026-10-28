@@ -21,7 +21,6 @@ from src.publishers import PUBLISHERS, run_publisher
 from src.scrapers.cc_meetings import get_latest_downloaded_date, parse_meetings_from_url
 from src.scrapers.alerting import AlertLevel, alert
 from src.scrapers.constants import (
-    CIVIC_CLERK_START_DATE,
     CIVIC_CLERK_TZ,
     RECHECK_WINDOW_DAYS,
 )
@@ -29,6 +28,7 @@ from src.scrapers.errors import SiteStructureError, TransientScrapeError
 from src.scrapers.models import PipelineClass
 from src.settings import (
     KEYWORD_MODEL,
+    PIPELINE_START,
     SECTION_SUMMARY_MODEL,
     SEGMENTER_MODEL,
 )
@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 # Fallback scrape watermark for a meeting type with no downloads yet (a brand-new
 # type has no file to derive "latest downloaded" from). CivicClerk-era start.
-NEW_TYPE_SCRAPE_START = CIVIC_CLERK_START_DATE
+NEW_TYPE_SCRAPE_START = PIPELINE_START
 
 
 def _scrape_type_for_download(meeting_type: MeetingType) -> list[Meeting]:
@@ -69,9 +69,9 @@ def _scrape_type_for_download(meeting_type: MeetingType) -> list[Meeting]:
         days=RECHECK_WINDOW_DAYS
     )
     latest_date = min(latest_date, recheck_floor)
-    # The forward pipeline is post-cutover only; pre-cutover history is backfilled
-    # deliberately (TRA-169), never pulled by the hourly scrape. Clamping to the
-    # cutover also keeps a type whose watermark regressed below it — e.g. one that
+    # The forward pipeline starts at PIPELINE_START; earlier history is backfilled
+    # deliberately (TRA-169), never pulled by the hourly scrape. Clamping to
+    # PIPELINE_START also keeps a type whose watermark regressed below it — e.g. one that
     # gained older downloads from the date-only canonicalization (TRA-168) — on the
     # OData path instead of the retired Granicus (Selenium) workflow.
     latest_date = max(latest_date, NEW_TYPE_SCRAPE_START)

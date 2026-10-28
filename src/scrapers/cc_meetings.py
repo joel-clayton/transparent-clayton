@@ -26,6 +26,7 @@ from src.constants import (
     NO_ASSETS_KEY,
     WIKI_REFRESH_KEY,
 )
+from src.settings import PIPELINE_START
 from src.scrapers.constants import (
     CIVIC_CLERK_TZ,
     CIVIC_CLERK_URL,
@@ -42,7 +43,6 @@ from src.scrapers.constants import (
     SCRAPE_RETRY_DEADLINE,
     SCRAPE_RETRY_MAX_DELAY,
     SOURCE_URL,
-    CIVIC_CLERK_START_DATE,
 )
 from src.scrapers.alerting import AlertLevel, alert
 from src.scrapers.civic_clerk_api import (
@@ -708,19 +708,19 @@ def parse_meetings_from_url(
 ) -> list[Meeting]:
     # >= so a watermark exactly at the CivicClerk cutover uses the API, not
     # Granicus. This matters for a brand-new meeting type: its fallback watermark
-    # is NEW_TYPE_SCRAPE_START == CIVIC_CLERK_START_DATE, and such types have no
+    # is NEW_TYPE_SCRAPE_START == PIPELINE_START, and such types have no
     # Granicus history — routing them to the (Selenium) Granicus path would
     # scrape the wrong source and fail. Granicus is reached only for a watermark
     # strictly before the cutover (genuine pre-CivicClerk backfill).
-    if latest_date >= CIVIC_CLERK_START_DATE:
+    if latest_date >= PIPELINE_START:
         logger.info(
-            f"Latest date {latest_date} is on or after {CIVIC_CLERK_START_DATE}, "
+            f"Latest date {latest_date} is on or after {PIPELINE_START}, "
             "skipping Granicus workflow"
         )
         return parse_meetings_from_civic_clerk_iframe(latest_date, meeting_type)
     else:
         logger.info(
-            f"Latest date {latest_date} is before {CIVIC_CLERK_START_DATE}, using Granicus workflow"
+            f"Latest date {latest_date} is before {PIPELINE_START}, using Granicus workflow"
         )
         new_meetings: list[Meeting] = []
         driver = browser()

@@ -100,7 +100,7 @@ class TestProcessFloor(unittest.TestCase):
     def test_default_floor_skips_pre_earliest(self):
         proc = self._proc(["2010-01-01", "2026-06-01"])
         with patch("src.processors.process.r"):
-            proc.process()  # default floor == EARLIEST (2026-03-01)
+            proc.process()  # default floor == EARLIEST (PIPELINE_START, 2025-06-01)
         self.assertEqual(self.processed, ["2026-06-01"])
 
     def test_lower_floor_reaches_history_and_sets_instance_floor(self):

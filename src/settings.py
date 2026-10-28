@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 
 
 # --- optional .env ----------------------------------------------------------
@@ -28,6 +29,17 @@ def _load_dotenv() -> None:
 
 
 _load_dotenv()
+
+
+# --- pipeline boundary -------------------------------------------------------
+# The single date dividing the live pipeline from the history backfill. The hourly
+# scrape and every processor's default floor handle meetings ON OR AFTER it; the
+# backfill (scripts/backfill_history.py) handles everything BEFORE it, so no meeting
+# is claimed by both or by neither. Move it earlier to hand more history to the live
+# pipeline (it will download/upload/transcribe those meetings on its own, spending
+# YouTube quota and transcription credits); move it later to backfill more. Set
+# PIPELINE_START (ISO date, e.g. 2025-06-01) to override.
+PIPELINE_START = datetime.fromisoformat(os.environ.get("PIPELINE_START", "2025-06-01"))
 
 
 # --- on-disk asset store -----------------------------------------------------

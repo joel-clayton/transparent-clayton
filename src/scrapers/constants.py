@@ -1,5 +1,4 @@
 import os
-from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -49,7 +48,6 @@ COMPRESSION_OPTIONS = "-c:v libx265 -vtag hvc1"
 COMPRESSION_PATTERN = "City of Clayton"
 
 DEFAULT_ONE_WEEK_SECONDS_EXPIRATION = 60 * 60 * 24 * 7
-CIVIC_CLERK_START_DATE = datetime(2026, 5, 10)
 # Always re-scrape at least this many days back, even when the download watermark
 # is more recent, so a meeting whose assets are posted late (after a newer
 # meeting's video advanced the watermark past it) is still reconciled.
