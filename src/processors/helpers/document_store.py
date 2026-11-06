@@ -155,6 +155,11 @@ def find_agenda(meeting_type: MeetingType, meeting_key: str) -> str | None:
     )
 
 
+def find_packet(meeting_type: MeetingType, meeting_key: str) -> str | None:
+    """The meeting's agenda packet on disk (saved under the label ``Agenda Packet``)."""
+    return find_document(meeting_type, meeting_key, "Agenda Packet")
+
+
 def find_minutes(meeting_type: MeetingType, meeting_key: str) -> str | None:
     """The meeting's minutes on disk (city file name, e.g. ``BAC_RegularSession_
     Minutes_02_10_2025``), if posted."""

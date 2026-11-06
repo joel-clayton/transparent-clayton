@@ -31,6 +31,7 @@ worker would otherwise start acting on. Audit is read-only.
     python scripts/backfill_history.py --stage video --type pc_mtg --year 2019 --execute
     python scripts/backfill_history.py --stage wiki --type bac_mtg --execute  # render to wiki
     python scripts/backfill_history.py --stage summaries --execute            # summarize all
+    python scripts/backfill_history.py --stage summaries --type bac_mtg --key "2024-07-10 04_00 PM" --execute
 """
 
 from __future__ import annotations
@@ -137,6 +138,22 @@ def _ingest_window(meeting_type: Any, start: datetime, end: datetime) -> list[An
     return parse_meetings_from_civic_clerk_iframe(start, meeting_type, end=end)
 
 
+def _only(processor: Any, key: str | None) -> Any:
+    """Restrict a processor to a single meeting key (no-op when ``key`` is None).
+
+    The stages decide what to do from ``get_most_recent_missing_dates``, so filtering
+    that to one key scopes the run without touching each processor's loop; the wiki
+    refresh step reads ``only_keys`` so it won't clear other flagged meetings."""
+    if key is None:
+        return processor
+    original = processor.get_most_recent_missing_dates
+    processor.get_most_recent_missing_dates = lambda: [
+        d for d in original() if d == key
+    ]
+    processor.only_keys = {key}
+    return processor
+
+
 def _run_docs(source_type: Any, meeting_type: Any) -> None:
     DocumentDownloader(meeting_type).process()
     DocumentUploader(meeting_type).process()
@@ -145,7 +162,7 @@ def _run_docs(source_type: Any, meeting_type: Any) -> None:
     WikiUpdater(source_type).process(BACKFILL_FLOOR)
 
 
-def _run_wiki(source_type: Any, from_year: int) -> None:
+def _run_wiki(source_type: Any, from_year: int, key: str | None = None) -> None:
     """Render existing on-disk / Redis assets to the wiki only — no document
     download, no A/V, and (crucially) no OData ingest. It renders from the detail a
     prior --stage docs/video run already persisted, so WikiUpdater reads the archived
@@ -156,10 +173,12 @@ def _run_wiki(source_type: Any, from_year: int) -> None:
     the sole scope, matching the tally). Idempotent: adds missing year-page entries,
     leaves existing ones. (If a meeting's detail/links are no longer in Redis, run
     --stage docs first to restore them.)"""
-    WikiUpdater(source_type).process(max(BACKFILL_FLOOR, datetime(from_year, 1, 1)))
+    _only(WikiUpdater(source_type), key).process(
+        max(BACKFILL_FLOOR, datetime(from_year, 1, 1))
+    )
 
 
-def _run_summaries(source_type: Any, from_year: int) -> None:
+def _run_summaries(source_type: Any, from_year: int, key: str | None = None) -> None:
     """Summarize every transcribed meeting that has no summary yet, then render the
     new summaries to the wiki. Disk-driven (the section engine reads the transcript +
     documents from disk), so no OData ingest and no A/V. RagIndexer is idempotent
@@ -167,12 +186,14 @@ def _run_summaries(source_type: Any, from_year: int) -> None:
     WikiUpdater then re-renders each newly-summarized meeting (the TRA-178 refresh
     flag). ``--from-year`` scopes which meetings are summarized; the processors floor
     only, so --to-year/--year don't bound it."""
-    RagIndexer(source_type).process(max(BACKFILL_FLOOR, datetime(from_year, 1, 1)))
+    _only(RagIndexer(source_type), key).process(
+        max(BACKFILL_FLOOR, datetime(from_year, 1, 1))
+    )
     # WikiUpdater must floor at BACKFILL_FLOOR, not from_year: its
     # _refresh_upgraded_meetings strips every refresh-flagged meeting's entry before
     # the floored re-render, so a higher floor would drop any flagged meeting dated
     # below from_year with no re-add (same guard _run_docs/_run_video apply).
-    WikiUpdater(source_type).process(BACKFILL_FLOOR)
+    _only(WikiUpdater(source_type), key).process(BACKFILL_FLOOR)
 
 
 def _detail_meetings_in_range(meeting_type: Any, from_year: int) -> list[dict]:
@@ -253,6 +274,12 @@ def main() -> None:
     )
     parser.add_argument("--type", dest="type_key", default=None, help="one type key")
     parser.add_argument("--year", type=int, default=None, help="a single year")
+    parser.add_argument(
+        "--key",
+        default=None,
+        help='one meeting key, e.g. "2024-07-10 04_00 PM" (needs --type; '
+        "--stage summaries or wiki only)",
+    )
     parser.add_argument("--from-year", type=int, default=2002)
     parser.add_argument("--to-year", type=int, default=CUTOVER.year)
     parser.add_argument(
@@ -271,12 +298,12 @@ def main() -> None:
     ]
     if not selected:
         parser.error(f"no meeting type matches --type {args.type_key!r}")
+    if args.key and (not args.type_key or args.stage not in ("summaries", "wiki")):
+        parser.error("--key needs --type and --stage summaries or wiki")
 
     mode = "EXECUTE (writes; run with worker stopped)" if args.execute else "AUDIT"
-    print(
-        f"History backfill — stage: {args.stage}  years: {from_year}-{to_year}  "
-        f"mode: {mode}"
-    )
+    scope = f"meeting: {args.key}" if args.key else f"years: {from_year}-{to_year}"
+    print(f"History backfill — stage: {args.stage}  {scope}  mode: {mode}")
     windows = _year_windows(from_year, to_year)
     totals: dict[str, int] = defaultdict(int)
     tally: dict[str, dict[str, int]] = {
@@ -290,6 +317,8 @@ def main() -> None:
         # audit vs execute differ only in whether the render actually runs.
         for source_type, meeting_type in selected:
             for detail in _detail_meetings_in_range(meeting_type, from_year):
+                if args.key and detail.get("key") != args.key:
+                    continue
                 kind = (
                     "video"
                     if detail.get("pipeline_class") == PipelineClass.FULL.value
@@ -297,7 +326,7 @@ def main() -> None:
                 )
                 tally[meeting_type.display_name][kind] += 1
             if args.execute:
-                _run_wiki(source_type, from_year)
+                _run_wiki(source_type, from_year, args.key)
     elif args.stage == "summaries":
         # Disk-driven: summarize transcribed meetings that have no summary yet, then
         # render to the wiki. No OData ingest, no A/V. The tally is the exact
@@ -308,11 +337,11 @@ def main() -> None:
             missing = [
                 d
                 for d in RagIndexer(source_type).get_most_recent_missing_dates()
-                if int(d[:4]) >= floor_year
+                if int(d[:4]) >= floor_year and (not args.key or d == args.key)
             ]
             tally[meeting_type.display_name]["summaries"] = len(missing)
             if args.execute:
-                _run_summaries(source_type, from_year)
+                _run_summaries(source_type, from_year, args.key)
     elif args.execute:
         # Ingest (persist detail) per type via the live-scrape path, then run that
         # type's stages. Workers must be stopped (this writes shared Redis detail).

@@ -623,6 +623,16 @@ class WikiUpdater(Processor):
         """
         refresh_key = self.meeting_type.redis_key(WIKI_REFRESH_KEY)
         members = list(r.smembers(refresh_key) or set())
+        # A single-meeting run (backfill --key) sets ``only_keys``: refresh just that
+        # meeting and leave other flagged ones for their own pass — clearing them here
+        # would strip their entries without re-adding them.
+        only = getattr(self, "only_keys", None)
+        if only is not None:
+            members = [
+                m
+                for m in members
+                if (m.decode("utf-8") if isinstance(m, bytes) else m) in only
+            ]
         keys = [m.decode("utf-8") if isinstance(m, bytes) else m for m in members]
         by_year: dict[str, list[str]] = {}
         for key in keys:
