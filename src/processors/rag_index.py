@@ -25,11 +25,16 @@ from src.constants import LEGACY_SUMMARY_KEY, SUMMARIZED_KEY, WIKI_REFRESH_KEY
 from src.processors.constants import EARLIEST
 from src.processors.helpers.agenda_items import (
     AgendaItem,
+    agenda_from_packet,
     agenda_preamble,
     minutes_roll_call,
     parse_agenda_items,
 )
-from src.processors.helpers.document_store import find_agenda, find_minutes
+from src.processors.helpers.document_store import (
+    find_agenda,
+    find_minutes,
+    find_packet,
+)
 from src.processors.helpers.embeddings import embed_document
 from src.processors.helpers.ollama_client import model_digest
 from src.processors.helpers.pdf_text import pdf_to_text
@@ -270,6 +275,15 @@ class RagIndexer(Processor):
             for i, chunk in enumerate(chunks, start=1)
         ]
 
+    def _agenda_text(self, date: str) -> str:
+        """The meeting's agenda text: its own agenda file, else (older meetings
+        archived only as a packet) the agenda leading the agenda packet."""
+        agenda_path = find_agenda(self.meeting_type, date)
+        if agenda_path:
+            return pdf_to_text(agenda_path)
+        packet_path = find_packet(self.meeting_type, date)
+        return agenda_from_packet(pdf_to_text(packet_path)) if packet_path else ""
+
     def process_for_date(self, date: str) -> None:
         transcript_path = self.construct_filepath_for_date(date, self.input_job_type)
         with open(transcript_path, encoding="utf-8") as handle:
@@ -282,8 +296,7 @@ class RagIndexer(Processor):
         # written and the whole meeting retries). See _mark_for_wiki_refresh.
         self._mark_for_wiki_refresh(date)
 
-        agenda_path = find_agenda(self.meeting_type, date)
-        agenda_text = pdf_to_text(agenda_path) if agenda_path else ""
+        agenda_text = self._agenda_text(date)
         items = parse_agenda_items(agenda_text)
 
         self.logger.info("Indexing %s (%d agenda items)", date, len(items))

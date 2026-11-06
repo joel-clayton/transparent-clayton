@@ -130,6 +130,12 @@ class TestFindAgendaAndMinutes(TempDirTestCase):
         self.assertNotIn("._", os.path.basename(agenda))
         self.assertTrue(minutes.endswith("CC_RegularSession_Minutes_06_02_2026.pdf"))
 
+    def test_find_packet_by_its_label(self):
+        self._put("Agenda Packet.pdf", "CC_RegularSession_Agenda_06_02_2026.pdf")
+        with patch.object(document_store, "DOCUMENTS_DIR", self.tmpdir + os.sep):
+            packet = document_store.find_packet(CITY_COUNCIL, self.KEY)
+        self.assertTrue(packet.endswith("Agenda Packet.pdf"))
+
     def test_exact_agenda_label_preferred_and_missing_is_none(self):
         self._put("Agenda.pdf", "Special Agenda 061526_v2.pdf")
         with patch.object(document_store, "DOCUMENTS_DIR", self.tmpdir + os.sep):

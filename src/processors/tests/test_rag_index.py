@@ -82,6 +82,7 @@ class TestNoAgendaFallback(unittest.TestCase):
 
         with (
             patch.object(rag_index, "find_agenda", return_value=None),
+            patch.object(rag_index, "find_packet", return_value=None),
             patch.object(rag_index, "find_minutes", return_value=None),
             patch.object(rag_index, "segment_meeting") as seg,
             patch.object(
@@ -177,6 +178,24 @@ class TestAllUnreachedFallback(unittest.TestCase):
         content = open(md, encoding="utf-8").read()
         self.assertIn("REAL CONTENT", content)
         self.assertNotIn("not taken up", content.lower())
+
+
+class TestAgendaTextFallback(unittest.TestCase):
+    def _text(self, agenda, packet):
+        idx = RagIndexer(SourceType.CITY_COUNCIL_MEETING)
+        texts = {"/agenda.pdf": "OWN AGENDA", "/packet.pdf": "1. CALL TO ORDER\nrest"}
+        with (
+            patch.object(rag_index, "find_agenda", return_value=agenda),
+            patch.object(rag_index, "find_packet", return_value=packet),
+            patch.object(rag_index, "pdf_to_text", side_effect=texts.__getitem__),
+        ):
+            return idx._agenda_text("2018-08-21 07_00 PM")
+
+    def test_prefers_the_agenda_file_then_the_packet_then_nothing(self):
+        self.assertEqual(self._text("/agenda.pdf", "/packet.pdf"), "OWN AGENDA")
+        # no separate agenda (older meetings): the agenda leading the packet is used
+        self.assertIn("CALL TO ORDER", self._text(None, "/packet.pdf"))
+        self.assertEqual(self._text(None, None), "")
 
 
 class TestMinutesRosterContext(unittest.TestCase):

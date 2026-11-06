@@ -334,5 +334,44 @@ class TestHumanizeMeetingKey(unittest.TestCase):
                 self.assertEqual(_humanize_meeting_key(key), expected)
 
 
+class TestRefreshHonorsOnlyKeys(unittest.TestCase):
+    PAGE = "== August 18, 2026 ==\n{| a |}\n\n== July 28, 2026 ==\n{| b |}\n"
+
+    def _updater(self, only_keys):
+        updater = WikiUpdater.__new__(WikiUpdater)
+        updater.meeting_type = CITY_COUNCIL
+        updater.site = MagicMock()
+        updater.logger = MagicMock()
+        if only_keys is not None:
+            updater.only_keys = only_keys
+        return updater
+
+    def _refresh(self, updater):
+        page = MagicMock(text=self.PAGE)
+        page.exists.return_value = True
+        redis = MagicMock()
+        redis.smembers.return_value = {b"2026-08-18 07_00 PM", b"2026-07-28 07_00 PM"}
+        with (
+            patch("src.processors.update_wiki.r", redis),
+            patch("src.processors.update_wiki.pywikibot.Page", return_value=page),
+        ):
+            updater._refresh_upgraded_meetings()
+        return page, redis
+
+    def test_single_meeting_run_clears_only_that_meeting(self):
+        # A single-meeting run must not strip other flagged meetings (they would not
+        # be re-added): only the named entry is removed and un-flagged.
+        page, redis = self._refresh(self._updater({"2026-08-18 07_00 PM"}))
+        self.assertNotIn("August 18, 2026", page.text)
+        self.assertIn("July 28, 2026", page.text)
+        self.assertEqual(redis.srem.call_args.args[1:], (b"2026-08-18 07_00 PM",))
+
+    def test_normal_run_clears_every_flagged_meeting(self):
+        page, redis = self._refresh(self._updater(None))
+        self.assertNotIn("August 18, 2026", page.text)
+        self.assertNotIn("July 28, 2026", page.text)
+        self.assertEqual(len(redis.srem.call_args.args) - 1, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

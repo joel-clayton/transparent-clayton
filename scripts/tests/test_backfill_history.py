@@ -90,6 +90,77 @@ class TestRunSummaries(unittest.TestCase):
         run_wiki.assert_not_called()
 
 
+class TestSingleMeetingKey(unittest.TestCase):
+    KEY = "2024-07-10 04_00 PM"
+
+    def test_only_restricts_missing_dates_to_the_key_and_sets_only_keys(self):
+        proc = mock.Mock()
+        proc.get_most_recent_missing_dates.return_value = [
+            self.KEY,
+            "2024-08-12 04_00 PM",
+        ]
+        bf._only(proc, self.KEY)
+        self.assertEqual(proc.get_most_recent_missing_dates(), [self.KEY])
+        self.assertEqual(proc.only_keys, {self.KEY})
+
+    def test_only_is_a_no_op_without_a_key(self):
+        proc = mock.Mock()
+        original = proc.get_most_recent_missing_dates
+        self.assertIs(bf._only(proc, None), proc)
+        self.assertIs(proc.get_most_recent_missing_dates, original)
+
+    def test_summaries_restricts_both_the_summarizer_and_the_wiki_step(self):
+        with (
+            mock.patch.object(bf, "RagIndexer") as rag,
+            mock.patch.object(bf, "WikiUpdater") as wiki,
+        ):
+            rag.return_value.get_most_recent_missing_dates.return_value = [
+                self.KEY,
+                "2024-08-12 04_00 PM",
+            ]
+            bf._run_summaries("src", 2002, self.KEY)
+        self.assertEqual(rag.return_value.only_keys, {self.KEY})
+        self.assertEqual(wiki.return_value.only_keys, {self.KEY})
+
+    def test_key_requires_type_and_a_disk_driven_stage(self):
+        for argv in (
+            ["--stage", "summaries", "--key", self.KEY],  # no --type
+            ["--stage", "docs", "--type", "bac_mtg", "--key", self.KEY],  # ingesting
+        ):
+            with (
+                self.subTest(argv=argv),
+                mock.patch.object(sys, "argv", ["backfill_history.py", *argv]),
+                self.assertRaises(SystemExit),
+            ):
+                bf.main()
+
+    def test_audit_counts_only_the_key(self):
+        argv = [
+            "backfill_history.py",
+            "--stage",
+            "summaries",
+            "--type",
+            "bac_mtg",
+            "--key",
+            self.KEY,
+        ]
+        fake_idx = mock.Mock()
+        fake_idx.get_most_recent_missing_dates.return_value = [
+            self.KEY,
+            "2024-08-12 04_00 PM",
+        ]
+        with (
+            mock.patch.object(sys, "argv", argv),
+            mock.patch.object(bf, "RagIndexer", return_value=fake_idx),
+            mock.patch.object(bf, "_run_summaries") as run_summaries,
+            mock.patch("builtins.print") as out,
+        ):
+            bf.main()
+        run_summaries.assert_not_called()  # audit only
+        printed = " ".join(str(c.args[0]) for c in out.call_args_list if c.args)
+        self.assertIn("to summarize=   1", printed)
+
+
 class TestYearWindows(unittest.TestCase):
     def test_windows_are_per_year_and_clamped_to_cutover(self):
         windows = bf._year_windows(2024, bf.CUTOVER.year)

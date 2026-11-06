@@ -1,6 +1,8 @@
 import unittest
 
 from src.processors.helpers.agenda_items import (
+    agenda_from_packet,
+    agenda_preamble,
     is_procedural,
     minutes_roll_call,
     parse_agenda_items,
@@ -64,6 +66,94 @@ class TestParseAgendaItems(unittest.TestCase):
     def test_lowercase_title_line_is_not_an_item(self):
         # Prose lines that happen to start "N." (mixed case) are not top-level items.
         self.assertEqual(parse_agenda_items("1. this is a sentence, not a header"), [])
+
+
+MIXED_CASE_AGENDA = """BUDGET AND AUDIT COMMITTEE
+REGULAR MEETING AGENDA
+Committee Members
+Kim Trupiano, Vice Mayor Jeff Wan, Councilember
+1. Call to Order and Roll Call
+2. UBS Financial Services (Interim City Manager)
+a. Discuss City\u2019s investments
+3. Review and provide feedback on proposed Scope of Work prior to the
+preparation of the Request for Proposal (RFP) for Right of Way Landscape
+Maintenance (City Engineer)
+(View)
+4. Future topics (Financial Advisor)
+a. Potential spend down of reserves:
+5. ADJOURNMENT
+Please visit www.claytonca.gov for information on the next meeting.
+STAFF REPORT
+1. Options considered by staff were reviewed.
+2. The committee may adopt the proposed scope.
+"""
+
+
+class TestMixedCaseAgenda(unittest.TestCase):
+    """Some agendas print every heading in Title/sentence case (only Adjournment in
+    caps); the strict all-caps pattern then found just Adjournment."""
+
+    def test_parses_sequential_mixed_case_items_and_stops_at_adjournment(self):
+        items = parse_agenda_items(MIXED_CASE_AGENDA)
+        self.assertEqual([i.number for i in items], [1, 2, 3, 4, 5])
+        self.assertEqual(
+            items[1].title, "UBS Financial Services (Interim City Manager)"
+        )
+        # A heading the PDF wrapped across lines is joined into one title.
+        self.assertTrue(
+            items[2].title.startswith("Review and provide feedback on proposed")
+        )
+        self.assertTrue(items[2].title.endswith("Maintenance (City Engineer)"))
+        # The list ends at Adjournment: the staff report's own numbered lines that
+        # follow it never become items.
+        self.assertEqual(items[-1].number, 5)
+        self.assertEqual(items[-1].title, "Adjournment")
+        self.assertTrue(items[-1].procedural)
+        self.assertTrue(items[0].procedural)
+        self.assertEqual(items[1].body, "a. Discuss City\u2019s investments")
+
+    def test_preamble_stops_before_the_first_mixed_case_item(self):
+        self.assertTrue(agenda_preamble(MIXED_CASE_AGENDA).endswith("Councilember"))
+
+    def test_all_caps_agenda_ignores_mixed_case_numbered_prose(self):
+        text = AGENDA + "\n1. A numbered sentence in some staff report.\n"
+        self.assertEqual(
+            [i.number for i in parse_agenda_items(text)],
+            [i.number for i in parse_agenda_items(AGENDA)],
+        )
+
+
+PACKET = """CITY COUNCIL AGENDA
+August 21, 2018
+1. CALL TO ORDER AND ROLL CALL \u2013 Mayor Haydon.
+2. PLEDGE OF ALLEGIANCE \u2013 led by Mayor Haydon.
+3. CONSENT CALENDAR
+10. CLOSED SESSION
+1. Real Properties: 1005 and 1007 Oak Street, Clayton, CA
+11. ADJOURNMENT - the City Council meeting of September 4, 2018 was canceled.
+STAFF REPORT
+12. HEADING IN A REPORT
+"""
+
+
+class TestAgendaFromPacket(unittest.TestCase):
+    """Older meetings are archived only as an agenda packet: the agenda leads it and
+    staff reports follow, so the text is cut after the Adjournment item."""
+
+    def test_cuts_after_adjournment_and_reads_items_with_trailing_prose(self):
+        agenda = agenda_from_packet(PACKET)
+        self.assertNotIn("STAFF REPORT", agenda)
+        items = parse_agenda_items(agenda)
+        # items 1-2 carry "\u2013 Mayor Haydon." and the adjournment line carries prose
+        self.assertEqual([i.number for i in items], [1, 2, 3, 10, 11])
+        self.assertEqual(items[0].title, "Call to Order and Roll Call")
+        self.assertTrue(items[0].procedural)
+        self.assertEqual(items[-1].title, "Adjournment")
+
+    def test_without_an_adjournment_line_only_the_leading_text_is_used(self):
+        text = "1. CALL TO ORDER\n" + "filler line\n" * 5000
+        self.assertEqual(len(agenda_from_packet(text)), 15000)
+        self.assertEqual(agenda_from_packet("short"), "short")
 
 
 class TestMinutesRollCall(unittest.TestCase):
