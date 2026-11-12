@@ -394,14 +394,15 @@ class VideoUploader(Processor):
             dt = datetime.strptime(date_str, DATE_FORMAT)
             output_title = dt.strftime(self.meeting_type.video_title_date_format)
 
-        # convert part number to title part number if necessary
+        # convert part number to title part number if necessary. A single-file
+        # video has no ``NNN.`` segment marker, so default to no suffix (otherwise
+        # part_str is unbound and the title lookup raises for every such meeting).
+        part_str = ""
         part_match = re.search(r"[0-9]{3}\.", filename)
         if part_match:
             part_num = int(part_match.group(0).replace(".", ""))
             if part_num > 0:
                 part_str = f" part {part_num + 1}"
-            else:
-                part_str = ""
         return output_title + part_str
 
     def gather_output_dates(self) -> List:

@@ -156,6 +156,14 @@ class TestGetOutputTitleFromInput(unittest.TestCase):
         )
         self.assertEqual(title, "Clayton CA City Council Meeting 2026-05-08 part 3")
 
+    def test_single_file_without_part_marker_has_no_suffix(self):
+        # A single-file video (no ``NNN.`` segment marker) must not raise; it
+        # previously left part_str unbound and failed the upload for the meeting.
+        title = self.uploader.get_output_title_from_input(
+            "/path/Clayton CA City Council Meeting 2025-06-03 07_00 PM.mp4"
+        )
+        self.assertEqual(title, "Clayton CA City Council Meeting 2025-06-03 07:00 PM")
+
 
 class TestVideoUploaderGatherDates(TempDirTestCase):
     def setUp(self):
