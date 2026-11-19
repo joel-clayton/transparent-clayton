@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from typing import List
 
 from celery_app import r
-from src.constants import LEGACY_SUMMARY_KEY, SUMMARIZED_KEY, WIKI_REFRESH_KEY
+from src.constants import ENRICHED_KEY, LEGACY_SUMMARY_KEY, SUMMARIZED_KEY
 from src.processors.constants import EARLIEST
 from src.processors.helpers.agenda_items import (
     AgendaItem,
@@ -80,6 +80,32 @@ _SEED = 42
 FALLBACK_WINDOW_TOKENS = 8000
 
 
+def scan_summaries(meeting_type) -> tuple[set[str], set[str]]:  # type: ignore[no-untyped-def]
+    """Scan a type's summaries bucket once, returning ``(indexed, legacy)`` date sets:
+    ``indexed`` = dates with a ``sections.json`` (produced by this stage); ``legacy``
+    = dates with a ``.md``/``.txt`` summary but no ``sections.json`` (a pre-existing/
+    older summary this stage must not overwrite).
+
+    Module-level so the downstream enrich stage can discover the same "has a
+    publishable summary" worklist without importing the indexer's instance state.
+    """
+    indexed: set[str] = set()
+    summaries: set[str] = set()
+    stub = meeting_type.file_stub
+    for full in iter_stage_files(SUMMARIES_DIR, meeting_type.disk_bucket):
+        name = os.path.basename(full)
+        if stub not in name:
+            continue
+        key = get_datetime_string_from_string(name)
+        if not key:
+            continue
+        if name.endswith(SECTIONS_SUFFIX):
+            indexed.add(key)
+        elif name.endswith(_SUMMARY_EXTS):
+            summaries.add(key)
+    return indexed, summaries - indexed
+
+
 class RagIndexer(Processor):
     def __init__(
         self, source_type: SourceType = SourceType.CITY_COUNCIL_MEETING
@@ -96,26 +122,8 @@ class RagIndexer(Processor):
         return self.gather_dates(TRANSCRIBED_DIR)
 
     def _scan_summaries(self) -> tuple[set[str], set[str]]:
-        """Scan the summaries bucket once, returning ``(indexed, legacy)`` date sets:
-        ``indexed`` = dates with a ``sections.json`` (produced by this stage);
-        ``legacy`` = dates with a ``.md``/``.txt`` summary but no ``sections.json``
-        (a pre-existing/older summary this stage must not overwrite)."""
-        indexed: set[str] = set()
-        summaries: set[str] = set()
-        bucket = self.meeting_type.disk_bucket
-        stub = self.meeting_type.file_stub
-        for full in iter_stage_files(SUMMARIES_DIR, bucket):
-            name = os.path.basename(full)
-            if stub not in name:
-                continue
-            key = get_datetime_string_from_string(name)
-            if not key:
-                continue
-            if name.endswith(SECTIONS_SUFFIX):
-                indexed.add(key)
-            elif name.endswith(_SUMMARY_EXTS):
-                summaries.add(key)
-        return indexed, summaries - indexed
+        """``(indexed, legacy)`` date sets for this type (see :func:`scan_summaries`)."""
+        return scan_summaries(self.meeting_type)
 
     def gather_output_dates(self) -> List:
         indexed, legacy = self._scan_summaries()
@@ -153,22 +161,23 @@ class RagIndexer(Processor):
             ]
             if rows:
                 self._atomic_write(md_path, self._assemble_markdown(rows))
-                self._mark_for_wiki_refresh(date)
+                self._invalidate_enrichment(date)
                 self.logger.info("Rebuilt missing .md for %s from sections.json", date)
 
-    def _mark_for_wiki_refresh(self, date: str) -> None:
-        """Flag a meeting for wiki re-render when its summary is (re)generated.
+    def _invalidate_enrichment(self, date: str) -> None:
+        """Mark a (re)generated summary as needing re-enrichment, which is what now
+        drives the wiki re-render.
 
         The wiki fills its AI-summary section from the on-disk ``.md`` (else ``TBD``)
         and only re-renders an *existing* page entry when WIKI_REFRESH_KEY is set.
-        Without this flag, a meeting whose entry was published before its summary
-        existed (e.g. a summarize failure on the first run) would stay ``TBD``
-        forever. Called before the summary is written (so the flag can't be lost
-        after a successful write) and on a heal; it is a no-op for a meeting not yet
-        on the page (the normal single-run cascade), and summarize is idempotent, so
-        the flag is set only when a summary is actually (re)generated — no per-run
-        churn (TRA-178)."""
-        r.sadd(self.meeting_type.redis_key(WIKI_REFRESH_KEY), date)
+        That flag now belongs to the enrich stage (see src/processors/enrich.py), not
+        here: the summary stage produces the canonical content and signals downstream
+        by dropping this date from the ENRICHED ledger, so the enrich stage treats it
+        as missing, regenerates the publishable artifact, and flags the wiki. Called
+        before the summary is written (so the signal can't be lost after a successful
+        write) and on a heal; summarize is idempotent, so this fires only when a
+        summary is actually (re)generated — no per-run churn (TRA-178)."""
+        r.hdel(self.meeting_type.redis_key(ENRICHED_KEY), date)
 
     def process(self, floor: datetime = EARLIEST) -> None:
         self._record_legacy_summaries()
@@ -291,10 +300,11 @@ class RagIndexer(Processor):
         utterances = parse_utterances(transcript)
         if not utterances:
             raise Exception(f"No parseable transcript utterances for {date}")
-        # Flag the wiki to re-render this meeting BEFORE writing the summary, so the
-        # flag can never be lost after a successful write (if this fails nothing is
-        # written and the whole meeting retries). See _mark_for_wiki_refresh.
-        self._mark_for_wiki_refresh(date)
+        # Signal re-enrichment BEFORE writing the summary, so the signal can never be
+        # lost after a successful write (if this fails nothing is written and the whole
+        # meeting retries). The enrich stage, not this one, flags the wiki. See
+        # _invalidate_enrichment.
+        self._invalidate_enrichment(date)
 
         agenda_text = self._agenda_text(date)
         items = parse_agenda_items(agenda_text)

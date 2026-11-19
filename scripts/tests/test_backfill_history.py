@@ -48,12 +48,17 @@ class TestRunSummaries(unittest.TestCase):
     def test_summarizes_at_from_year_renders_wiki_at_backfill_floor(self):
         with (
             mock.patch.object(bf, "RagIndexer") as rag,
+            mock.patch.object(bf, "Enricher") as enrich,
             mock.patch.object(bf, "WikiUpdater") as wiki,
             mock.patch.object(bf, "DocumentDownloader") as dl,
         ):
             bf._run_summaries("src", 2019)
         rag.assert_called_once_with("src")
         rag.return_value.process.assert_called_once_with(datetime(2019, 1, 1))
+        # Enricher runs between summarize and the wiki, at the same floor as the
+        # summarizer (it only acts on what was just (re)summarized).
+        enrich.assert_called_once_with("src")
+        enrich.return_value.process.assert_called_once_with(datetime(2019, 1, 1))
         wiki.assert_called_once_with("src")
         # WikiUpdater floors at BACKFILL_FLOOR (not from_year) so refresh-flagged
         # pre-from_year meetings aren't stripped-without-re-add.
@@ -112,14 +117,18 @@ class TestSingleMeetingKey(unittest.TestCase):
     def test_summaries_restricts_both_the_summarizer_and_the_wiki_step(self):
         with (
             mock.patch.object(bf, "RagIndexer") as rag,
+            mock.patch.object(bf, "Enricher") as enrich,
             mock.patch.object(bf, "WikiUpdater") as wiki,
         ):
-            rag.return_value.get_most_recent_missing_dates.return_value = [
-                self.KEY,
-                "2024-08-12 04_00 PM",
-            ]
+            for proc in (rag, enrich, wiki):
+                proc.return_value.get_most_recent_missing_dates.return_value = [
+                    self.KEY,
+                    "2024-08-12 04_00 PM",
+                ]
             bf._run_summaries("src", 2002, self.KEY)
+        # the key scopes every stage: summarize, enrich, and the wiki refresh
         self.assertEqual(rag.return_value.only_keys, {self.KEY})
+        self.assertEqual(enrich.return_value.only_keys, {self.KEY})
         self.assertEqual(wiki.return_value.only_keys, {self.KEY})
 
     def test_key_requires_type_and_a_disk_driven_stage(self):
