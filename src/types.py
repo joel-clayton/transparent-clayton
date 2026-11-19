@@ -71,6 +71,11 @@ class JobType(Enum):
     UPLOAD_VIDEO = 7
     UPDATE_WIKI = 8
     SUMMARIZE = 9
+    # Enrich a generated summary into the wiki's publishable artifact (section deep
+    # links). Runs after SUMMARIZE, before UPDATE_WIKI. No distinct file output — it
+    # augments the summary's own .md in place — so it has no job_paths/file-template
+    # entry; its idempotency ledger is ENRICHED_KEY. See src/processors/enrich.py.
+    ENRICH = 10
 
 
 job_paths = {

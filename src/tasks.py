@@ -15,6 +15,7 @@ from src.processors.download import Downloader
 from src.processors.download_docs import DocumentDownloader
 from src.processors.extract import Extractor
 from src.processors.helpers.ollama_client import unload
+from src.processors.enrich import Enricher
 from src.processors.rag_index import RagIndexer
 from src.processors.transcribe import Transcriber
 from src.publishers import PUBLISHERS, run_publisher
@@ -196,6 +197,17 @@ def summarize_cc_meeting() -> None:
 
 
 @app.task
+def enrich_cc_meeting() -> None:
+    # Turn each generated summary into the wiki's publishable artifact and own the
+    # wiki-refresh trigger (decoupling summary generation from publishing). Currently
+    # a pass-through over the summary's .md; section deep links land here later.
+    # Always-on local stage, like summarize — it degrades to a no-op flag when a
+    # meeting has nothing extra to link.
+    for source_type in MEETING_TYPE_BY_SOURCE:
+        Enricher(source_type).process()
+
+
+@app.task
 def update_cc_mtg_wiki() -> None:
     run_publisher("update_wiki")
 
@@ -242,6 +254,10 @@ _STAGES: list[tuple[Any, str | None]] = [
     # Summarize after the transcript and documents are in place, before the wiki
     # renders (it embeds the summary). Always-on local stage, like transcribe.
     (summarize_cc_meeting, None),
+    # Enrich the summary into the wiki's publishable artifact (section deep links)
+    # and flag the wiki — the trigger the summary stage used to set. Between
+    # summarize and the wiki; always-on, degrades to a pass-through flag.
+    (enrich_cc_meeting, None),
     (update_cc_mtg_wiki, "update_wiki"),
     (notify_success, None),
 ]
