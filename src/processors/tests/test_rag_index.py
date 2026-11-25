@@ -41,10 +41,10 @@ class TestHealMissingMarkdown(unittest.TestCase):
         self.assertIn("## Item 5: Recognitions", content)
         self.assertIn("A presentation happened.", content)
         self.assertIn("**Keywords:** kw1", content)
-        # a rebuilt .md flags the meeting so the wiki re-renders it (TRA-178)
-        r_mock.sadd.assert_called_once()
-        self.assertIn("wiki_refresh", r_mock.sadd.call_args.args[0])
-        self.assertEqual(r_mock.sadd.call_args.args[1], "2026-10-06 07_00 PM")
+        # a rebuilt .md invalidates enrichment so the enrich stage re-flags the wiki
+        r_mock.hdel.assert_called_once()
+        self.assertIn("enriched", r_mock.hdel.call_args.args[0])
+        self.assertEqual(r_mock.hdel.call_args.args[1], "2026-10-06 07_00 PM")
 
     def test_leaves_existing_md_alone(self):
         idx = RagIndexer(SourceType.CITY_COUNCIL_MEETING)
@@ -104,9 +104,11 @@ class TestNoAgendaFallback(unittest.TestCase):
         payload = json.load(open(sj, encoding="utf-8"))
         self.assertEqual(len(payload["sections"]), 1)
         self.assertEqual(payload["sections"][0]["agenda_item"], "Meeting")
-        # generating a summary flags the meeting for wiki refresh (TRA-178)
-        r_mock.sadd.assert_called_once()
-        self.assertIn("wiki_refresh", r_mock.sadd.call_args.args[0])
+        # generating a summary invalidates enrichment (the enrich stage owns the wiki
+        # refresh trigger now); no direct wiki flag from the summary stage (TRA-178)
+        r_mock.hdel.assert_called_once()
+        self.assertIn("enriched", r_mock.hdel.call_args.args[0])
+        r_mock.sadd.assert_not_called()
 
 
 class TestFallbackSegments(unittest.TestCase):

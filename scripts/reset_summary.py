@@ -5,13 +5,14 @@ should be redone. For each meeting it removes, together:
 
   * the summary files on disk (the ``.md`` and its ``.sections.json``),
   * the meeting's rows in the RAG index (sqlite-vec), and
-  * its entry in the ``summarized.<type>`` Redis ledger.
+  * its entries in the ``summarized.<type>`` and ``enriched.<type>`` Redis ledgers.
 
 The disk files are what make ``--stage summaries`` treat the meeting as missing; the
-index rows and ledger entry are cleaned up so nothing stale stays searchable. A
-meeting whose summary is a legacy ``.md``/``.txt`` with no ``.sections.json`` (made
-by an older generator) is left alone. The wiki is not touched: regenerating the
-summary re-flags the meeting and the next wiki pass re-renders it.
+index rows and ledger entries are cleaned up so nothing stale stays searchable or
+marked done. A meeting whose summary is a legacy ``.md``/``.txt`` with no
+``.sections.json`` (made by an older generator) is left alone. The wiki is not
+touched directly: regenerating the summary re-enriches the meeting (the enrich stage
+flags it) and the next wiki pass re-renders it.
 
 Read-only audit by default; ``--execute`` applies. Stop any run that is writing the
 same meeting first.
@@ -28,7 +29,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any
 
-from src.constants import SUMMARIZED_KEY
+from src.constants import ENRICHED_KEY, SUMMARIZED_KEY
 from src.meeting_types import MEETING_TYPES, MeetingType
 
 
@@ -75,14 +76,19 @@ def apply_reset(
     redis_client: Any,
     ledger_key: str,
     delete_rows: Any,
+    enriched_key: str | None = None,
 ) -> None:
-    """Remove the files, index rows and ledger entry. ``delete_rows`` is
-    ``rag_store._delete_meeting`` (injected so tests need not load sqlite-vec)."""
+    """Remove the files, index rows and ledger entries. ``delete_rows`` is
+    ``rag_store._delete_meeting`` (injected so tests need not load sqlite-vec).
+    ``enriched_key`` clears the downstream enrich ledger too, so a reset leaves no
+    stale "enriched" marker (regeneration self-heals it, but a bare reset shouldn't)."""
     for path in plan.files:
         os.remove(path)
     delete_rows(conn, meeting_type_name, plan.key)
     conn.commit()
     redis_client.hdel(ledger_key, plan.key)
+    if enriched_key is not None:
+        redis_client.hdel(enriched_key, plan.key)
 
 
 def _meeting_type(type_key: str) -> MeetingType:
@@ -116,6 +122,7 @@ def main() -> None:
     )
     indexer = RagIndexer(source_type)
     ledger_key = meeting_type.redis_key(SUMMARIZED_KEY)
+    enriched_key = meeting_type.redis_key(ENRICHED_KEY)
     conn = rag_store.connect()
 
     mode = "EXECUTE (writes)" if args.execute else "AUDIT (read-only)"
@@ -151,6 +158,7 @@ def main() -> None:
                 r,
                 ledger_key,
                 rag_store._delete_meeting,
+                enriched_key,
             )
     if not args.execute:
         print("Audit only — re-run with --execute to apply.")

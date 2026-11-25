@@ -48,6 +48,7 @@ from src.processors.compress import Compressor
 from src.processors.download import Downloader
 from src.processors.download_docs import DocumentDownloader
 from src.processors.extract import Extractor
+from src.processors.enrich import Enricher
 from src.processors.rag_index import RagIndexer
 from src.processors.transcribe import Transcriber
 from src.processors.update_wiki import WikiUpdater
@@ -179,16 +180,19 @@ def _run_wiki(source_type: Any, from_year: int, key: str | None = None) -> None:
 
 
 def _run_summaries(source_type: Any, from_year: int, key: str | None = None) -> None:
-    """Summarize every transcribed meeting that has no summary yet, then render the
-    new summaries to the wiki. Disk-driven (the section engine reads the transcript +
-    documents from disk), so no OData ingest and no A/V. RagIndexer is idempotent
-    (skips meetings whose sections.json exists) and leaves legacy summaries alone;
-    WikiUpdater then re-renders each newly-summarized meeting (the TRA-178 refresh
-    flag). ``--from-year`` scopes which meetings are summarized; the processors floor
-    only, so --to-year/--year don't bound it."""
-    _only(RagIndexer(source_type), key).process(
-        max(BACKFILL_FLOOR, datetime(from_year, 1, 1))
-    )
+    """Summarize every transcribed meeting that has no summary yet, enrich the new
+    summaries into the wiki's publishable artifact, then render them to the wiki.
+    Disk-driven (the section engine reads the transcript + documents from disk), so no
+    OData ingest and no A/V. RagIndexer is idempotent (skips meetings whose
+    sections.json exists) and leaves legacy summaries alone; it drops each
+    (re)generated meeting from the ENRICHED ledger, so Enricher re-enriches it and
+    flags the wiki (the TRA-178 refresh trigger, now owned by the enrich stage);
+    WikiUpdater then re-renders each flagged meeting. ``--from-year`` scopes which
+    meetings are summarized; the processors floor only, so --to-year/--year don't
+    bound it."""
+    floor = max(BACKFILL_FLOOR, datetime(from_year, 1, 1))
+    _only(RagIndexer(source_type), key).process(floor)
+    _only(Enricher(source_type), key).process(floor)
     # WikiUpdater must floor at BACKFILL_FLOOR, not from_year: its
     # _refresh_upgraded_meetings strips every refresh-flagged meeting's entry before
     # the floored re-render, so a higher floor would drop any flagged meeting dated
