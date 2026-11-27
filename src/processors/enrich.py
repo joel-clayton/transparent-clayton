@@ -79,19 +79,27 @@ class Enricher(Processor):
         return value.decode("utf-8") if isinstance(value, bytes) else value
 
     def process_for_date(self, date: str) -> None:
-        sections_path = self._summary_path(date, SECTIONS_SUFFIX)
         # Rebuild the enriched .md from the canonical sections.json whenever both a
         # sidecar and a single-part video exist. Otherwise (legacy summary, or no/
         # multi-part video) leave the base .md untouched — a clean pass-through.
-        if os.path.exists(sections_path):
-            with open(sections_path, encoding="utf-8") as fh:
-                sections = json.load(fh).get("sections", [])
-            video_url = self._single_part_video_url(date) if sections else None
-            if sections and video_url:
-                self._atomic_write(
-                    self._summary_path(date, ".md"),
-                    assemble_enriched_markdown(sections, video_url),
-                )
+        # Enrichment is best-effort: if it fails (e.g. a corrupt/unreadable
+        # sections.json), log and still flag the wiki so the perfectly good base .md
+        # is published — the summary is never withheld for want of links.
+        try:
+            sections_path = self._summary_path(date, SECTIONS_SUFFIX)
+            if os.path.exists(sections_path):
+                with open(sections_path, encoding="utf-8") as fh:
+                    sections = json.load(fh).get("sections", [])
+                video_url = self._single_part_video_url(date) if sections else None
+                if sections and video_url:
+                    self._atomic_write(
+                        self._summary_path(date, ".md"),
+                        assemble_enriched_markdown(sections, video_url),
+                    )
+        except Exception:
+            self.logger.exception(
+                "Enrichment failed for %s; publishing the base summary", date
+            )
         # Always flag the wiki to (re-)render this meeting from the .md on disk.
         r.sadd(self.meeting_type.redis_key(WIKI_REFRESH_KEY), date)
 

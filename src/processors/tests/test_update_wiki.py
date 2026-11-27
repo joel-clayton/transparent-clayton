@@ -46,6 +46,14 @@ class TestMarkdownToMediawiki(unittest.TestCase):
             "Call to Order at [0:00:19].",
         )
 
+    def test_non_url_parenthetical_is_left_alone(self):
+        # A "[text](parenthetical)" whose target is not an http(s) URL (an LLM aside,
+        # a citation) must not be rewritten into a broken external link.
+        self.assertEqual(
+            _markdown_to_mediawiki("the measure [A](Resolution 24-15) passed"),
+            "the measure [A](Resolution 24-15) passed",
+        )
+
 
 class TestRemoveSectionByDate(unittest.TestCase):
     PAGE = (

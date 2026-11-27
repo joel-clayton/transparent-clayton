@@ -95,6 +95,21 @@ class TestProcessForDate(unittest.TestCase):
         r_mock.sadd.assert_called_once()
         self.assertEqual(r_mock.sadd.call_args.args[1], NEW)
 
+    def test_still_flags_wiki_when_sections_json_read_raises(self):
+        # Best-effort: a corrupt/unreadable sections.json must not abort the stage —
+        # the base .md is already publishable, so the wiki is still flagged.
+        e = Enricher(SourceType.CITY_COUNCIL_MEETING)
+        with (
+            patch.object(enrich.os.path, "exists", return_value=True),
+            patch("builtins.open", side_effect=OSError("disk gone")),
+            patch.object(e, "_atomic_write") as write,
+            patch.object(enrich, "r") as r_mock,
+        ):
+            e.process_for_date(NEW)  # must not raise
+        write.assert_not_called()
+        r_mock.sadd.assert_called_once()
+        self.assertEqual(r_mock.sadd.call_args.args[1], NEW)
+
     def test_pass_through_when_sections_but_no_video(self):
         e = Enricher(SourceType.CITY_COUNCIL_MEETING)
         payload = json.dumps(

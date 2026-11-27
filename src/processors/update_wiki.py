@@ -58,8 +58,11 @@ _MD_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*$")
 _MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 # Inline Markdown link ``[label](url)`` -> MediaWiki external link ``[url label]``.
 # The enrich stage emits per-section "watch from here" deep links this way; without
-# conversion they would render as literal ``[label](url)`` text on the wiki.
-_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+# conversion they would render as literal ``[label](url)`` text on the wiki. The URL
+# must carry an http(s) scheme, so a non-link ``[text](parenthetical)`` in summary
+# prose (e.g. an aside like ``[A](Resolution 24-15)``) is left untouched rather than
+# rewritten into a broken external link.
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^)]+)\)")
 
 
 def _markdown_to_mediawiki(text: str) -> str:
