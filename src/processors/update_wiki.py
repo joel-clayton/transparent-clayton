@@ -56,16 +56,21 @@ from src.util import (
 
 _MD_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*$")
 _MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+# Inline Markdown link ``[label](url)`` -> MediaWiki external link ``[url label]``.
+# The enrich stage emits per-section "watch from here" deep links this way; without
+# conversion they would render as literal ``[label](url)`` text on the wiki.
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 
 
 def _markdown_to_mediawiki(text: str) -> str:
     """Convert the small Markdown subset the section summaries emit — ATX headings
-    (``## Item N: ...``) and ``**bold**`` — to MediaWiki markup (``=== ... ===`` and
-    ``'''bold'''``). Without this the wiki shows the literal ``##``/``**`` (and ``#``
-    at line start is a MediaWiki ordered-list marker, so it mis-renders). The AI
-    summary sits under a level-3 (``===``) section header, so a Markdown ``##`` item
-    heading maps to level 4 (``====``) to nest beneath it rather than render as a
-    sibling. Non-heading lines pass through with inline bold converted."""
+    (``## Item N: ...``), ``**bold**`` and inline ``[label](url)`` links — to
+    MediaWiki markup (``=== ... ===``, ``'''bold'''`` and ``[url label]``). Without
+    this the wiki shows the literal ``##``/``**``/``[...](...)`` (and ``#`` at line
+    start is a MediaWiki ordered-list marker, so it mis-renders). The AI summary sits
+    under a level-3 (``===``) section header, so a Markdown ``##`` item heading maps
+    to level 4 (``====``) to nest beneath it rather than render as a sibling.
+    Non-heading lines pass through with inline links and bold converted."""
     out: list[str] = []
     for line in text.splitlines():
         m = _MD_HEADING_RE.match(line)
@@ -73,6 +78,7 @@ def _markdown_to_mediawiki(text: str) -> str:
             eq = "=" * min(len(m.group(1)) + 2, 6)
             out.append(f"{eq} {m.group(2).strip()} {eq}")
         else:
+            line = _MD_LINK_RE.sub(r"[\2 \1]", line)
             out.append(_MD_BOLD_RE.sub(r"'''\1'''", line))
     return "\n".join(out)
 

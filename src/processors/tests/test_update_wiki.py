@@ -30,6 +30,22 @@ class TestMarkdownToMediawiki(unittest.TestCase):
     def test_plain_text_passes_through(self):
         self.assertEqual(_markdown_to_mediawiki("just prose here"), "just prose here")
 
+    def test_inline_link_converts_to_external_link(self):
+        # The enrich stage's per-section deep link: [label](url) -> [url label].
+        md = "[▶ Watch from 1:04](https://youtu.be/x?v=y&t=64s)"
+        self.assertEqual(
+            _markdown_to_mediawiki(md),
+            "[https://youtu.be/x?v=y&t=64s ▶ Watch from 1:04]",
+        )
+
+    def test_bare_bracketed_timestamp_is_left_alone(self):
+        # Procedural one-liners carry a bare "[0:00:19]" (no following "(url)"), which
+        # must not be mangled by the link conversion.
+        self.assertEqual(
+            _markdown_to_mediawiki("Call to Order at [0:00:19]."),
+            "Call to Order at [0:00:19].",
+        )
+
 
 class TestRemoveSectionByDate(unittest.TestCase):
     PAGE = (
